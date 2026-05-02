@@ -722,13 +722,13 @@ function Transactions({ transactions, setTransactions, categories, showToast }) 
       </div>
 
       {/* Upload drop zone */}
-      <div className="upload-zone mb-16"
+      <div
+        className={`upload-zone mb-16 ${drag ? "drag" : ""}`}
         style={{ padding: "20px", textAlign: "left", display: "flex", alignItems: "center", gap: 16 }}
         onDragOver={e => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={handleDrop}
         onClick={() => fileRef.current.click()}
-        className={`upload-zone mb-16 ${drag ? "drag" : ""}`}
       >
         <div style={{ fontSize: 24 }}><Icon name="bank" size={28} color="var(--accent)" /></div>
         <div>
