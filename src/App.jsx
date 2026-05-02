@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject } from "./lib/supabase.js";
-import { fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 
@@ -2152,12 +2151,7 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
   const IMPACT_OPTS = ["High","Medium","Low"];
   const STATUS_OPTS  = ["Idea","Planning","In Progress","On Hold","Done"];
 
-  const [projects, setProjects] = useState([
-    { id:"p1", title:"Launch Catering Service", category:"Revenue Growth", month:5, year:YEAR, status:"Planning", impact:"High", investment:2500, projectedRevenue:8000, notes:"Target corporate clients in Round Rock tech corridor. Need catering equipment and dedicated staff.", cashRequired:2500, roi:220 },
-    { id:"p2", title:"Google Ads Campaign", category:"Marketing", month:5, year:YEAR, status:"Idea", impact:"High", investment:800, projectedRevenue:4000, notes:"Target 'Brazilian restaurant Round Rock' keywords. Budget $200/week.", cashRequired:800, roi:400 },
-    { id:"p3", title:"Install Inventory System", category:"Operations", month:6, year:YEAR, status:"Idea", impact:"Medium", investment:1200, projectedRevenue:0, notes:"Reduce food waste 15-20%. Estimated monthly savings: $400.", cashRequired:1200, roi:0 },
-    { id:"p4", title:"QR Code Menu + Online Ordering", category:"Technology", month:7, year:YEAR, status:"Idea", impact:"Medium", investment:500, projectedRevenue:2000, notes:"Reduce labor on order taking. Increase check average via upsell prompts.", cashRequired:500, roi:300 },
-  ]);
+  // projects/setProjects come from parent App state (passed as props)
 
   const [modal, setModal]  = useState(false);
   const [editing, setEditing] = useState(null);
@@ -2479,7 +2473,13 @@ export default function App() {
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [budgets, setBudgets] = useState(SAMPLE_BUDGETS);
   const [bills, setBills] = useState([]);
-  const [projects, setProjects] = useState([]);
+  const YEAR_NOW = new Date().getFullYear();
+  const [projects, setProjects] = useState([
+    { id:"p1", title:"Launch Catering Service", category:"Revenue Growth", month:5, year:YEAR_NOW, status:"Planning", impact:"High", investment:2500, projectedRevenue:8000, notes:"Target corporate clients in Round Rock tech corridor.", cashRequired:2500, roi:220 },
+    { id:"p2", title:"Google Ads Campaign", category:"Marketing", month:5, year:YEAR_NOW, status:"Idea", impact:"High", investment:800, projectedRevenue:4000, notes:"Target 'Brazilian restaurant Round Rock' keywords. Budget $200/week.", cashRequired:800, roi:400 },
+    { id:"p3", title:"Install Inventory System", category:"Operations", month:6, year:YEAR_NOW, status:"Idea", impact:"Medium", investment:1200, projectedRevenue:0, notes:"Reduce food waste 15-20%. Estimated monthly savings: $400.", cashRequired:1200, roi:0 },
+    { id:"p4", title:"QR Code Menu + Online Ordering", category:"Technology", month:7, year:YEAR_NOW, status:"Idea", impact:"Medium", investment:500, projectedRevenue:2000, notes:"Reduce labor on order taking. Increase check average.", cashRequired:500, roi:300 },
+  ]);
   const [toast, setToast] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
