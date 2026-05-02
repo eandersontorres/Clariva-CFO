@@ -319,12 +319,7 @@ function parseCSVLine(line) {
 }
 
 function parseBoACSV(text) {
- const lines = text.replace(/
-/g, '
-').replace(/
-/g, '
-').trim().split('
-');
+const lines = text.split('\n').map(l => l.replace('\r', '').trim()).filter(l => l);
   const txns = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
