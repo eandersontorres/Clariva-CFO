@@ -527,6 +527,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     info: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>,
     check: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
     insights: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
+    projects: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg>,
     bills: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,
     bank: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>,
   };
@@ -1930,117 +1931,88 @@ function Bills({ transactions, setTransactions, categories, vendors, dateRange, 
 }
 
 
-// ─── CFO INSIGHTS ────────────────────────────────────────────────────────────
+// ─── CFO INSIGHTS ─────────────────────────────────────────────────────────────
 function Insights({ transactions, categories, budgets, dateRange = {} }) {
   const [period, setPeriod] = useState("weekly");
-
-  // ── Core calculations ───────────────────────────────────────────
-  const totalIncome   = transactions.filter(t => t.amount > 0).reduce((s,t) => s+t.amount, 0);
-  const totalExpense  = Math.abs(transactions.filter(t => t.amount < 0).reduce((s,t) => s+t.amount, 0));
-  const netIncome     = totalIncome - totalExpense;
-  const netMargin     = totalIncome > 0 ? (netIncome/totalIncome)*100 : 0;
-
-  const getCat = (id) => transactions.filter(t => t.category === id).reduce((s,t) => s+t.amount, 0);
-  const foodCost   = Math.abs(getCat("1"));
-  const labor      = Math.abs(getCat("2"));
-  const rent       = Math.abs(getCat("3"));
-  const marketing  = Math.abs(getCat("4"));
-  const insurance  = Math.abs(getCat("6"));
-  const office     = Math.abs(getCat("7"));
-
+  const totalIncome  = transactions.filter(t => t.amount > 0).reduce((s,t) => s+t.amount, 0);
+  const totalExpense = Math.abs(transactions.filter(t => t.amount < 0).reduce((s,t) => s+t.amount, 0));
+  const netIncome    = totalIncome - totalExpense;
+  const netMargin    = totalIncome > 0 ? (netIncome/totalIncome)*100 : 0;
+  const getCat = (id) => Math.abs(transactions.filter(t => t.category === id).reduce((s,t) => s+t.amount, 0));
+  const foodCost = getCat("1"), labor = getCat("2"), rent = getCat("3");
+  const marketing = getCat("4"), insurance = getCat("6");
   const foodCostPct  = totalIncome > 0 ? (foodCost/totalIncome)*100 : 0;
   const laborPct     = totalIncome > 0 ? (labor/totalIncome)*100 : 0;
   const primeCost    = foodCostPct + laborPct;
   const rentPct      = totalIncome > 0 ? (rent/totalIncome)*100 : 0;
   const marketingPct = totalIncome > 0 ? (marketing/totalIncome)*100 : 0;
   const burnRate     = totalExpense / 30;
-
-  // Days of cash runway (assuming current balance = net * 3 months)
   const estimatedCash = Math.max(netIncome * 3, 5000);
   const runway = burnRate > 0 ? Math.round(estimatedCash / burnRate) : 999;
+  const getBudgetAmt = (id) => { const b = budgets.find(b => b.categoryId === id); return b ? b.monthly : 0; };
 
-  // Budget variance
-  const getBudgetAmt = (catId) => {
-    const b = budgets.find(b => b.categoryId === catId);
-    return b ? b.monthly : 0;
-  };
-  const foodBudget   = getBudgetAmt("1");
-  const laborBudget  = getBudgetAmt("2");
-  const rentBudget   = getBudgetAmt("3");
-
-  // Alerts
   const alerts = [];
-  if (foodCostPct > 35)  alerts.push({ level: "critical", icon: "🚨", title: "Food Cost Critical", msg: `At ${foodCostPct.toFixed(1)}% — industry benchmark is 28-35%. You're losing ${fmt(foodCost - totalIncome*0.32)} vs target.`, action: "Review portion sizes, supplier contracts, and menu pricing immediately." });
-  if (foodCostPct > 28 && foodCostPct <= 35) alerts.push({ level: "warn", icon: "⚠️", title: "Food Cost Elevated", msg: `At ${foodCostPct.toFixed(1)}% — approaching the 35% danger zone.`, action: "Audit your top 10 menu items for margin. Consider a 3-5% price increase on low-margin items." });
-  if (laborPct > 35)     alerts.push({ level: "critical", icon: "🚨", title: "Labor Cost Critical", msg: `At ${laborPct.toFixed(1)}% — industry benchmark is 25-35%. Overspending by ${fmt(labor - totalIncome*0.30)}.`, action: "Review scheduling. Cut overtime. Consider cross-training staff for multiple roles." });
-  if (primeCost > 65)    alerts.push({ level: "critical", icon: "🚨", title: "Prime Cost Danger", msg: `Prime cost at ${primeCost.toFixed(1)}% — must stay below 60-65% to be profitable.`, action: "Emergency review needed. Reduce food cost AND labor simultaneously." });
-  if (netMargin < 5 && totalIncome > 0) alerts.push({ level: "warn", icon: "⚠️", title: "Thin Net Margin", msg: `Net margin is ${netMargin.toFixed(1)}% — restaurants need 5-10% to be healthy.`, action: "Focus on revenue growth and identify the top 3 expense lines to cut 10% each." });
-  if (runway < 30)       alerts.push({ level: "critical", icon: "🚨", title: "Cash Flow Risk", msg: `Estimated cash runway is only ${runway} days.`, action: "Accelerate collections, defer non-essential purchases, and review all subscriptions." });
-  if (runway < 60 && runway >= 30) alerts.push({ level: "warn", icon: "⚠️", title: "Monitor Cash Flow", msg: `Cash runway ~${runway} days. Watch closely.`, action: "Build a 90-day cash forecast. Identify any upcoming large expenses." });
-  if (marketingPct < 1 && totalIncome > 10000) alerts.push({ level: "info", icon: "💡", title: "Marketing Underinvestment", msg: `Only ${marketingPct.toFixed(1)}% of revenue on marketing — restaurants should invest 2-4%.`, action: "Increase digital marketing spend. Focus on Google My Business, Instagram, and loyalty programs." });
-  if (foodBudget > 0 && foodCost > foodBudget * 1.1) alerts.push({ level: "warn", icon: "⚠️", title: "Food Budget Exceeded", msg: `Food cost ${fmt(foodCost)} vs budget ${fmt(foodBudget)} (+${(((foodCost/foodBudget)-1)*100).toFixed(0)}%).`, action: "Review last 3 supplier invoices for price increases. Update menu costs." });
+  if (foodCostPct > 35)  alerts.push({ level:"critical", icon:"🚨", title:"Food Cost Critical",    msg:`At ${foodCostPct.toFixed(1)}% — benchmark 28-35%. Losing ${fmt(foodCost - totalIncome*0.32)} vs target.`,  action:"Review portion sizes, supplier contracts, and menu pricing immediately." });
+  if (foodCostPct > 28 && foodCostPct <= 35) alerts.push({ level:"warn", icon:"⚠️", title:"Food Cost Elevated", msg:`At ${foodCostPct.toFixed(1)}% — approaching danger zone.`, action:"Audit top 10 menu items for margin. Consider 3-5% price increase on low-margin items." });
+  if (laborPct > 35)     alerts.push({ level:"critical", icon:"🚨", title:"Labor Cost Critical",   msg:`At ${laborPct.toFixed(1)}% — overspending by ${fmt(labor - totalIncome*0.30)}.`,  action:"Review scheduling. Cut overtime. Cross-train staff for multiple roles." });
+  if (primeCost > 65)    alerts.push({ level:"critical", icon:"🚨", title:"Prime Cost Danger",     msg:`Prime cost ${primeCost.toFixed(1)}% — must stay below 65%.`,  action:"Emergency review: reduce food cost AND labor simultaneously." });
+  if (netMargin < 5 && totalIncome > 0) alerts.push({ level:"warn", icon:"⚠️", title:"Thin Net Margin", msg:`Net margin ${netMargin.toFixed(1)}% — target 5-10%.`, action:"Focus on revenue growth and cut top 3 expense lines by 10% each." });
+  if (runway < 30)       alerts.push({ level:"critical", icon:"🚨", title:"Cash Flow Risk",        msg:`Runway only ${runway} days.`, action:"Accelerate collections, defer non-essential purchases, review all subscriptions." });
+  if (runway < 60 && runway >= 30) alerts.push({ level:"warn", icon:"⚠️", title:"Monitor Cash",   msg:`Cash runway ~${runway} days. Watch closely.`, action:"Build 90-day cash forecast. Identify upcoming large expenses." });
+  if (marketingPct < 1 && totalIncome > 10000) alerts.push({ level:"info", icon:"💡", title:"Marketing Underinvestment", msg:`Only ${marketingPct.toFixed(1)}% on marketing — should be 2-4%.`, action:"Increase digital spend: Google My Business, Instagram, loyalty programs." });
 
-  const PERIODS = [
-    { id: "daily",     label: "Daily" },
-    { id: "weekly",    label: "Weekly" },
-    { id: "monthly",   label: "Monthly" },
-    { id: "quarterly", label: "Quarterly" },
-    { id: "annual",    label: "Annual" },
-  ];
-
-  // KPI benchmarks for full service restaurants
   const benchmarks = [
-    { name: "Food Cost %",      value: foodCostPct,  target: 32,  max: 35,  unit: "%", lower: true,  good: foodCostPct <= 32, warn: foodCostPct <= 35 },
-    { name: "Labor Cost %",     value: laborPct,     target: 30,  max: 35,  unit: "%", lower: true,  good: laborPct <= 30,    warn: laborPct <= 35 },
-    { name: "Prime Cost %",     value: primeCost,    target: 60,  max: 65,  unit: "%", lower: true,  good: primeCost <= 60,   warn: primeCost <= 65 },
-    { name: "Net Margin %",     value: netMargin,    target: 8,   max: 100, unit: "%", lower: false, good: netMargin >= 8,    warn: netMargin >= 5 },
-    { name: "Rent %",           value: rentPct,      target: 6,   max: 10,  unit: "%", lower: true,  good: rentPct <= 6,      warn: rentPct <= 10 },
-    { name: "Marketing %",      value: marketingPct, target: 3,   max: 100, unit: "%", lower: false, good: marketingPct >= 2, warn: marketingPct >= 1 },
+    { name:"Food Cost %",  value:foodCostPct,  target:32, unit:"%", lower:true,  good:foodCostPct<=32,  warn:foodCostPct<=35 },
+    { name:"Labor Cost %", value:laborPct,     target:30, unit:"%", lower:true,  good:laborPct<=30,     warn:laborPct<=35 },
+    { name:"Prime Cost %", value:primeCost,    target:60, unit:"%", lower:true,  good:primeCost<=60,    warn:primeCost<=65 },
+    { name:"Net Margin %", value:netMargin,    target:8,  unit:"%", lower:false, good:netMargin>=8,     warn:netMargin>=5 },
+    { name:"Rent %",       value:rentPct,      target:6,  unit:"%", lower:true,  good:rentPct<=6,       warn:rentPct<=10 },
+    { name:"Marketing %",  value:marketingPct, target:3,  unit:"%", lower:false, good:marketingPct>=2,  warn:marketingPct>=1 },
   ];
 
-  // CFO Action items by period
   const actionItems = {
-    daily: [
-      { icon: "📊", title: "Review yesterday's sales vs target", detail: `Target daily revenue: ${fmt(totalIncome/30)}. Track variance every morning.` },
-      { icon: "🍽️", title: "Check food waste log", detail: "Every dollar of waste = 3-4 dollars of needed revenue to compensate. Review with kitchen staff." },
-      { icon: "💵", title: "Verify POS deposits hit bank", detail: "Square settlements should appear within 1-2 business days. Flag any missing deposits." },
-      { icon: "👥", title: "Review labor vs covers ratio", detail: "Track covers-per-labor-hour. Optimal for casual dining: 15-20 covers per server." },
+    daily:[
+      { icon:"📊", title:"Review yesterday's sales vs target", detail:`Target daily: ${fmt(totalIncome/30)}. Track variance every morning at 9am.` },
+      { icon:"🍽️", title:"Check food waste log", detail:"Every $1 waste = $3-4 revenue needed to compensate. Review with kitchen lead." },
+      { icon:"💵", title:"Verify POS deposits hit bank", detail:"Square settlements appear within 1-2 business days. Flag any missing deposits immediately." },
+      { icon:"👥", title:"Review labor vs covers", detail:"Track covers-per-labor-hour. Optimal for casual dining: 15-20 covers per server." },
     ],
-    weekly: [
-      { icon: "📈", title: "Week-over-week revenue comparison", detail: "Compare same day last week. Flag any day >15% below prior week." },
-      { icon: "🧾", title: "Process all vendor invoices", detail: `You have vendor bills to process. Pay within terms to avoid late fees.` },
-      { icon: "🏪", title: "Inventory spot-check (top 10 items)", detail: "Spot-check your top 10 highest-cost ingredients. Calculate theoretical vs actual usage." },
-      { icon: "💳", title: "Reconcile credit card statements", detail: "Match all card charges to receipts. Catch duplicate charges or fraudulent transactions." },
-      { icon: "📣", title: "Review marketing performance", detail: "Check Google Ads CTR, Meta reach, and Doordash order volume vs prior week." },
+    weekly:[
+      { icon:"📈", title:"Week-over-week revenue", detail:"Compare same day last week. Flag any day >15% below prior week." },
+      { icon:"🧾", title:"Process all vendor invoices", detail:"Clear bill queue. Pay within terms to protect supplier relationships and avoid late fees." },
+      { icon:"🏪", title:"Inventory spot-check (top 10 items)", detail:"Check top 10 highest-cost ingredients. Calculate theoretical vs actual usage." },
+      { icon:"💳", title:"Reconcile all card statements", detail:"Match all card charges to receipts. Catch duplicate charges and fraudulent transactions." },
+      { icon:"📣", title:"Review marketing performance", detail:"Check Google Ads CTR, Meta reach, DoorDash volume vs prior week." },
     ],
-    monthly: [
-      { icon: "📋", title: "Full P&L review", detail: `Current net margin: ${netMargin.toFixed(1)}%. Target: 8%+. Identify top 3 expense categories to optimize.` },
-      { icon: "💰", title: "Food cost analysis", detail: `Food cost at ${foodCostPct.toFixed(1)}%. Run theoretical vs actual food cost report. Investigate >2% variance.` },
-      { icon: "👔", title: "Labor efficiency review", detail: `Labor at ${laborPct.toFixed(1)}% of revenue. Review scheduling for each day-part. Identify overstaffed shifts.` },
-      { icon: "🏦", title: "Cash flow forecast (next 30 days)", detail: `Burn rate: ${fmt(burnRate)}/day. Project next month's cash needs including upcoming bills.` },
-      { icon: "📊", title: "Budget vs actual variance report", detail: "For each category exceeding budget by >10%, require a written explanation and corrective action." },
-      { icon: "🤝", title: "Supplier price negotiation review", detail: "Review top 5 supplier invoices for price creep. Renegotiate contracts >$2,000/month." },
+    monthly:[
+      { icon:"📋", title:"Full P&L review", detail:`Current net margin: ${netMargin.toFixed(1)}%. Target: 8%+. Identify top 3 categories to optimize.` },
+      { icon:"💰", title:"Food cost deep dive", detail:`Food cost at ${foodCostPct.toFixed(1)}%. Run theoretical vs actual. Investigate any >2% variance.` },
+      { icon:"👔", title:"Labor efficiency review", detail:`Labor at ${laborPct.toFixed(1)}%. Review scheduling per day-part. Identify overstaffed shifts.` },
+      { icon:"🏦", title:"30-day cash flow forecast", detail:`Burn rate: ${fmt(burnRate)}/day. Project next month including all upcoming bills.` },
+      { icon:"📊", title:"Budget vs actual variance", detail:"For each category >10% over budget, require written explanation and corrective action." },
+      { icon:"🤝", title:"Supplier price review", detail:"Review top 5 suppliers for price creep. Renegotiate any contract >$2,000/month." },
     ],
-    quarterly: [
-      { icon: "🎯", title: "Repricing analysis", detail: "Review all menu items. Items with <60% gross margin should be repriced, repositioned, or removed." },
-      { icon: "📉", title: "Trend analysis vs same quarter last year", detail: "Compare revenue, food cost %, and labor % vs Q same period prior year. Identify structural changes." },
-      { icon: "💡", title: "Marketing ROI review", detail: `Spending ${fmt(marketing)} on marketing. Calculate customer acquisition cost and repeat visit rate.` },
-      { icon: "🔄", title: "Menu engineering review", detail: "Classify all items as Stars, Plowhorses, Puzzles, or Dogs. Eliminate or redesign Dogs." },
-      { icon: "📜", title: "Review all vendor contracts", detail: "Are you getting the best prices? Get 2-3 quotes on your top 5 product categories." },
-      { icon: "🏛️", title: "Tax planning review with CPA", detail: "Quarterly estimated taxes due. Review deductions and ensure proper categorization of all expenses." },
+    quarterly:[
+      { icon:"🎯", title:"Menu repricing analysis", detail:"Items with <60% gross margin: reprice, reposition, or remove." },
+      { icon:"📉", title:"Year-over-year trend", detail:"Compare revenue, food cost%, labor% vs same quarter last year. Flag structural shifts." },
+      { icon:"💡", title:"Marketing ROI review", detail:`Spending ${fmt(marketing)} on marketing. Calculate customer acquisition cost and repeat rate.` },
+      { icon:"🔄", title:"Menu engineering", detail:"Classify all items: Stars / Plowhorses / Puzzles / Dogs. Eliminate or redesign Dogs." },
+      { icon:"📜", title:"Review all vendor contracts", detail:"Get 2-3 quotes on top 5 product categories. Use competing quotes to negotiate." },
+      { icon:"🏛️", title:"Tax planning with CPA", detail:"Quarterly estimated taxes due. Review deductions. Ensure proper expense categorization." },
     ],
-    annual: [
-      { icon: "🏆", title: "Annual P&L vs prior year", detail: "Full year performance review. Set targets for next year based on industry benchmarks." },
-      { icon: "💼", title: "Compensation & benefits review", detail: "Review all staff wages vs market. Plan merit increases. Calculate total cost of employment." },
-      { icon: "🏗️", title: "CapEx planning", detail: "What equipment needs replacement? Create a 3-year capital expenditure plan." },
-      { icon: "📱", title: "Technology stack audit", detail: "Review all SaaS subscriptions. Cut unused tools. Negotiate annual vs monthly pricing." },
-      { icon: "🌱", title: "Growth strategy review", detail: "Catering? Second location? Ghost kitchen? Model each opportunity with 3-year pro forma." },
-      { icon: "🧮", title: "Annual tax return preparation", detail: `Net taxable income: ${fmt(netIncome)}. Maximize Schedule C deductions. Review depreciation schedule.` },
+    annual:[
+      { icon:"🏆", title:"Annual P&L vs prior year", detail:"Full year performance review. Set benchmarks for next year based on industry data." },
+      { icon:"💼", title:"Compensation & benefits review", detail:"Review all wages vs market. Plan merit increases. Calculate total cost of employment." },
+      { icon:"🏗️", title:"CapEx planning", detail:"Equipment replacement schedule. Create 3-year capital expenditure plan." },
+      { icon:"📱", title:"Technology stack audit", detail:"Review all SaaS subscriptions. Cut unused tools. Negotiate annual vs monthly pricing." },
+      { icon:"🌱", title:"Growth strategy review", detail:"Catering? Second location? Ghost kitchen? Model each with 3-year pro forma." },
+      { icon:"🧮", title:"Annual tax preparation", detail:`Net taxable income: ${fmt(netIncome)}. Maximize Schedule C deductions.` },
     ],
   };
 
-  const alertColors = { critical: "var(--red)", warn: "var(--yellow)", info: "var(--blue)" };
-  const alertBgs    = { critical: "var(--redBg)", warn: "var(--yellowBg)", info: "var(--blueBg)" };
+  const alertColor = { critical:"var(--red)", warn:"var(--yellow)", info:"var(--blue)" };
+  const alertBg    = { critical:"var(--redBg)", warn:"var(--yellowBg)", info:"var(--blueBg)" };
+  const PERIODS = [{id:"daily",label:"Daily"},{id:"weekly",label:"Weekly"},{id:"monthly",label:"Monthly"},{id:"quarterly",label:"Quarterly"},{id:"annual",label:"Annual"}];
 
   return (
     <div className="page">
@@ -2051,156 +2023,453 @@ function Insights({ transactions, categories, budgets, dateRange = {} }) {
         </div>
       </div>
 
-      {/* ── KPI Scorecard ── */}
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 16, fontWeight: 600, marginBottom: 16, letterSpacing: "0.04em" }}>Restaurant Health Scorecard</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+      {/* Scorecard */}
+      <div className="card" style={{marginBottom:20}}>
+        <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:16,fontWeight:600,marginBottom:16,letterSpacing:"0.04em"}}>Restaurant Health Scorecard</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
           {benchmarks.map(b => {
-            const status = b.good ? "good" : b.warn ? "warn" : "bad";
-            const color = status === "good" ? "var(--accent)" : status === "warn" ? "var(--yellow)" : "var(--red)";
-            const pct = b.lower
-              ? Math.min((b.value / b.max) * 100, 100)
-              : Math.min((b.value / 15) * 100, 100);
+            const status = b.good?"good":b.warn?"warn":"bad";
+            const color  = status==="good"?"var(--accent)":status==="warn"?"var(--yellow)":"var(--red)";
+            const pct    = b.lower ? Math.min((b.value/Math.max(b.target*1.5,1))*100,100) : Math.min((b.value/15)*100,100);
             return (
-              <div key={b.name} style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "14px 16px", borderLeft: "3px solid " + color }}>
-                <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-                  <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em" }}>{b.name}</span>
-                  <span style={{ fontSize: 11, color, fontFamily: "DM Mono", fontWeight: 500 }}>
-                    {status === "good" ? "✓ ON TARGET" : status === "warn" ? "⚠ WATCH" : "✗ ACTION"}
-                  </span>
+              <div key={b.name} style={{background:"var(--surface2)",borderRadius:"var(--radius2)",padding:"14px 16px",borderLeft:"3px solid "+color}}>
+                <div className="flex items-center justify-between" style={{marginBottom:8}}>
+                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"DM Mono",textTransform:"uppercase",letterSpacing:"0.08em"}}>{b.name}</span>
+                  <span style={{fontSize:10,color,fontFamily:"DM Mono",fontWeight:500}}>{status==="good"?"✓ ON TARGET":status==="warn"?"⚠ WATCH":"✗ ACTION"}</span>
                 </div>
-                <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-                  <span style={{ fontFamily: "DM Mono", fontSize: 22, fontWeight: 400, color }}>{b.value.toFixed(1)}{b.unit}</span>
-                  <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono" }}>target: {b.target}{b.unit}</span>
+                <div className="flex items-center justify-between" style={{marginBottom:8}}>
+                  <span style={{fontFamily:"DM Mono",fontSize:22,fontWeight:400,color}}>{b.value.toFixed(1)}{b.unit}</span>
+                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"DM Mono"}}>target: {b.target}{b.unit}</span>
                 </div>
-                <div className="progress-bar">
-                  <div className="progress-fill" style={{ width: pct + "%", background: color }} />
-                </div>
+                <div className="progress-bar"><div className="progress-fill" style={{width:pct+"%",background:color}}/></div>
               </div>
             );
           })}
         </div>
       </div>
 
-      {/* ── Alerts ── */}
-      {alerts.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 16, fontWeight: 600, marginBottom: 12, letterSpacing: "0.04em" }}>
-            🔔 Active Alerts ({alerts.length})
-          </div>
-          {alerts.map((a, i) => (
-            <div key={i} style={{ background: alertBgs[a.level], border: "1px solid " + alertColors[a.level] + "40", borderRadius: "var(--radius2)", padding: "14px 16px", marginBottom: 10, borderLeft: "4px solid " + alertColors[a.level] }}>
-              <div className="flex items-center gap-8" style={{ marginBottom: 6 }}>
-                <span style={{ fontSize: 16 }}>{a.icon}</span>
-                <span style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, color: alertColors[a.level] }}>{a.title}</span>
-              </div>
-              <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 6 }}>{a.msg}</div>
-              <div style={{ fontSize: 12, color: "var(--text3)", fontFamily: "DM Mono" }}>→ {a.action}</div>
+      {/* Alerts */}
+      {alerts.length > 0 ? (
+        <div style={{marginBottom:20}}>
+          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:16,fontWeight:600,marginBottom:12,letterSpacing:"0.04em"}}>🔔 Active Alerts ({alerts.length})</div>
+          {alerts.map((a,i) => (
+            <div key={i} style={{background:alertBg[a.level],border:"1px solid "+alertColor[a.level]+"40",borderRadius:"var(--radius2)",padding:"14px 16px",marginBottom:10,borderLeft:"4px solid "+alertColor[a.level]}}>
+              <div className="flex items-center gap-8" style={{marginBottom:6}}><span style={{fontSize:16}}>{a.icon}</span><span style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:13,color:alertColor[a.level]}}>{a.title}</span></div>
+              <div style={{fontSize:13,color:"var(--text2)",marginBottom:6}}>{a.msg}</div>
+              <div style={{fontSize:12,color:"var(--text3)",fontFamily:"DM Mono"}}>→ {a.action}</div>
             </div>
           ))}
         </div>
-      )}
-
-      {alerts.length === 0 && (
-        <div style={{ background: "var(--accentBg)", border: "1px solid var(--accentBorder)", borderRadius: "var(--radius2)", padding: "14px 18px", marginBottom: 20, display: "flex", gap: 12, alignItems: "center" }}>
-          <span style={{ fontSize: 20 }}>✅</span>
-          <div>
-            <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, color: "var(--accent)" }}>All KPIs Within Target</div>
-            <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>No critical alerts. Keep monitoring the metrics below.</div>
-          </div>
+      ) : (
+        <div style={{background:"var(--accentBg)",border:"1px solid var(--accentBorder)",borderRadius:"var(--radius2)",padding:"14px 18px",marginBottom:20,display:"flex",gap:12,alignItems:"center"}}>
+          <span style={{fontSize:20}}>✅</span>
+          <div><div style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:13,color:"var(--accent)"}}>All KPIs Within Target</div><div style={{fontSize:12,color:"var(--text2)",marginTop:2}}>No critical alerts. Keep monitoring.</div></div>
         </div>
       )}
 
-      {/* ── Cash Flow Forecast ── */}
-      <div className="grid-2" style={{ marginBottom: 20 }}>
+      {/* Cash + Levers */}
+      <div className="grid-2" style={{marginBottom:20}}>
         <div className="card">
-          <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 15, fontWeight: 600, marginBottom: 14, letterSpacing: "0.04em" }}>Cash Flow Forecast</div>
+          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Cash Flow Forecast</div>
           {[
-            { label: "Daily Burn Rate",      value: fmt(burnRate),              note: "expenses/day" },
-            { label: "Estimated Cash",        value: fmt(estimatedCash),         note: "current position" },
-            { label: "Runway",                value: runway + " days",           note: runway < 60 ? "⚠ low" : "✓ healthy", warn: runway < 60 },
-            { label: "Break-even Revenue",    value: fmt(totalExpense),          note: "needed to cover costs" },
-            { label: "Revenue vs Break-even", value: totalIncome > totalExpense ? "+" + fmt(totalIncome - totalExpense) : "-" + fmt(totalExpense - totalIncome), note: totalIncome > totalExpense ? "surplus" : "deficit", warn: totalIncome < totalExpense },
+            {label:"Daily Burn Rate",value:fmt(burnRate),note:"expenses/day"},
+            {label:"Estimated Cash",value:fmt(estimatedCash),note:"current position"},
+            {label:"Runway",value:runway+" days",note:runway<60?"⚠ low":"✓ healthy",warn:runway<60},
+            {label:"Break-even Revenue",value:fmt(totalExpense),note:"needed to cover costs"},
+            {label:"Surplus / Deficit",value:(totalIncome>totalExpense?"+":"")+fmt(totalIncome-totalExpense),note:totalIncome>totalExpense?"surplus":"deficit",warn:totalIncome<totalExpense},
           ].map(r => (
-            <div key={r.label} className="flex items-center justify-between" style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-              <span style={{ fontSize: 12, color: "var(--text2)" }}>{r.label}</span>
-              <div style={{ textAlign: "right" }}>
-                <span style={{ fontFamily: "DM Mono", fontSize: 13, color: r.warn ? "var(--yellow)" : "var(--accent)" }}>{r.value}</span>
-                <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginLeft: 6 }}>{r.note}</span>
-              </div>
+            <div key={r.label} className="flex items-center justify-between" style={{padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+              <span style={{fontSize:12,color:"var(--text2)"}}>{r.label}</span>
+              <div style={{textAlign:"right"}}><span style={{fontFamily:"DM Mono",fontSize:13,color:r.warn?"var(--yellow)":"var(--accent)"}}>{r.value}</span><span style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",marginLeft:6}}>{r.note}</span></div>
             </div>
           ))}
         </div>
-
         <div className="card">
-          <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 15, fontWeight: 600, marginBottom: 14, letterSpacing: "0.04em" }}>Revenue Growth Levers</div>
+          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Revenue Growth Levers</div>
           {[
-            { lever: "Price increase 3%",       impact: fmt(totalIncome * 0.03),  difficulty: "Low",    note: "minimal customer impact" },
-            { lever: "Reduce food waste 20%",   impact: fmt(foodCost * 0.20),     difficulty: "Medium", note: "training + systems" },
-            { lever: "Add 2 covers/table/day",  impact: fmt(totalIncome * 0.08),  difficulty: "Medium", note: "table turn optimization" },
-            { lever: "Catering (5% revenue)",   impact: fmt(totalIncome * 0.05),  difficulty: "High",   note: "new revenue stream" },
-            { lever: "Optimize labor schedule", impact: fmt(labor * 0.08),        difficulty: "Low",    note: "8% labor reduction" },
+            {lever:"Price increase 3%",impact:fmt(totalIncome*0.03),diff:"Low",note:"minimal customer impact"},
+            {lever:"Reduce food waste 20%",impact:fmt(foodCost*0.20),diff:"Medium",note:"training + systems"},
+            {lever:"Add 2 covers/table/day",impact:fmt(totalIncome*0.08),diff:"Medium",note:"table turn optimization"},
+            {lever:"Launch catering (5%)",impact:fmt(totalIncome*0.05),diff:"High",note:"new revenue stream"},
+            {lever:"Optimize labor schedule",impact:fmt(labor*0.08),diff:"Low",note:"8% labor reduction"},
           ].map(r => (
-            <div key={r.lever} className="flex items-center justify-between" style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-              <div>
-                <div style={{ fontSize: 12, color: "var(--text2)" }}>{r.lever}</div>
-                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{r.note}</div>
-              </div>
-              <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 12 }}>
-                <div style={{ fontFamily: "DM Mono", fontSize: 13, color: "var(--accent)" }}>+{r.impact}</div>
-                <span className={"tag " + (r.difficulty === "Low" ? "tag-green" : r.difficulty === "Medium" ? "tag-yellow" : "tag-blue")} style={{ marginTop: 3 }}>{r.difficulty}</span>
+            <div key={r.lever} className="flex items-center justify-between" style={{padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+              <div><div style={{fontSize:12,color:"var(--text2)"}}>{r.lever}</div><div style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",marginTop:2}}>{r.note}</div></div>
+              <div style={{textAlign:"right",flexShrink:0,marginLeft:12}}>
+                <div style={{fontFamily:"DM Mono",fontSize:13,color:"var(--accent)"}}>+{r.impact}</div>
+                <span className={"tag "+(r.diff==="Low"?"tag-green":r.diff==="Medium"?"tag-yellow":"tag-blue")} style={{marginTop:3}}>{r.diff}</span>
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* ── Action Items by Period ── */}
-      <div className="card">
-        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
-          <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 15, fontWeight: 600, letterSpacing: "0.04em" }}>CFO Action Checklist</div>
-          <div className="tabs" style={{ marginBottom: 0 }}>
-            {PERIODS.map(p => (
-              <div key={p.id} className={"tab" + (period === p.id ? " active" : "")} onClick={() => setPeriod(p.id)} style={{ fontSize: 12 }}>{p.label}</div>
-            ))}
+      {/* Action checklist */}
+      <div className="card" style={{marginBottom:16}}>
+        <div className="flex items-center justify-between" style={{marginBottom:16}}>
+          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,letterSpacing:"0.04em"}}>CFO Action Checklist</div>
+          <div className="tabs" style={{marginBottom:0}}>
+            {PERIODS.map(p => <div key={p.id} className={"tab"+(period===p.id?" active":"")} onClick={()=>setPeriod(p.id)} style={{fontSize:12}}>{p.label}</div>)}
           </div>
         </div>
-        {(actionItems[period] || []).map((item, i) => (
-          <div key={i} style={{ display: "flex", gap: 14, padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
-            <div style={{ fontSize: 22, flexShrink: 0, width: 32, textAlign: "center" }}>{item.icon}</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{item.title}</div>
-              <div style={{ fontSize: 12, color: "var(--text2)", lineHeight: 1.5 }}>{item.detail}</div>
-            </div>
-            <div style={{ flexShrink: 0 }}>
-              <span className="tag tag-gray" style={{ fontSize: 10, cursor: "pointer" }}>Mark done</span>
-            </div>
+        {(actionItems[period]||[]).map((item,i) => (
+          <div key={i} style={{display:"flex",gap:14,padding:"12px 0",borderBottom:"1px solid var(--border)"}}>
+            <div style={{fontSize:22,flexShrink:0,width:32,textAlign:"center"}}>{item.icon}</div>
+            <div style={{flex:1}}><div style={{fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:13,marginBottom:4}}>{item.title}</div><div style={{fontSize:12,color:"var(--text2)",lineHeight:1.5}}>{item.detail}</div></div>
           </div>
         ))}
       </div>
 
-      {/* ── Industry Benchmarks ── */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 15, fontWeight: 600, marginBottom: 14, letterSpacing: "0.04em" }}>Industry Benchmarks — Full Service Restaurant (US)</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+      {/* Benchmarks */}
+      <div className="card">
+        <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Industry Benchmarks — Full Service Restaurant (US)</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
           {[
-            { label: "Food Cost",    range: "28–35%",   yours: foodCostPct.toFixed(1)+"%",  ok: foodCostPct <= 35 },
-            { label: "Labor Cost",   range: "25–35%",   yours: laborPct.toFixed(1)+"%",     ok: laborPct <= 35 },
-            { label: "Prime Cost",   range: "55–65%",   yours: primeCost.toFixed(1)+"%",    ok: primeCost <= 65 },
-            { label: "Rent",         range: "5–10%",    yours: rentPct.toFixed(1)+"%",      ok: rentPct <= 10 },
-            { label: "Marketing",    range: "2–4%",     yours: marketingPct.toFixed(1)+"%", ok: marketingPct >= 1 },
-            { label: "Net Profit",   range: "5–10%",    yours: netMargin.toFixed(1)+"%",    ok: netMargin >= 5 },
-            { label: "Utilities",    range: "3–5%",     yours: "—",                          ok: true },
-            { label: "Insurance",    range: "1–3%",     yours: totalIncome > 0 ? ((insurance/totalIncome)*100).toFixed(1)+"%" : "—", ok: true },
+            {label:"Food Cost",range:"28–35%",yours:foodCostPct.toFixed(1)+"%",ok:foodCostPct<=35},
+            {label:"Labor Cost",range:"25–35%",yours:laborPct.toFixed(1)+"%",ok:laborPct<=35},
+            {label:"Prime Cost",range:"55–65%",yours:primeCost.toFixed(1)+"%",ok:primeCost<=65},
+            {label:"Rent",range:"5–10%",yours:rentPct.toFixed(1)+"%",ok:rentPct<=10},
+            {label:"Marketing",range:"2–4%",yours:marketingPct.toFixed(1)+"%",ok:marketingPct>=1},
+            {label:"Net Profit",range:"5–10%",yours:netMargin.toFixed(1)+"%",ok:netMargin>=5},
+            {label:"Utilities",range:"3–5%",yours:"—",ok:true},
+            {label:"Insurance",range:"1–3%",yours:totalIncome>0?((insurance/totalIncome)*100).toFixed(1)+"%":"—",ok:true},
           ].map(b => (
-            <div key={b.label} style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>{b.label}</div>
-              <div style={{ fontFamily: "DM Mono", fontSize: 16, color: b.ok ? "var(--accent)" : "var(--red)", fontWeight: 400 }}>{b.yours}</div>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 3 }}>Benchmark: {b.range}</div>
+            <div key={b.label} style={{background:"var(--surface2)",borderRadius:"var(--radius2)",padding:"12px 14px"}}>
+              <div style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>{b.label}</div>
+              <div style={{fontFamily:"DM Mono",fontSize:16,color:b.ok?"var(--accent)":"var(--red)"}}>{b.yours}</div>
+              <div style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",marginTop:3}}>Target: {b.range}</div>
             </div>
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── PROJECTS & PROJECTIONS ───────────────────────────────────────────────────
+function Projects({ transactions, netIncome, dateRange = {} }) {
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const YEAR = new Date().getFullYear();
+
+  const CATEGORIES_PROJ = ["Revenue Growth","Marketing","Operations","Technology","Expansion","Cost Reduction","Staff & HR","Other"];
+  const IMPACT_OPTS = ["High","Medium","Low"];
+  const STATUS_OPTS  = ["Idea","Planning","In Progress","On Hold","Done"];
+
+  const [projects, setProjects] = useState([
+    { id:"p1", title:"Launch Catering Service", category:"Revenue Growth", month:5, year:YEAR, status:"Planning", impact:"High", investment:2500, projectedRevenue:8000, notes:"Target corporate clients in Round Rock tech corridor. Need catering equipment and dedicated staff.", cashRequired:2500, roi:220 },
+    { id:"p2", title:"Google Ads Campaign", category:"Marketing", month:5, year:YEAR, status:"Idea", impact:"High", investment:800, projectedRevenue:4000, notes:"Target 'Brazilian restaurant Round Rock' keywords. Budget $200/week.", cashRequired:800, roi:400 },
+    { id:"p3", title:"Install Inventory System", category:"Operations", month:6, year:YEAR, status:"Idea", impact:"Medium", investment:1200, projectedRevenue:0, notes:"Reduce food waste 15-20%. Estimated monthly savings: $400.", cashRequired:1200, roi:0 },
+    { id:"p4", title:"QR Code Menu + Online Ordering", category:"Technology", month:7, year:YEAR, status:"Idea", impact:"Medium", investment:500, projectedRevenue:2000, notes:"Reduce labor on order taking. Increase check average via upsell prompts.", cashRequired:500, roi:300 },
+  ]);
+
+  const [modal, setModal]  = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [viewMode, setViewMode] = useState("timeline"); // timeline | list | board
+  const [filterMonth, setFilterMonth] = useState("all");
+
+  const empty = { title:"", category:"Revenue Growth", month:new Date().getMonth()+1, year:YEAR, status:"Idea", impact:"High", investment:"", projectedRevenue:"", notes:"", cashRequired:"", roi:"" };
+  const [form, setForm] = useState(empty);
+
+  // Financials
+  const totalIncomePeriod = transactions.filter(t => t.amount > 0).reduce((s,t) => s+t.amount, 0);
+  const totalExpense      = Math.abs(transactions.filter(t => t.amount < 0).reduce((s,t) => s+t.amount, 0));
+  const net               = totalIncomePeriod - totalExpense;
+  const monthlyFree       = Math.max(net * 0.3, 0); // 30% of net for projects
+  const totalInvestment   = projects.reduce((s,p) => s + (parseFloat(p.investment)||0), 0);
+  const totalProjRevenue  = projects.reduce((s,p) => s + (parseFloat(p.projectedRevenue)||0), 0);
+
+  const openAdd  = () => { setEditing(null); setForm(empty); setModal(true); };
+  const openEdit = (p) => { setEditing(p.id); setForm({...p}); setModal(true); };
+
+  const save = () => {
+    if (!form.title) return;
+    const inv = parseFloat(form.investment)||0;
+    const rev = parseFloat(form.projectedRevenue)||0;
+    const roi = inv > 0 ? Math.round(((rev - inv)/inv)*100) : 0;
+    const proj = { ...form, id: editing || "p_"+Date.now(), investment: inv, projectedRevenue: rev, cashRequired: inv, roi };
+    setProjects(prev => editing ? prev.map(p => p.id===editing ? proj : p) : [...prev, proj]);
+    setModal(false);
+  };
+
+  const remove = (id) => setProjects(prev => prev.filter(p => p.id !== id));
+
+  const statusColors = { "Idea":"tag-gray", "Planning":"tag-blue", "In Progress":"tag-green", "On Hold":"tag-yellow", "Done":"tag-green" };
+  const impactColors = { High:"var(--accent)", Medium:"var(--blue)", Low:"var(--text3)" };
+
+  const filtered = filterMonth === "all" ? projects : projects.filter(p => p.month === parseInt(filterMonth));
+
+  // Group by month for timeline
+  const byMonth = {};
+  MONTHS.forEach((_,i) => { byMonth[i+1] = projects.filter(p => p.month === i+1 && p.year === YEAR); });
+
+  // Cumulative investment timeline
+  const cumulativeByMonth = MONTHS.map((_,i) => {
+    const m = i+1;
+    return projects.filter(p => p.month <= m && p.year === YEAR).reduce((s,p) => s+(parseFloat(p.investment)||0), 0);
+  });
+  const maxCumul = Math.max(...cumulativeByMonth, 1);
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Projects & Projections</div>
+          <div className="page-subtitle">{YEAR} · Future investments based on cash flow</div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}><Icon name="plus" size={13}/> New Project</button>
+      </div>
+
+      {/* Financial capacity */}
+      <div className="kpi-grid" style={{gridTemplateColumns:"repeat(4,1fr)",marginBottom:20}}>
+        <div className="kpi-card kpi-accent">
+          <div className="kpi-label">Monthly Free Cash</div>
+          <div className="kpi-value">{fmt(monthlyFree)}</div>
+          <div className="kpi-delta pos">30% of net income</div>
+        </div>
+        <div className="kpi-card kpi-blue">
+          <div className="kpi-label">Total Investment</div>
+          <div className="kpi-value">{fmt(totalInvestment)}</div>
+          <div className="kpi-delta" style={{color:"var(--text3)"}}>{projects.length} projects</div>
+        </div>
+        <div className="kpi-card kpi-yellow">
+          <div className="kpi-label">Projected Revenue</div>
+          <div className="kpi-value">{fmt(totalProjRevenue)}</div>
+          <div className="kpi-delta pos">from all projects</div>
+        </div>
+        <div className="kpi-card" style={{borderTop:"2px solid var(--accent)"}}>
+          <div className="kpi-label">Blended ROI</div>
+          <div className="kpi-value" style={{color:totalInvestment>0&&totalProjRevenue>totalInvestment?"var(--accent)":"var(--text3)"}}>
+            {totalInvestment > 0 ? Math.round(((totalProjRevenue-totalInvestment)/totalInvestment)*100)+"%" : "—"}
+          </div>
+          <div className="kpi-delta" style={{color:"var(--text3)"}}>net return</div>
+        </div>
+      </div>
+
+      {/* View toggle + filter */}
+      <div className="flex items-center gap-12 mb-16">
+        <div className="tabs" style={{marginBottom:0}}>
+          {["timeline","list","board"].map(v => <div key={v} className={"tab"+(viewMode===v?" active":"")} onClick={()=>setViewMode(v)} style={{fontSize:12}}>{v.charAt(0).toUpperCase()+v.slice(1)}</div>)}
+        </div>
+        {viewMode==="list" && (
+          <select className="input" style={{maxWidth:160,fontSize:12}} value={filterMonth} onChange={e=>setFilterMonth(e.target.value)}>
+            <option value="all">All Months</option>
+            {MONTHS.map((m,i) => <option key={i} value={i+1}>{m} {YEAR}</option>)}
+          </select>
+        )}
+      </div>
+
+      {/* ── TIMELINE VIEW ── */}
+      {viewMode==="timeline" && (
+        <div className="card" style={{padding:"20px 24px"}}>
+          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,marginBottom:20,letterSpacing:"0.04em"}}>{YEAR} Investment Roadmap</div>
+
+          {/* Mini bar chart */}
+          <div style={{display:"flex",gap:4,alignItems:"flex-end",height:60,marginBottom:24}}>
+            {MONTHS.map((m,i) => {
+              const mProjects = byMonth[i+1]||[];
+              const mInvest = mProjects.reduce((s,p)=>s+(parseFloat(p.investment)||0),0);
+              const h = maxCumul > 0 ? Math.max((mInvest/maxCumul)*100,mInvest>0?8:0) : 0;
+              return (
+                <div key={m} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                  <div style={{width:"100%",height:h+"%",background:mInvest>0?"var(--accent)":"var(--surface3)",borderRadius:"3px 3px 0 0",minHeight:mInvest>0?4:2,transition:"height 0.3s"}} title={mInvest>0?fmt(mInvest):""}/>
+                  <div style={{fontSize:9,color:"var(--text3)",fontFamily:"DM Mono"}}>{m}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Month lanes */}
+          {MONTHS.map((m,i) => {
+            const mProjects = byMonth[i+1]||[];
+            if (mProjects.length === 0) return null;
+            return (
+              <div key={m} style={{marginBottom:20}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div style={{width:40,height:40,borderRadius:"50%",background:"var(--accentBg)",border:"1px solid var(--accentBorder)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    <span style={{fontFamily:"DM Mono",fontSize:11,color:"var(--accent)",fontWeight:500}}>{m}</span>
+                  </div>
+                  <div style={{flex:1,height:1,background:"var(--border)"}}/>
+                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"DM Mono"}}>{mProjects.length} project{mProjects.length>1?"s":""} · {fmt(mProjects.reduce((s,p)=>s+(parseFloat(p.investment)||0),0))}</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10,paddingLeft:50}}>
+                  {mProjects.map(p => (
+                    <div key={p.id} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius2)",padding:"14px 16px",borderLeft:"3px solid "+impactColors[p.impact]}}>
+                      <div className="flex items-center justify-between" style={{marginBottom:8}}>
+                        <div style={{fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:13}}>{p.title}</div>
+                        <span className={"tag "+statusColors[p.status]} style={{fontSize:9}}>{p.status}</span>
+                      </div>
+                      <div style={{fontSize:11,color:"var(--text3)",fontFamily:"DM Mono",marginBottom:10}}>{p.category}</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                        <div style={{background:"var(--surface3)",borderRadius:4,padding:"6px 8px"}}>
+                          <div style={{fontSize:9,color:"var(--text3)",fontFamily:"DM Mono",marginBottom:2}}>INVEST</div>
+                          <div style={{fontFamily:"DM Mono",fontSize:13,color:"var(--red)"}}>{fmt(p.investment)}</div>
+                        </div>
+                        <div style={{background:"var(--surface3)",borderRadius:4,padding:"6px 8px"}}>
+                          <div style={{fontSize:9,color:"var(--text3)",fontFamily:"DM Mono",marginBottom:2}}>PROJ REV</div>
+                          <div style={{fontFamily:"DM Mono",fontSize:13,color:"var(--accent)"}}>{p.projectedRevenue>0?fmt(p.projectedRevenue):"—"}</div>
+                        </div>
+                      </div>
+                      {p.notes && <div style={{fontSize:11,color:"var(--text3)",marginTop:10,lineHeight:1.5}}>{p.notes}</div>}
+                      <div className="flex gap-8" style={{marginTop:10}}>
+                        <button className="btn btn-ghost btn-sm" style={{padding:"3px 8px",fontSize:11}} onClick={()=>openEdit(p)}><Icon name="edit" size={11}/></button>
+                        <button className="btn btn-ghost btn-sm" style={{padding:"3px 8px",fontSize:11,color:"var(--red)"}} onClick={()=>remove(p.id)}><Icon name="trash" size={11}/></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+
+          {projects.length === 0 && (
+            <div className="empty"><div className="empty-icon">🚀</div><div className="empty-title">No projects yet</div><div className="empty-sub">Add your first project to start planning</div></div>
+          )}
+        </div>
+      )}
+
+      {/* ── LIST VIEW ── */}
+      {viewMode==="list" && (
+        <div className="card" style={{padding:0}}>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Project</th><th>Category</th><th>Month</th><th>Status</th><th>Impact</th><th style={{textAlign:"right"}}>Investment</th><th style={{textAlign:"right"}}>Proj Revenue</th><th style={{textAlign:"right"}}>ROI</th><th/></tr></thead>
+              <tbody>
+                {filtered.length===0 ? <tr><td colSpan={9}><div className="empty" style={{padding:40}}><div className="empty-icon">📋</div><div className="empty-title">No projects</div></div></td></tr>
+                : filtered.sort((a,b)=>a.month-b.month).map(p => (
+                  <tr key={p.id}>
+                    <td><div style={{fontWeight:500,fontSize:13}}>{p.title}</div>{p.notes&&<div style={{fontSize:11,color:"var(--text3)",marginTop:2,maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.notes}</div>}</td>
+                    <td><span className="tag tag-gray" style={{fontSize:10}}>{p.category}</span></td>
+                    <td className="mono" style={{color:"var(--text3)",fontSize:12}}>{MONTHS[p.month-1]} {p.year}</td>
+                    <td><span className={"tag "+statusColors[p.status]}>{p.status}</span></td>
+                    <td><span style={{fontFamily:"DM Mono",fontSize:12,color:impactColors[p.impact],fontWeight:500}}>{p.impact}</span></td>
+                    <td className="text-right"><span className="mono" style={{color:"var(--red)"}}>{fmt(p.investment)}</span></td>
+                    <td className="text-right"><span className="mono" style={{color:"var(--accent)"}}>{p.projectedRevenue>0?fmt(p.projectedRevenue):"—"}</span></td>
+                    <td className="text-right"><span className="mono" style={{color:p.roi>0?"var(--accent)":"var(--text3)"}}>{p.roi>0?p.roi+"%":"—"}</span></td>
+                    <td>
+                      <div className="flex gap-8">
+                        <button className="btn btn-ghost btn-sm" style={{padding:"3px 6px"}} onClick={()=>openEdit(p)}><Icon name="edit" size={12}/></button>
+                        <button className="btn btn-ghost btn-sm" style={{padding:"3px 6px",color:"var(--red)"}} onClick={()=>remove(p.id)}><Icon name="trash" size={12}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── BOARD VIEW ── */}
+      {viewMode==="board" && (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:14}}>
+          {STATUS_OPTS.map(status => {
+            const statusProjects = projects.filter(p => p.status===status);
+            return (
+              <div key={status}>
+                <div style={{fontFamily:"DM Mono",fontSize:10,textTransform:"uppercase",letterSpacing:"0.12em",color:"var(--text3)",marginBottom:10,padding:"0 4px"}}>{status} · {statusProjects.length}</div>
+                {statusProjects.map(p => (
+                  <div key={p.id} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius2)",padding:"12px 14px",marginBottom:8,cursor:"pointer",borderLeft:"3px solid "+impactColors[p.impact]}} onClick={()=>openEdit(p)}>
+                    <div style={{fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:12,marginBottom:6}}>{p.title}</div>
+                    <div style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",marginBottom:8}}>{MONTHS[p.month-1]} · {p.category}</div>
+                    <div className="flex items-center justify-between">
+                      <span style={{fontFamily:"DM Mono",fontSize:12,color:"var(--red)"}}>{fmt(p.investment)}</span>
+                      {p.projectedRevenue>0&&<span style={{fontFamily:"DM Mono",fontSize:11,color:"var(--accent)"}}>+{fmt(p.projectedRevenue)}</span>}
+                    </div>
+                  </div>
+                ))}
+                {statusProjects.length===0&&<div style={{border:"1px dashed var(--border)",borderRadius:"var(--radius2)",padding:"20px",textAlign:"center",fontSize:11,color:"var(--text3)",fontFamily:"DM Mono"}}>empty</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Cash availability note */}
+      <div className="card" style={{marginTop:16,background:"var(--surface2)"}}>
+        <div className="flex items-center gap-12">
+          <Icon name="info" size={18} color="var(--accent)"/>
+          <div>
+            <div style={{fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:13,color:"var(--accent)"}}>Cash Availability Analysis</div>
+            <div style={{fontSize:12,color:"var(--text2)",marginTop:4}}>
+              Based on current net income of <strong style={{color:"var(--accent)"}}>{fmt(net)}</strong>, you have approximately <strong style={{color:"var(--accent)"}}>{fmt(monthlyFree)}/month</strong> available for investments (30% of net).
+              Total planned investment of <strong style={{color:totalInvestment>monthlyFree*12?"var(--red)":"var(--accent)"}}>{fmt(totalInvestment)}</strong> {totalInvestment>monthlyFree*12?"exceeds":"is within"} your 12-month capacity of <strong style={{color:"var(--accent)"}}>{fmt(monthlyFree*12)}</strong>.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── MODAL ── */}
+      {modal && (
+        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
+          <div className="modal" style={{maxWidth:560}}>
+            <div className="modal-header">
+              <div className="modal-title">{editing?"Edit Project":"New Project"}</div>
+              <button className="btn btn-ghost" style={{padding:4}} onClick={()=>setModal(false)}><Icon name="close" size={16}/></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="label">Project Title</label>
+                <input className="input" placeholder="e.g. Launch Catering Service" value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))}/>
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Category</label>
+                  <select className="input" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
+                    {CATEGORIES_PROJ.map(c=><option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="label">Impact</label>
+                  <select className="input" value={form.impact} onChange={e=>setForm(f=>({...f,impact:e.target.value}))}>
+                    {IMPACT_OPTS.map(o=><option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Target Month</label>
+                  <select className="input" value={form.month} onChange={e=>setForm(f=>({...f,month:parseInt(e.target.value)}))}>
+                    {MONTHS.map((m,i)=><option key={i} value={i+1}>{m} {YEAR}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="label">Status</label>
+                  <select className="input" value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))}>
+                    {STATUS_OPTS.map(s=><option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Investment Required ($)</label>
+                  <input type="number" className="input" placeholder="0.00" value={form.investment} onChange={e=>setForm(f=>({...f,investment:e.target.value}))}/>
+                </div>
+                <div className="form-group">
+                  <label className="label">Projected Monthly Revenue ($)</label>
+                  <input type="number" className="input" placeholder="0.00" value={form.projectedRevenue} onChange={e=>setForm(f=>({...f,projectedRevenue:e.target.value}))}/>
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="label">Notes & Strategy</label>
+                <textarea className="input" rows={3} placeholder="What's the plan? Who's responsible? What resources are needed?" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} style={{resize:"vertical"}}/>
+              </div>
+              {form.investment > 0 && form.projectedRevenue > 0 && (
+                <div style={{background:"var(--accentBg)",border:"1px solid var(--accentBorder)",borderRadius:"var(--radius2)",padding:"12px 14px"}}>
+                  <div style={{fontSize:12,color:"var(--text2)"}}>
+                    Expected ROI: <strong style={{color:"var(--accent)"}}>{Math.round(((parseFloat(form.projectedRevenue)-parseFloat(form.investment))/parseFloat(form.investment))*100)}%</strong>
+                    {" · "}Payback: <strong style={{color:"var(--accent)"}}>{parseFloat(form.projectedRevenue)>0?Math.ceil(parseFloat(form.investment)/parseFloat(form.projectedRevenue))+" months":"—"}</strong>
+                    {" · "}Available cash: <strong style={{color:monthlyFree>=parseFloat(form.investment)?"var(--accent)":"var(--red)"}}>{monthlyFree>=parseFloat(form.investment)?"✓ within budget":"⚠ exceeds monthly free cash"}</strong>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={()=>setModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={save} disabled={!form.title}>{editing?"Save":"Add Project"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2251,6 +2520,7 @@ export default function App() {
   const NAV = [
     { id: "dashboard", label: "Overview", icon: "dashboard" },
     { id: "insights", label: "CFO Insights", icon: "insights" },
+    { id: "projects", label: "Projects", icon: "projects" },
     { id: "transactions", label: "Transactions", icon: "transactions", badge: uncat > 0 ? uncat : null },
     { id: "categories", label: "Chart of Accounts", icon: "categories" },
     { id: "pl", label: "Profit & Loss", icon: "pl" },
@@ -2264,6 +2534,7 @@ export default function App() {
   const renderScreen = () => {
     switch (screen) {
       case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
+      case "projects":     return <Projects transactions={filteredByDate} netIncome={filteredByDate.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0) - Math.abs(filteredByDate.filter(t=>t.amount<0).reduce((s,t)=>s+t.amount,0))} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} setTransactions={setTransactions} categories={categories} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} transactions={filteredByDate} showToast={showToast} />;
