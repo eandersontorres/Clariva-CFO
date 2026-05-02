@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject } from "./lib/supabase.js";
+import { fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 
@@ -678,7 +679,7 @@ function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
 }
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, setTransactions, categories, showToast }) {
+function Transactions({ transactions, setTransactions, saveTransactions, categories, showToast }) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [drag, setDrag] = useState(false);
@@ -778,6 +779,7 @@ Output only the JSON array, nothing else.` }
 
         if (imported.length === 0) { showToast("No transactions found in PDF.", "error"); return; }
         setTransactions(prev => [...imported, ...prev]);
+        if (saveTransactions) saveTransactions(imported);
         showToast(imported.length + " transactions extracted from PDF!", "success");
       } catch (err) {
         showToast("PDF import failed: " + err.message, "error");
@@ -799,17 +801,26 @@ Output only the JSON array, nothing else.` }
       }
       if (parsed.length === 0) { showToast("No transactions found in file. Check the format.", "error"); return; }
       setTransactions(prev => [...parsed, ...prev]);
+      if (saveTransactions) saveTransactions(parsed);
       showToast(parsed.length + " transactions imported!", "success");
     };
     reader.readAsText(file);
   };
 
   const updateCategory = (id, catId) => {
-    setTransactions(prev => prev.map(t => t.id === id ? { ...t, category: catId } : t));
+    setTransactions(prev => {
+      const updated = prev.map(t => t.id === id ? { ...t, category: catId } : t);
+      if (saveTransactions) { const changed = updated.filter(t => t.id === id); saveTransactions(changed); }
+      return updated;
+    });
   };
 
   const toggleReconcile = (id) => {
-    setTransactions(prev => prev.map(t => t.id === id ? { ...t, reconciled: !t.reconciled } : t));
+    setTransactions(prev => {
+      const updated = prev.map(t => t.id === id ? { ...t, reconciled: !t.reconciled } : t);
+      if (saveTransactions) { const changed = updated.filter(t => t.id === id); saveTransactions(changed); }
+      return updated;
+    });
   };
 
   const handleDrop = (e) => {
@@ -902,7 +913,7 @@ Output only the JSON array, nothing else.` }
 }
 
 // ─── CATEGORIES ───────────────────────────────────────────────────────────────
-function Categories({ categories, setCategories, transactions, showToast }) {
+function Categories({ categories, setCategories, saveCategory, deleteCategory: deleteCategoryDB, transactions, showToast }) {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ name: "", type: "expense", color: "#f05e5e", taxLine: "" });
   const [editing, setEditing] = useState(null);
@@ -915,20 +926,22 @@ function Categories({ categories, setCategories, transactions, showToast }) {
 
   const save = () => {
     if (!form.name.trim()) return;
+    const updated = { id: editing || Date.now().toString(), ...form };
     if (editing) {
-      setCategories(prev => prev.map(c => c.id === editing ? { ...c, ...form } : c));
+      setCategories(prev => prev.map(c => c.id === editing ? updated : c));
       showToast("Category updated", "success");
     } else {
-      setCategories(prev => [...prev, { id: Date.now().toString(), ...form }]);
+      setCategories(prev => [...prev, updated]);
       showToast("Category created", "success");
     }
+    if (saveCategory) saveCategory(updated);
     setModal(false);
   };
 
   const remove = (id) => {
     if (id === "10") { showToast("Cannot delete Uncategorized", "error"); return; }
     setCategories(prev => prev.filter(c => c.id !== id));
-    setTransactions && setTransactions(prev => prev.map(t => t.category === id ? { ...t, category: "10" } : t));
+    if (deleteCategoryDB) deleteCategoryDB(id);
     showToast("Category deleted", "info");
   };
 
@@ -1263,7 +1276,7 @@ function CashFlow({ transactions, categories, dateRange = {} }) {
 }
 
 // ─── BUDGET ───────────────────────────────────────────────────────────────────
-function Budget({ transactions, categories, budgets, setBudgets, showToast }) {
+function Budget({ transactions, categories, budgets, setBudgets, saveBudget, showToast }) {
   const [period, setPeriod] = useState("monthly");
 
   const getActual = (catId) => Math.abs(transactions.filter(t => t.category === catId && t.amount < 0).reduce((s, t) => s + t.amount, 0));
@@ -1355,7 +1368,7 @@ function Budget({ transactions, categories, budgets, setBudgets, showToast }) {
                   value={budget || ""}
                   placeholder="0.00"
                   onChange={e => updateBudget(c.id, e.target.value)}
-                  onBlur={() => showToast("Budget saved", "success")}
+                  onBlur={(e) => { if (saveBudget) saveBudget({ categoryId: c.id, monthly: getBudget(c.id), annual: getBudget(c.id)*12, year: new Date().getFullYear() }); showToast("Budget saved", "success"); }}
                 />
               </div>
               <div className="text-right mono" style={{ color: "var(--text2)" }}>{fmt(actual)}</div>
@@ -1560,27 +1573,8 @@ function Reconciliation({ transactions, categories, showToast }) {
 
 
 // ─── BILLS & PAYMENTS (Accounts Payable) ─────────────────────────────────────
-function Bills({ transactions, setTransactions, categories, vendors, dateRange, showToast }) {
-  const [bills, setBills] = useState(() => {
-    // Seed from Kitchen purchases already in transactions
-    const kitchenPurchases = transactions
-      .filter(t => t.source === "kitchen_purchase" || (t.amount < 0 && t.account === "Kitchen Sync"))
-      .map(t => ({
-        id: "bill_" + t.id,
-        txnId: t.id,
-        vendor: t.description,
-        amount: Math.abs(t.amount),
-        dueDate: t.date,
-        issueDate: t.date,
-        status: t.reconciled ? "paid" : "due",
-        category: t.category,
-        paidDate: t.reconciled ? t.date : null,
-        paidMethod: t.reconciled ? "Bank Transfer" : null,
-        notes: t.notes || "",
-        source: "kitchen",
-      }));
-    return kitchenPurchases;
-  });
+function Bills({ transactions, setTransactions, bills, setBills, saveBill, deleteB, categories, dateRange, showToast, saveTransactions }) {
+  // bills/setBills come from parent App state
 
   const [modal, setModal] = useState(null); // null | "add" | "pay" | "view"
   const [selected, setSelected] = useState(null);
@@ -1661,6 +1655,8 @@ function Bills({ transactions, setTransactions, categories, vendors, dateRange, 
       return [newTxn, ...without];
     });
 
+    if (saveBill) saveBill({ ...selected, status: "paid", paidDate: payForm.date, paidMethod: payForm.method, notes: payForm.notes });
+    if (saveTransactions) saveTransactions([newTxn]);
     showToast("Bill paid! " + fmt(selected.amount) + " to " + selected.vendor, "success");
     setModal(null);
     setSelected(null);
@@ -1683,6 +1679,7 @@ function Bills({ transactions, setTransactions, categories, vendors, dateRange, 
       source: "manual",
     };
     setBills(prev => [newBill, ...prev]);
+    if (saveBill) saveBill(newBill);
     setAddForm({ vendor: "", amount: "", dueDate: "", category: "", notes: "" });
     setModal(null);
     showToast("Bill added — " + newBill.vendor, "success");
@@ -2147,7 +2144,7 @@ function Insights({ transactions, categories, budgets, dateRange = {} }) {
 }
 
 // ─── PROJECTS & PROJECTIONS ───────────────────────────────────────────────────
-function Projects({ transactions, netIncome, dateRange = {} }) {
+function Projects({ transactions, projects, setProjects, saveProject, deleteProjectDB, dateRange = {} }) {
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const YEAR = new Date().getFullYear();
 
@@ -2188,10 +2185,11 @@ function Projects({ transactions, netIncome, dateRange = {} }) {
     const roi = inv > 0 ? Math.round(((rev - inv)/inv)*100) : 0;
     const proj = { ...form, id: editing || "p_"+Date.now(), investment: inv, projectedRevenue: rev, cashRequired: inv, roi };
     setProjects(prev => editing ? prev.map(p => p.id===editing ? proj : p) : [...prev, proj]);
+    if (saveProject) saveProject(proj);
     setModal(false);
   };
 
-  const remove = (id) => setProjects(prev => prev.filter(p => p.id !== id));
+  const remove = (id) => { setProjects(prev => prev.filter(p => p.id !== id)); if (deleteProjectDB) deleteProjectDB(id); };
 
   const statusColors = { "Idea":"tag-gray", "Planning":"tag-blue", "In Progress":"tag-green", "On Hold":"tag-yellow", "Done":"tag-green" };
   const impactColors = { High:"var(--accent)", Medium:"var(--blue)", Low:"var(--text3)" };
@@ -2480,35 +2478,68 @@ export default function App() {
   const [transactions, setTransactions] = useState(SAMPLE_TRANSACTIONS);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [budgets, setBudgets] = useState(SAMPLE_BUDGETS);
+  const [bills, setBills] = useState([]);
+  const [projects, setProjects] = useState([]);
   const [toast, setToast] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [dateRange, setDateRange] = useState({ start: firstOfMonth(), end: today() });
 
-  // ── Supabase sync on mount & date range change ─────────────
+  // ── Load all data from Supabase ────────────────────────────
   useEffect(() => {
     if (TENANT_ID === "demo") return;
     const load = async () => {
       setSyncing(true);
-      const [txns, cats, bgts] = await Promise.all([
+      const [txns, cats, bgts, bls, projs] = await Promise.all([
         fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
         fetchBudgets(TENANT_ID),
+        fetchBills(TENANT_ID),
+        fetchProjects(TENANT_ID),
       ]);
-      if (txns.length > 0) setTransactions(txns.map(t => ({ ...t, category: t.category_id || "10" })));
-      if (cats.length > 0) setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
-      if (bgts.length > 0) setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
+      if (txns.length > 0)   setTransactions(txns.map(t => ({ ...t, category: t.category_id || "10" })));
+      if (cats.length > 0)   setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
+      if (bgts.length > 0)   setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
+      if (bls.length > 0)    setBills(bls.map(b => ({ ...b, dueDate: b.due_date, issueDate: b.issue_date, txnId: b.txn_id, category: b.category_id, paidDate: b.paid_date, paidMethod: b.paid_method })));
+      if (projs.length > 0)  setProjects(projs.map(p => ({ ...p, projectedRevenue: p.projected_revenue })));
       setSyncing(false);
     };
     load();
   }, [dateRange]);
 
+  // ── Save helpers ────────────────────────────────────────────
+  const saveTransactions = async (txns) => {
+    if (TENANT_ID === "demo") return;
+    await upsertTransactions(txns, TENANT_ID);
+  };
+
+  const saveCategory = async (cat) => {
+    if (TENANT_ID === "demo") return;
+    await upsertCategory(cat, TENANT_ID);
+  };
+
+  const saveBudget = async (budget) => {
+    if (TENANT_ID === "demo") return;
+    await upsertBudget(budget, TENANT_ID);
+  };
+
+  const saveBill = async (bill) => {
+    if (TENANT_ID === "demo") return;
+    await upsertBill(bill, TENANT_ID);
+  };
+
+  const saveProject = async (project) => {
+    if (TENANT_ID === "demo") return;
+    await upsertProject(project, TENANT_ID);
+  };
+
   // ── Kitchen sync handler ────────────────────────────────────
-  const handleKitchenSync = (imported) => {
-    setTransactions(prev => {
-      const existingIds = new Set(prev.map(t => t.id));
-      const newOnes = imported.filter(t => !existingIds.has(t.id));
-      return [...newOnes, ...prev];
-    });
+  const handleKitchenSync = async (imported) => {
+    const existingIds = new Set(transactions.map(t => t.id));
+    const newOnes = imported.filter(t => !existingIds.has(t.id));
+    if (newOnes.length > 0) {
+      setTransactions(prev => [...newOnes, ...prev]);
+      await saveTransactions(newOnes);
+    }
   };
 
   const showToast = (message, type = "info") => setToast({ message, type, id: Date.now() });
@@ -2534,15 +2565,15 @@ export default function App() {
   const renderScreen = () => {
     switch (screen) {
       case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
-      case "projects":     return <Projects transactions={filteredByDate} netIncome={filteredByDate.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0) - Math.abs(filteredByDate.filter(t=>t.amount<0).reduce((s,t)=>s+t.amount,0))} dateRange={dateRange} />;
+      case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
-      case "transactions": return <Transactions transactions={filteredByDate} setTransactions={setTransactions} categories={categories} showToast={showToast} />;
-      case "categories":   return <Categories categories={categories} setCategories={setCategories} transactions={filteredByDate} showToast={showToast} />;
+      case "transactions": return <Transactions transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} showToast={showToast} />;
+      case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
-      case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} showToast={showToast} />;
-      case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} categories={categories} vendors={[]} dateRange={dateRange} showToast={showToast} />;
-      case "reconcile":    return <Reconciliation transactions={filteredByDate} categories={categories} showToast={showToast} />;
+      case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
+      case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
+      case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} showToast={showToast} />;
       case "tax":          return <TaxSummary transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       default: return null;
     }
