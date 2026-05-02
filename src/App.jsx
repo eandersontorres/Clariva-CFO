@@ -319,7 +319,7 @@ function parseCSVLine(line) {
 }
 
 function parseBoACSV(text) {
-const lines = text.split('\n').map(l => l.replace('\r', '').trim()).filter(l => l);
+  const lines = text.split('\n').map(l => l.replace('\r', '')).filter(l => l.trim());
   const txns = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -707,7 +707,7 @@ function Transactions({ transactions, setTransactions, categories, showToast }) 
           reader.onerror = () => rej(new Error("Read failed"));
           reader.readAsDataURL(file);
         });
-        // Call via /api/anthropic proxy (same as Clariva Kitchen invoice scanner)
+        // Call via /api/anthropic proxy (same as Clariva Kitchen)
         const anthropicRes = await fetch("/api/anthropic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
