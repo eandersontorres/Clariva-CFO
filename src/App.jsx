@@ -663,8 +663,18 @@ function Transactions({ transactions, setTransactions, categories, showToast }) 
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pdfBase64: base64, filename: file.name }),
         });
-        const data = await response.json();
-        if (!response.ok) { showToast(data.error || "PDF extraction failed", "error"); return; }
+        let data;
+        try {
+          data = await response.json();
+        } catch (jsonErr) {
+          showToast("Server error — check ANTHROPIC_API_KEY in Vercel env vars", "error");
+          return;
+        }
+        if (!response.ok) {
+          const detail = data.detail ? " — " + String(data.detail).slice(0, 80) : "";
+          showToast((data.error || "PDF extraction failed") + detail, "error");
+          return;
+        }
         const imported = data.transactions.map(t => ({ ...t, category: "10" }));
         if (imported.length === 0) { showToast("No transactions found in PDF.", "error"); return; }
         setTransactions(prev => [...imported, ...prev]);
