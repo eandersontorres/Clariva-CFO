@@ -1,141 +1,121 @@
-/**
- * Parse Bank of America CSV export
- * BoA formats:
- *   Format A: Date,Description,Amount,Running Bal.
- *   Format B: "Posted Date","Reference Number","Payee","Address","Amount"
- */
-export function parseBoACSV(text) {
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split('\n')
-  const transactions = []
+// api/parse-statement.js
+export default async function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
-    if (!line) continue
+  const { pdfBase64, filename } = req.body
+  if (!pdfBase64) return res.status(400).json({ error: 'No PDF data provided' })
 
-    // Parse CSV respecting quoted fields
-    const cols = parseCSVLine(line)
-    if (cols.length < 3) continue
+  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+  if (!ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' })
 
-    // Skip header rows
-    const firstCol = cols[0].toLowerCase()
-    if (firstCol === 'date' || firstCol === 'posted date' || firstCol.startsWith('account')) continue
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-5',
+        max_tokens: 8096,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
+            },
+            {
+              type: 'text',
+              text: `You are a bank statement parser. Extract every transaction from this PDF.
 
-    // Try different column positions
-    let date = '', desc = '', amtStr = ''
+CRITICAL: Respond with ONLY a raw JSON array. No markdown. No explanation. No \`\`\`json fences. No text before or after. Start your response with [ and end with ].
 
-    if (cols.length >= 4) {
-      // Format A: Date, Description, Amount, Running Bal
-      date = cols[0]
-      desc = cols[1]
-      amtStr = cols[2]
-    } else if (cols.length >= 5) {
-      // Format B: Posted Date, Reference, Payee, Address, Amount
-      date = cols[0]
-      desc = cols[2] || cols[1]
-      amtStr = cols[4]
-    }
+Each object must have exactly:
+- "date": "YYYY-MM-DD"
+- "description": "MERCHANT NAME" (uppercase, max 60 chars)  
+- "amount": number (negative=debit/purchase/withdrawal, positive=credit/deposit/payment received)
+- "account": "Checking ••XXXX" or "Credit ••XXXX" using last 4 digits if visible
 
-    const amount = parseFloat(amtStr.replace(/[$,\s]/g, ''))
-    if (isNaN(amount)) continue
+Rules:
+- Include ALL transactions: purchases, deposits, transfers, fees, payments
+- Credit card purchases → negative
+- Credit card payments received → positive  
+- Checking withdrawals → negative
+- Checking deposits → positive
+- Skip balance rows, totals, opening/closing balance lines
+- If no account digits visible use "Bank of America"
 
-    let parsedDate
-    try {
-      const d = new Date(date)
-      if (isNaN(d.getTime())) continue
-      parsedDate = d.toISOString().split('T')[0]
-    } catch { continue }
-
-    transactions.push({
-      id: `csv_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
-      date: parsedDate,
-      description: desc.toUpperCase().trim().slice(0, 80),
-      amount,
-      category_id: 'uncategorized',
-      account: 'Imported · BoA',
-      reconciled: false,
-      source: 'csv',
+Example: [{"date":"2025-01-03","description":"SYSCO FOODS","amount":-2340.50,"account":"Checking ••4821"}]`
+            }
+          ]
+        }],
+      }),
     })
-  }
 
-  return transactions
-}
-
-/**
- * Parse OFX / QFX (Quicken Financial Exchange)
- * Standard format used by all US banks
- */
-export function parseOFX(text) {
-  const transactions = []
-  const blocks = text.match(/<STMTTRN>[\s\S]*?<\/STMTTRN>/gi) || []
-
-  // Also try SGML-style (no closing tags)
-  const sgmlBlocks = []
-  if (blocks.length === 0) {
-    const stmtMatch = text.match(/<BANKTRANLIST>([\s\S]*?)<\/BANKTRANLIST>/i)
-    if (stmtMatch) {
-      const trns = stmtMatch[1].split('<STMTTRN>').slice(1)
-      sgmlBlocks.push(...trns)
-    }
-  }
-
-  const processBlock = (block) => {
-    const get = (tag) => {
-      const m = block.match(new RegExp(`<${tag}>([^<\\n]+)`, 'i'))
-      return m ? m[1].trim() : ''
+    if (!response.ok) {
+      const err = await response.text()
+      return res.status(502).json({ error: 'Anthropic API error', detail: err.slice(0, 300) })
     }
 
-    const dtPosted = get('DTPOSTED')
-    const name = get('NAME') || get('MEMO') || get('PAYEE') || 'UNKNOWN'
-    const amtStr = get('TRNAMT')
-    const fitid = get('FITID')
+    const data = await response.json()
+    let rawText = (data.content?.[0]?.text || '').trim()
 
-    if (!dtPosted || !amtStr) return null
+    // Aggressive cleaning — strip any markdown, leading/trailing text
+    // Find first [ and last ] 
+    const firstBracket = rawText.indexOf('[')
+    const lastBracket = rawText.lastIndexOf(']')
 
-    const amount = parseFloat(amtStr)
-    if (isNaN(amount)) return null
-
-    // OFX date format: YYYYMMDDHHMMSS or YYYYMMDD
-    const year = dtPosted.slice(0, 4)
-    const month = dtPosted.slice(4, 6)
-    const day = dtPosted.slice(6, 8)
-
-    return {
-      id: fitid ? `ofx_${fitid}` : `ofx_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      date: `${year}-${month}-${day}`,
-      description: name.toUpperCase().trim().slice(0, 80),
-      amount,
-      category_id: 'uncategorized',
-      account: 'Imported · BoA',
-      reconciled: false,
-      source: 'ofx',
+    if (firstBracket === -1 || lastBracket === -1) {
+      return res.status(422).json({
+        error: 'AI did not return a JSON array. The PDF may be scanned/image-based or encrypted.',
+        preview: rawText.slice(0, 300),
+      })
     }
-  }
 
-  ;[...blocks, ...sgmlBlocks].forEach(block => {
-    const txn = processBlock(block)
-    if (txn) transactions.push(txn)
-  })
+    const jsonStr = rawText.slice(firstBracket, lastBracket + 1)
 
-  return transactions
-}
-
-// CSV line parser that respects quoted fields
-function parseCSVLine(line) {
-  const cols = []
-  let current = ''
-  let inQuotes = false
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i]
-    if (ch === '"') {
-      inQuotes = !inQuotes
-    } else if (ch === ',' && !inQuotes) {
-      cols.push(current.trim())
-      current = ''
-    } else {
-      current += ch
+    let transactions
+    try {
+      transactions = JSON.parse(jsonStr)
+    } catch (e) {
+      // Try to fix common issues: trailing commas, single quotes
+      const fixed = jsonStr
+        .replace(/,\s*([}\]])/g, '$1')  // trailing commas
+        .replace(/'/g, '"')              // single quotes
+      try {
+        transactions = JSON.parse(fixed)
+      } catch (e2) {
+        return res.status(422).json({
+          error: 'Could not parse transactions from PDF. Try downloading as CSV from Bank of America instead.',
+          detail: e2.message,
+        })
+      }
     }
+
+    if (!Array.isArray(transactions)) {
+      return res.status(422).json({ error: 'Expected JSON array from AI' })
+    }
+
+    const sanitized = transactions
+      .filter(t => t.date && t.description && typeof t.amount === 'number' && !isNaN(t.amount))
+      .map((t, i) => ({
+        id: `pdf_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+        date: String(t.date).slice(0, 10),
+        description: String(t.description).toUpperCase().trim().slice(0, 80),
+        amount: parseFloat(t.amount),
+        account: t.account || 'Bank of America',
+        category_id: null,
+        category: '10',
+        reconciled: false,
+        source: 'pdf',
+      }))
+
+    return res.status(200).json({ transactions: sanitized, count: sanitized.length })
+
+  } catch (err) {
+    console.error('parse-statement:', err)
+    return res.status(500).json({ error: err.message })
   }
-  cols.push(current.trim())
-  return cols
 }
