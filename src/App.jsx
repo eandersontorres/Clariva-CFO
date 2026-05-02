@@ -57,11 +57,20 @@ const STYLES = `
     overflow-y: auto;
   }
   .sidebar-logo {
-    padding: 20px 18px 16px;
+    padding: 18px 16px 16px;
     border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
   }
-  .logo-mark { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
-  .logo-sub { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text3); letter-spacing: 0.08em; margin-top: 2px; }
+  .logo-icon {
+    width: 34px; height: 34px; flex-shrink: 0;
+    background: var(--accentBg);
+    border: 1px solid var(--accentBorder);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .logo-text { display: flex; flex-direction: column; }
+  .logo-mark { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text); line-height: 1; }
+  .logo-sub { font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; margin-top: 3px; line-height: 1; }
   .sidebar-section { padding: 16px 10px 8px; }
   .sidebar-section-label { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text3); padding: 0 8px 8px; font-family: 'DM Mono', monospace; }
   .nav-item {
@@ -1312,8 +1321,15 @@ export default function App() {
       <div className="layout">
         <nav className="sidebar">
           <div className="sidebar-logo">
-            <div className="logo-mark">Clariva</div>
-            <div className="logo-sub">LEDGER · v1.0</div>
+            <div className="logo-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.65 1.87 1.96 0 2.4-.98 2.4-1.59 0-.83-.44-1.61-2.67-2.14-2.48-.6-4.18-1.62-4.18-3.67 0-1.72 1.39-2.84 3.11-3.21V4h2.67v1.95c1.86.45 2.79 1.86 2.85 3.39H14.3c-.05-1.11-.64-1.87-2.22-1.87-1.5 0-2.4.68-2.4 1.64 0 .84.65 1.39 2.67 1.91s4.18 1.39 4.18 3.91c-.01 1.83-1.38 2.83-3.12 3.16z" fill="var(--accent)"/>
+              </svg>
+            </div>
+            <div className="logo-text">
+              <div className="logo-mark">Clariva</div>
+              <div className="logo-sub">CFO</div>
+            </div>
           </div>
 
           <div className="sidebar-section">
