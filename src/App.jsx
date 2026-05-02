@@ -319,7 +319,12 @@ function parseCSVLine(line) {
 }
 
 function parseBoACSV(text) {
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split('\n');
+  const lines = text.replace(/
+/g, '
+').replace(/
+/g, '
+').trim().split('
+');
   const txns = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -707,24 +712,84 @@ function Transactions({ transactions, setTransactions, categories, showToast }) 
           reader.onerror = () => rej(new Error("Read failed"));
           reader.readAsDataURL(file);
         });
-        const response = await fetch("/api/parse-statement", {
+        // Call Anthropic directly from browser (internal use)
+        const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
+        if (!ANTHROPIC_KEY) {
+          showToast("Add VITE_ANTHROPIC_API_KEY to Vercel environment variables", "error");
+          return;
+        }
+
+        const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pdfBase64: base64, filename: file.name }),
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": ANTHROPIC_KEY,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          body: JSON.stringify({
+            model: "claude-opus-4-5",
+            max_tokens: 8096,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+                { type: "text", text: `Parse every bank transaction in this PDF statement.
+
+Return ONLY a JSON array. Start with [ and end with ]. No markdown, no explanation, no preamble.
+
+Each object:
+- "date": "YYYY-MM-DD"
+- "description": "MERCHANT NAME" (uppercase, max 60 chars)
+- "amount": number (negative=withdrawal/purchase/debit, positive=deposit/credit)
+- "account": "Checking ••1234" or "Credit ••5678" (last 4 digits if visible)
+
+Skip balance rows, opening/closing balance, subtotals.
+Credit card charges = negative. Deposits = positive.
+
+Output only the JSON array, nothing else.` }
+              ]
+            }]
+          }),
         });
-        let data;
+
+        if (!anthropicRes.ok) {
+          const err = await anthropicRes.text();
+          showToast("Anthropic API error " + anthropicRes.status + ": " + err.slice(0, 100), "error");
+          return;
+        }
+
+        const aiData = await anthropicRes.json();
+        const rawText = (aiData.content?.[0]?.text || "").trim();
+
+        const start = rawText.indexOf("[");
+        const end = rawText.lastIndexOf("]");
+        if (start === -1 || end <= start) {
+          showToast("AI could not extract transactions. Try CSV format instead.", "error");
+          return;
+        }
+
+        let transactions_parsed;
         try {
-          data = await response.json();
-        } catch (jsonErr) {
-          showToast("Server error — check ANTHROPIC_API_KEY in Vercel env vars", "error");
+          transactions_parsed = JSON.parse(rawText.slice(start, end + 1).replace(/,\s*([}\]])/g, "$1"));
+        } catch (e) {
+          showToast("Could not parse AI response. Try CSV instead.", "error");
           return;
         }
-        if (!response.ok) {
-          const detail = data.detail ? " — " + String(data.detail).slice(0, 80) : "";
-          showToast((data.error || "PDF extraction failed") + detail, "error");
-          return;
-        }
-        const imported = data.transactions.map(t => ({ ...t, category: "10" }));
+
+        const imported = transactions_parsed
+          .filter(t => t.date && t.description && typeof t.amount === "number")
+          .map((t, i) => ({
+            id: "pdf_" + Date.now() + "_" + i,
+            date: String(t.date).slice(0, 10),
+            description: String(t.description).toUpperCase().trim().slice(0, 80),
+            amount: parseFloat(t.amount),
+            account: t.account || "Bank of America",
+            category: "10",
+            reconciled: false,
+            source: "pdf",
+          }));
+
         if (imported.length === 0) { showToast("No transactions found in PDF.", "error"); return; }
         setTransactions(prev => [...imported, ...prev]);
         showToast(imported.length + " transactions extracted from PDF!", "success");
