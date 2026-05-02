@@ -496,7 +496,7 @@ function Toast({ message, type = "info", onClose }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ transactions, categories, budgets }) {
+function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
   const totalIncome = transactions.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalExpense = Math.abs(transactions.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
   const netIncome = totalIncome - totalExpense;
@@ -906,7 +906,7 @@ function Categories({ categories, setCategories, transactions, showToast }) {
 }
 
 // ─── P&L REPORT ───────────────────────────────────────────────────────────────
-function PLReport({ transactions, categories }) {
+function PLReport({ transactions, categories, dateRange = {} }) {
   const [period, setPeriod] = useState("monthly");
   const [expanded, setExpanded] = useState({ income: true, expense: true });
 
@@ -1055,7 +1055,7 @@ function PLReport({ transactions, categories }) {
 }
 
 // ─── CASH FLOW ────────────────────────────────────────────────────────────────
-function CashFlow({ transactions, categories }) {
+function CashFlow({ transactions, categories, dateRange = {} }) {
   const operating = transactions.filter(t => ["1","2","3","4","6","7","8","9"].includes(t.category));
   const opInflow = operating.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const opOutflow = Math.abs(operating.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
@@ -1266,7 +1266,7 @@ function Budget({ transactions, categories, budgets, setBudgets, showToast }) {
 }
 
 // ─── TAX SUMMARY ──────────────────────────────────────────────────────────────
-function TaxSummary({ transactions, categories }) {
+function TaxSummary({ transactions, categories, dateRange = {} }) {
   const byTaxLine = {};
   categories.forEach(c => {
     const total = transactions.filter(t => t.category === c.id).reduce((s, t) => s + t.amount, 0);
