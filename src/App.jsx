@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
 import { parseBoACSV, parseOFX } from "./lib/parsers.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -257,6 +257,7 @@ const STYLES = `
   /* TOAST */
   .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border2); border-radius: var(--radius); padding: 12px 18px; font-size: 13px; z-index: 9999; display: flex; align-items: center; gap: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); animation: slideUp 0.2s ease; }
   @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 `;
 
 // ─── SAMPLE DATA ─────────────────────────────────────────────────────────────
@@ -307,6 +308,155 @@ const fmtShort = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-US", { 
 
 // parseBoACSV and parseOFX imported from ./lib/parsers.js
 
+
+// ─── DATE HELPERS ─────────────────────────────────────────────────────────────
+const today = () => new Date().toISOString().split("T")[0];
+const firstOfMonth = () => { const d = new Date(); d.setDate(1); return d.toISOString().split("T")[0]; };
+const firstOfYear  = () => { const d = new Date(); d.setMonth(0); d.setDate(1); return d.toISOString().split("T")[0]; };
+const monthAgo     = () => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().split("T")[0]; };
+const quarterStart = () => {
+  const d = new Date(); const q = Math.floor(d.getMonth() / 3);
+  d.setMonth(q * 3); d.setDate(1); return d.toISOString().split("T")[0];
+};
+const lastMonthStart = () => { const d = new Date(); d.setMonth(d.getMonth()-1); d.setDate(1); return d.toISOString().split("T")[0]; };
+const lastMonthEnd   = () => { const d = new Date(); d.setDate(0); return d.toISOString().split("T")[0]; };
+
+const DATE_PRESETS = [
+  { label: "This Month",    start: firstOfMonth,  end: today },
+  { label: "Last Month",    start: lastMonthStart, end: lastMonthEnd },
+  { label: "This Quarter",  start: quarterStart,  end: today },
+  { label: "This Year",     start: firstOfYear,   end: today },
+  { label: "Last 90 Days",  start: () => { const d = new Date(); d.setDate(d.getDate()-90); return d.toISOString().split("T")[0]; }, end: today },
+  { label: "All Time",      start: () => "2020-01-01", end: today },
+];
+
+// ─── DATE RANGE PICKER ────────────────────────────────────────────────────────
+function DateRangePicker({ dateRange, setDateRange }) {
+  const [open, setOpen] = useState(false);
+  const [custom, setCustom] = useState(false);
+  const ref = useRef();
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const activePreset = DATE_PRESETS.find(p => p.start() === dateRange.start && p.end() === dateRange.end);
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        className="btn btn-outline btn-sm"
+        style={{ gap: 8, fontFamily: "DM Mono, monospace", fontSize: 12, minWidth: 220 }}
+        onClick={() => setOpen(o => !o)}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span style={{ color: "var(--accent)" }}>{activePreset ? activePreset.label : "Custom"}</span>
+        <span style={{ color: "var(--text3)" }}>·</span>
+        <span>{dateRange.start} → {dateRange.end}</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 500,
+          background: "var(--surface)", border: "1px solid var(--border2)",
+          borderRadius: "var(--radius)", padding: 8, minWidth: 220,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.4)"
+        }}>
+          {DATE_PRESETS.map(p => (
+            <div
+              key={p.label}
+              onClick={() => { setDateRange({ start: p.start(), end: p.end() }); setCustom(false); setOpen(false); }}
+              style={{
+                padding: "8px 12px", borderRadius: 6, cursor: "pointer", fontSize: 13,
+                background: activePreset?.label === p.label ? "var(--accentBg)" : "transparent",
+                color: activePreset?.label === p.label ? "var(--accent)" : "var(--text2)",
+                transition: "all 0.1s"
+              }}
+              onMouseEnter={e => { if (activePreset?.label !== p.label) e.currentTarget.style.background = "var(--surface2)"; }}
+              onMouseLeave={e => { if (activePreset?.label !== p.label) e.currentTarget.style.background = "transparent"; }}
+            >
+              {p.label}
+            </div>
+          ))}
+          <div style={{ borderTop: "1px solid var(--border)", margin: "6px 0", padding: "8px 12px 4px" }}>
+            <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.1em" }}>Custom Range</div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="date" className="input" style={{ fontSize: 12, padding: "5px 8px", flex: 1 }}
+                value={dateRange.start} onChange={e => setDateRange(r => ({ ...r, start: e.target.value }))} />
+              <span style={{ color: "var(--text3)", fontSize: 11 }}>→</span>
+              <input type="date" className="input" style={{ fontSize: 12, padding: "5px 8px", flex: 1 }}
+                value={dateRange.end} onChange={e => setDateRange(r => ({ ...r, end: e.target.value }))} />
+            </div>
+            <button className="btn btn-primary btn-sm" style={{ width: "100%", marginTop: 8, justifyContent: "center" }} onClick={() => setOpen(false)}>Apply</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── KITCHEN SYNC BUTTON ──────────────────────────────────────────────────────
+function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+
+  const sync = async () => {
+    setLoading(true);
+    showToast("Syncing from Clariva Kitchen...", "info");
+    try {
+      const [purchases, snapshots, vendors] = await Promise.all([
+        fetchKitchenPurchases(tenantId, dateRange),
+        fetchKitchenSnapshots(tenantId, dateRange),
+        fetchKitchenVendors(tenantId),
+      ]);
+
+      // Build vendor map
+      const vendorMap = {};
+      vendors.forEach(v => { vendorMap[v.id] = v.name; });
+
+      // Find category IDs
+      const foodBevCat = categories.find(c => c.name === "Food & Beverage" || c.tax_line === "COGS");
+      const diningCat  = categories.find(c => c.name === "Revenue - Dining" || c.tax_line === "Gross Receipts");
+
+      const expTxns = purchasesToTransactions(purchases, vendorMap, foodBevCat?.id);
+      const incTxns = snapshotsToTransactions(snapshots, diningCat?.id);
+
+      const all = [...expTxns, ...incTxns].map(t => ({ ...t, category: t.category_id || "10" }));
+
+      if (all.length === 0) {
+        showToast("No new data from Kitchen in this date range.", "info");
+      } else {
+        onSync(all);
+        setLastSync(new Date().toLocaleTimeString());
+        showToast(all.length + " records synced from Kitchen! (" + expTxns.length + " expenses · " + incTxns.length + " income)", "success");
+      }
+    } catch (err) {
+      showToast("Sync failed: " + err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      className="btn btn-outline btn-sm"
+      onClick={sync}
+      disabled={loading}
+      style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
+      title="Pull invoices + Square revenue from Clariva Kitchen"
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
+        <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      </svg>
+      {loading ? "Syncing..." : "Sync Kitchen"}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+    </button>
+  );
+}
+
 // ─── ICONS (inline SVG) ───────────────────────────────────────────────────────
 const Icon = ({ name, size = 16, color = "currentColor" }) => {
   const icons = {
@@ -327,6 +477,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     filter: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
     info: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>,
     check: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+    bills: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,
     bank: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>,
   };
   return icons[name] || null;
@@ -373,7 +524,7 @@ function Dashboard({ transactions, categories, budgets }) {
       <div className="page-header">
         <div>
           <div className="page-title">Overview</div>
-          <div className="page-subtitle">January 2025 · TorresBee Restaurant</div>
+          <div className="page-subtitle">{dateRange ? dateRange.start + " → " + dateRange.end : ""} · TorresBee</div>
         </div>
         <div className="flex gap-8">
           <button className="btn btn-outline btn-sm"><Icon name="download" size={13} /> Export</button>
@@ -490,20 +641,55 @@ function Transactions({ transactions, setTransactions, categories, showToast }) 
     return true;
   });
 
-  const handleFile = (file) => {
+  const [parsing, setParsing] = useState(false);
+
+  const handleFile = async (file) => {
     if (!file) return;
+    const ext = file.name.toLowerCase();
+
+    // PDF → AI extraction
+    if (ext.endsWith(".pdf")) {
+      setParsing(true);
+      showToast("Reading PDF with AI... 10-20 seconds", "info");
+      try {
+        const base64 = await new Promise((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = e => res(e.target.result.split(",")[1]);
+          reader.onerror = () => rej(new Error("Read failed"));
+          reader.readAsDataURL(file);
+        });
+        const response = await fetch("/api/parse-statement", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pdfBase64: base64, filename: file.name }),
+        });
+        const data = await response.json();
+        if (!response.ok) { showToast(data.error || "PDF extraction failed", "error"); return; }
+        const imported = data.transactions.map(t => ({ ...t, category: "10" }));
+        if (imported.length === 0) { showToast("No transactions found in PDF.", "error"); return; }
+        setTransactions(prev => [...imported, ...prev]);
+        showToast(imported.length + " transactions extracted from PDF!", "success");
+      } catch (err) {
+        showToast("PDF import failed: " + err.message, "error");
+      } finally {
+        setParsing(false);
+      }
+      return;
+    }
+
+    // CSV / OFX → direct parse
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target.result;
       let parsed = [];
-      if (file.name.toLowerCase().endsWith(".ofx") || file.name.toLowerCase().endsWith(".qfx")) {
+      if (ext.endsWith(".ofx") || ext.endsWith(".qfx")) {
         parsed = parseOFX(text);
       } else {
         parsed = parseBoACSV(text);
       }
       if (parsed.length === 0) { showToast("No transactions found in file. Check the format.", "error"); return; }
       setTransactions(prev => [...parsed, ...prev]);
-      showToast(`${parsed.length} transactions imported successfully!`, "success");
+      showToast(parsed.length + " transactions imported!", "success");
     };
     reader.readAsText(file);
   };
@@ -530,9 +716,9 @@ function Transactions({ transactions, setTransactions, categories, showToast }) 
           <div className="page-subtitle">{transactions.length} transactions · {transactions.filter(t => t.category === "10").length} uncategorized</div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={() => fileRef.current.click()}>
-          <Icon name="upload" size={13} /> Import CSV / OFX
+          <Icon name="upload" size={13} /> Import Statement
         </button>
-        <input type="file" ref={fileRef} accept=".csv,.ofx,.qfx" style={{ display: "none" }} onChange={e => handleFile(e.target.files[0])} />
+        <input type="file" ref={fileRef} accept=".pdf,.csv,.ofx,.qfx" style={{ display: "none" }} onChange={e => handleFile(e.target.files[0])} />
       </div>
 
       {/* Upload drop zone */}
@@ -546,11 +732,15 @@ function Transactions({ transactions, setTransactions, categories, showToast }) 
       >
         <div style={{ fontSize: 24 }}><Icon name="bank" size={28} color="var(--accent)" /></div>
         <div>
-          <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 600, fontSize: 14 }}>Drop your Bank of America statement here</div>
-          <div style={{ fontSize: 12, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 3 }}>Supports CSV and OFX/QFX · Drag & drop or click to browse</div>
+          <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 600, fontSize: 14 }}>
+            {parsing ? "🤖 AI extracting transactions from PDF..." : "Drop your Bank of America statement here"}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 3 }}>
+            {parsing ? "This usually takes 10–20 seconds" : "PDF · CSV · OFX/QFX · Drag & drop or click to browse"}
+          </div>
         </div>
         <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textAlign: "right" }}>
-          BoA Online → Statements → Download<br />Select .CSV or .OFX format
+          BoA Online → Statements → Download<br /><span style={{color:"var(--accent)"}}>PDF recommended</span> · CSV or OFX also work
         </div>
       </div>
 
@@ -738,7 +928,7 @@ function PLReport({ transactions, categories }) {
       <div className="page-header">
         <div>
           <div className="page-title">Profit & Loss</div>
-          <div className="page-subtitle">January 2025 · TorresBee Restaurant</div>
+          <div className="page-subtitle">{dateRange ? dateRange.start + " → " + dateRange.end : "January 2025"} · TorresBee</div>
         </div>
         <div className="flex gap-8">
           <div className="tabs" style={{ marginBottom: 0 }}>
@@ -1258,6 +1448,378 @@ function Reconciliation({ transactions, categories, showToast }) {
   );
 }
 
+
+// ─── BILLS & PAYMENTS (Accounts Payable) ─────────────────────────────────────
+function Bills({ transactions, setTransactions, categories, vendors, dateRange, showToast }) {
+  const [bills, setBills] = useState(() => {
+    // Seed from Kitchen purchases already in transactions
+    const kitchenPurchases = transactions
+      .filter(t => t.source === "kitchen_purchase" || (t.amount < 0 && t.account === "Kitchen Sync"))
+      .map(t => ({
+        id: "bill_" + t.id,
+        txnId: t.id,
+        vendor: t.description,
+        amount: Math.abs(t.amount),
+        dueDate: t.date,
+        issueDate: t.date,
+        status: t.reconciled ? "paid" : "due",
+        category: t.category,
+        paidDate: t.reconciled ? t.date : null,
+        paidMethod: t.reconciled ? "Bank Transfer" : null,
+        notes: t.notes || "",
+        source: "kitchen",
+      }));
+    return kitchenPurchases;
+  });
+
+  const [modal, setModal] = useState(null); // null | "add" | "pay" | "view"
+  const [selected, setSelected] = useState(null);
+  const [payForm, setPayForm] = useState({ date: "", method: "Bank Transfer", notes: "" });
+  const [addForm, setAddForm] = useState({ vendor: "", amount: "", dueDate: "", category: "", notes: "" });
+  const [filterStatus, setFilterStatus] = useState("all");
+
+  const METHODS = ["Bank Transfer", "Check", "ACH", "Credit Card", "Cash", "Zelle", "Wire Transfer"];
+
+  // Sync new Kitchen purchases into bills
+  useEffect(() => {
+    const kitchenTxns = transactions.filter(t => t.source === "kitchen_purchase");
+    const existingTxnIds = new Set(bills.map(b => b.txnId));
+    const newBills = kitchenTxns
+      .filter(t => !existingTxnIds.has(t.id))
+      .map(t => ({
+        id: "bill_" + t.id,
+        txnId: t.id,
+        vendor: t.description,
+        amount: Math.abs(t.amount),
+        dueDate: t.date,
+        issueDate: t.date,
+        status: "due",
+        category: t.category,
+        paidDate: null,
+        paidMethod: null,
+        notes: t.notes || "",
+        source: "kitchen",
+      }));
+    if (newBills.length > 0) setBills(prev => [...prev, ...newBills]);
+  }, [transactions]);
+
+  const isOverdue = (b) => b.status !== "paid" && b.dueDate < today();
+
+  const filtered = bills.filter(b => {
+    if (filterStatus === "unpaid") return b.status !== "paid";
+    if (filterStatus === "paid") return b.status === "paid";
+    if (filterStatus === "overdue") return isOverdue(b);
+    return true;
+  });
+
+  const totalDue = bills.filter(b => b.status !== "paid").reduce((s, b) => s + b.amount, 0);
+  const totalOverdue = bills.filter(b => isOverdue(b)).reduce((s, b) => s + b.amount, 0);
+  const totalPaid = bills.filter(b => b.status === "paid").reduce((s, b) => s + b.amount, 0);
+  const paidCount = bills.filter(b => b.status === "paid").length;
+
+  const openPay = (bill) => {
+    setSelected(bill);
+    setPayForm({ date: today(), method: "Bank Transfer", notes: "" });
+    setModal("pay");
+  };
+
+  const confirmPay = () => {
+    if (!payForm.date) return;
+
+    // Mark bill as paid
+    setBills(prev => prev.map(b => b.id === selected.id
+      ? { ...b, status: "paid", paidDate: payForm.date, paidMethod: payForm.method, notes: payForm.notes }
+      : b
+    ));
+
+    // Create ledger transaction for this payment
+    const cat = categories.find(c => c.id === selected.category);
+    const newTxn = {
+      id: "payment_" + selected.id + "_" + Date.now(),
+      date: payForm.date,
+      description: "PAYMENT — " + selected.vendor,
+      amount: -selected.amount,
+      category: selected.category || "10",
+      account: payForm.method,
+      reconciled: true,
+      source: "bill_payment",
+      notes: payForm.notes || ("Bill paid via " + payForm.method),
+    };
+    setTransactions(prev => {
+      // Remove old kitchen_purchase txn and replace with payment txn
+      const without = prev.filter(t => t.id !== selected.txnId);
+      return [newTxn, ...without];
+    });
+
+    showToast("Bill paid! " + fmt(selected.amount) + " to " + selected.vendor, "success");
+    setModal(null);
+    setSelected(null);
+  };
+
+  const addBill = () => {
+    if (!addForm.vendor || !addForm.amount || !addForm.dueDate) return;
+    const newBill = {
+      id: "bill_manual_" + Date.now(),
+      txnId: null,
+      vendor: addForm.vendor.toUpperCase(),
+      amount: parseFloat(addForm.amount),
+      dueDate: addForm.dueDate,
+      issueDate: today(),
+      status: "due",
+      category: addForm.category || "10",
+      paidDate: null,
+      paidMethod: null,
+      notes: addForm.notes,
+      source: "manual",
+    };
+    setBills(prev => [newBill, ...prev]);
+    setAddForm({ vendor: "", amount: "", dueDate: "", category: "", notes: "" });
+    setModal(null);
+    showToast("Bill added — " + newBill.vendor, "success");
+  };
+
+  const statusTag = (b) => {
+    if (b.status === "paid") return <span className="tag tag-green">Paid</span>;
+    if (isOverdue(b)) return <span className="tag tag-red">Overdue</span>;
+    const days = Math.ceil((new Date(b.dueDate) - new Date()) / 86400000);
+    if (days <= 7) return <span className="tag tag-yellow">Due in {days}d</span>;
+    return <span className="tag tag-blue">Due {fmtShort(b.dueDate)}</span>;
+  };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Bills & Payments</div>
+          <div className="page-subtitle">Accounts Payable · {bills.length} bills</div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={() => setModal("add")}>
+          <Icon name="plus" size={13} /> Add Bill
+        </button>
+      </div>
+
+      {/* KPIs */}
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(4,1fr)", marginBottom: 20 }}>
+        <div className="kpi-card kpi-red" style={{ cursor: "pointer" }} onClick={() => setFilterStatus("unpaid")}>
+          <div className="kpi-label">Total Due</div>
+          <div className="kpi-value" style={{ color: "var(--red)" }}>{fmt(totalDue)}</div>
+          <div className="kpi-delta neg">{bills.filter(b => b.status !== "paid").length} unpaid bills</div>
+        </div>
+        <div className="kpi-card" style={{ borderTop: "2px solid var(--red)", cursor: "pointer" }} onClick={() => setFilterStatus("overdue")}>
+          <div className="kpi-label">Overdue</div>
+          <div className="kpi-value" style={{ color: totalOverdue > 0 ? "var(--red)" : "var(--text3)" }}>{fmt(totalOverdue)}</div>
+          <div className="kpi-delta neg">{bills.filter(b => isOverdue(b)).length} bills overdue</div>
+        </div>
+        <div className="kpi-card kpi-accent" style={{ cursor: "pointer" }} onClick={() => setFilterStatus("paid")}>
+          <div className="kpi-label">Paid</div>
+          <div className="kpi-value">{fmt(totalPaid)}</div>
+          <div className="kpi-delta pos">{paidCount} bills paid</div>
+        </div>
+        <div className="kpi-card kpi-blue">
+          <div className="kpi-label">Next 7 Days</div>
+          <div className="kpi-value">
+            {fmt(bills.filter(b => {
+              if (b.status === "paid") return false;
+              const d = Math.ceil((new Date(b.dueDate) - new Date()) / 86400000);
+              return d >= 0 && d <= 7;
+            }).reduce((s, b) => s + b.amount, 0))}
+          </div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>upcoming</div>
+        </div>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex items-center gap-12 mb-16">
+        <div className="tabs" style={{ marginBottom: 0 }}>
+          {[
+            { k: "all", l: "All" },
+            { k: "unpaid", l: "Unpaid" },
+            { k: "overdue", l: "Overdue" },
+            { k: "paid", l: "Paid" },
+          ].map(({ k, l }) => (
+            <div key={k} className={"tab" + (filterStatus === k ? " active" : "")} onClick={() => setFilterStatus(k)}>{l}</div>
+          ))}
+        </div>
+      </div>
+
+      {/* Bills table */}
+      <div className="card" style={{ padding: 0 }}>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Vendor</th>
+                <th>Source</th>
+                <th>Category</th>
+                <th>Issue Date</th>
+                <th>Due Date</th>
+                <th>Status</th>
+                <th style={{ textAlign: "right" }}>Amount</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr><td colSpan={8}>
+                  <div className="empty">
+                    <div className="empty-icon">✅</div>
+                    <div className="empty-title">No bills in this view</div>
+                    <div className="empty-sub">Use "Sync Kitchen" to import invoices or add manually</div>
+                  </div>
+                </td></tr>
+              ) : filtered.map(bill => {
+                const cat = categories.find(c => c.id === bill.category);
+                return (
+                  <tr key={bill.id} style={{ opacity: bill.status === "paid" ? 0.6 : 1 }}>
+                    <td>
+                      <div style={{ fontWeight: 500 }}>{bill.vendor}</div>
+                      {bill.paidMethod && <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>via {bill.paidMethod}</div>}
+                    </td>
+                    <td>
+                      <span className={"tag " + (bill.source === "kitchen" ? "tag-blue" : "tag-gray")}>
+                        {bill.source === "kitchen" ? "🍳 Kitchen" : "Manual"}
+                      </span>
+                    </td>
+                    <td>
+                      {cat
+                        ? <span className="tag" style={{ background: cat.color + "18", color: cat.color, border: "1px solid " + cat.color + "30" }}>{cat.name}</span>
+                        : <span className="tag tag-gray">—</span>
+                      }
+                    </td>
+                    <td className="mono" style={{ color: "var(--text3)", fontSize: 12 }}>{fmtShort(bill.issueDate)}</td>
+                    <td className="mono" style={{ fontSize: 12, color: isOverdue(bill) && bill.status !== "paid" ? "var(--red)" : "var(--text3)" }}>
+                      {bill.status === "paid" ? fmtShort(bill.paidDate) : fmtDate(bill.dueDate)}
+                    </td>
+                    <td>{statusTag(bill)}</td>
+                    <td className="text-right">
+                      <span className="mono" style={{ color: bill.status === "paid" ? "var(--text3)" : "var(--red)", fontSize: 13 }}>
+                        {fmt(bill.amount)}
+                      </span>
+                    </td>
+                    <td>
+                      {bill.status !== "paid" ? (
+                        <button
+                          className="btn btn-sm"
+                          style={{ background: "var(--accentBg)", color: "var(--accent)", border: "1px solid var(--accentBorder)", whiteSpace: "nowrap" }}
+                          onClick={() => openPay(bill)}
+                        >
+                          <Icon name="check" size={12} /> Pay Bill
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono" }}>Paid {fmtShort(bill.paidDate)}</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── PAY BILL MODAL ── */}
+      {modal === "pay" && selected && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModal(null)}>
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-title">Pay Bill</div>
+              <button className="btn btn-ghost" style={{ padding: 4 }} onClick={() => setModal(null)}><Icon name="close" size={16} /></button>
+            </div>
+            <div className="modal-body">
+              {/* Bill summary */}
+              <div className="card card-sm" style={{ background: "var(--surface2)", marginBottom: 20 }}>
+                <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{selected.vendor}</div>
+                <div className="flex items-center justify-between mt-4">
+                  <span style={{ fontSize: 12, color: "var(--text3)" }}>Amount Due</span>
+                  <span className="mono" style={{ fontSize: 20, color: "var(--red)" }}>{fmt(selected.amount)}</span>
+                </div>
+                <div className="flex items-center justify-between mt-4">
+                  <span style={{ fontSize: 12, color: "var(--text3)" }}>Due Date</span>
+                  <span className="mono" style={{ fontSize: 12 }}>{fmtDate(selected.dueDate)}</span>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="label">Payment Date</label>
+                <input type="date" className="input" value={payForm.date} onChange={e => setPayForm(f => ({ ...f, date: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="label">Payment Method</label>
+                <select className="input" value={payForm.method} onChange={e => setPayForm(f => ({ ...f, method: e.target.value }))}>
+                  {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">Notes (optional)</label>
+                <input className="input" placeholder="e.g. Check #1042, reference number..." value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))} />
+              </div>
+
+              <div className="card card-sm" style={{ background: "var(--accentBg)", border: "1px solid var(--accentBorder)", marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: "var(--text2)" }}>
+                  This will mark the bill as <strong style={{ color: "var(--accent)" }}>Paid</strong> and create a ledger transaction of <strong style={{ color: "var(--accent)" }}>{fmt(selected.amount)}</strong> under <strong style={{ color: "var(--accent)" }}>{payForm.method}</strong> on {payForm.date ? fmtDate(payForm.date) : "—"}.
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setModal(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={confirmPay} disabled={!payForm.date}>
+                <Icon name="check" size={13} /> Confirm Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ADD BILL MODAL ── */}
+      {modal === "add" && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModal(null)}>
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-title">Add Bill</div>
+              <button className="btn btn-ghost" style={{ padding: 4 }} onClick={() => setModal(null)}><Icon name="close" size={16} /></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="label">Vendor / Payee</label>
+                <input className="input" placeholder="e.g. SYSCO FOODS" value={addForm.vendor} onChange={e => setAddForm(f => ({ ...f, vendor: e.target.value }))} />
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Amount</label>
+                  <input type="number" className="input" placeholder="0.00" value={addForm.amount} onChange={e => setAddForm(f => ({ ...f, amount: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="label">Due Date</label>
+                  <input type="date" className="input" value={addForm.dueDate} onChange={e => setAddForm(f => ({ ...f, dueDate: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="label">Category</label>
+                <select className="input" value={addForm.category} onChange={e => setAddForm(f => ({ ...f, category: e.target.value }))}>
+                  <option value="">— Select category —</option>
+                  {categories.filter(c => c.type === "expense").map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">Notes</label>
+                <input className="input" placeholder="Invoice #, PO number, etc." value={addForm.notes} onChange={e => setAddForm(f => ({ ...f, notes: e.target.value }))} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setModal(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={addBill} disabled={!addForm.vendor || !addForm.amount || !addForm.dueDate}>
+                <Icon name="plus" size={13} /> Add Bill
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -1266,29 +1828,40 @@ export default function App() {
   const [budgets, setBudgets] = useState(SAMPLE_BUDGETS);
   const [toast, setToast] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [dateRange, setDateRange] = useState({ start: firstOfMonth(), end: today() });
 
-  // ── Supabase sync on mount ──────────────────────────────────
+  // ── Supabase sync on mount & date range change ─────────────
   useEffect(() => {
-    if (TENANT_ID === 'demo') return;
+    if (TENANT_ID === "demo") return;
     const load = async () => {
       setSyncing(true);
       const [txns, cats, bgts] = await Promise.all([
-        fetchTransactions(TENANT_ID),
+        fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
         fetchBudgets(TENANT_ID),
       ]);
-      if (txns.length > 0) setTransactions(txns.map(t => ({ ...t, category: t.category_id || '10' })));
-      if (cats.length > 0) setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || '' })));
+      if (txns.length > 0) setTransactions(txns.map(t => ({ ...t, category: t.category_id || "10" })));
+      if (cats.length > 0) setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
       if (bgts.length > 0) setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
       setSyncing(false);
     };
     load();
-  }, []);
+  }, [dateRange]);
 
+  // ── Kitchen sync handler ────────────────────────────────────
+  const handleKitchenSync = (imported) => {
+    setTransactions(prev => {
+      const existingIds = new Set(prev.map(t => t.id));
+      const newOnes = imported.filter(t => !existingIds.has(t.id));
+      return [...newOnes, ...prev];
+    });
+  };
 
   const showToast = (message, type = "info") => setToast({ message, type, id: Date.now() });
 
-  const uncat = transactions.filter(t => t.category === "10").length;
+  // ── Filter transactions by date range ──────────────────────
+  const filteredByDate = transactions.filter(t => t.date >= dateRange.start && t.date <= dateRange.end);
+  const uncat = filteredByDate.filter(t => t.category === "10" || !t.category).length;
 
   const NAV = [
     { id: "dashboard", label: "Overview", icon: "dashboard" },
@@ -1297,20 +1870,22 @@ export default function App() {
     { id: "pl", label: "Profit & Loss", icon: "pl" },
     { id: "cashflow", label: "Cash Flow", icon: "cashflow" },
     { id: "budget", label: "Budget", icon: "budget" },
+    { id: "bills", label: "Bills & Payments", icon: "bills", badge: null },
     { id: "reconcile", label: "Reconciliation", icon: "reconcile" },
     { id: "tax", label: "Tax Summary", icon: "tax" },
   ];
 
   const renderScreen = () => {
     switch (screen) {
-      case "dashboard": return <Dashboard transactions={transactions} categories={categories} budgets={budgets} />;
-      case "transactions": return <Transactions transactions={transactions} setTransactions={setTransactions} categories={categories} showToast={showToast} />;
-      case "categories": return <Categories categories={categories} setCategories={setCategories} transactions={transactions} showToast={showToast} />;
-      case "pl": return <PLReport transactions={transactions} categories={categories} />;
-      case "cashflow": return <CashFlow transactions={transactions} categories={categories} />;
-      case "budget": return <Budget transactions={transactions} categories={categories} budgets={budgets} setBudgets={setBudgets} showToast={showToast} />;
-      case "reconcile": return <Reconciliation transactions={transactions} categories={categories} showToast={showToast} />;
-      case "tax": return <TaxSummary transactions={transactions} categories={categories} />;
+      case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
+      case "transactions": return <Transactions transactions={filteredByDate} setTransactions={setTransactions} categories={categories} showToast={showToast} />;
+      case "categories":   return <Categories categories={categories} setCategories={setCategories} transactions={filteredByDate} showToast={showToast} />;
+      case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
+      case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
+      case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} showToast={showToast} />;
+      case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} categories={categories} vendors={[]} dateRange={dateRange} showToast={showToast} />;
+      case "reconcile":    return <Reconciliation transactions={filteredByDate} categories={categories} showToast={showToast} />;
+      case "tax":          return <TaxSummary transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       default: return null;
     }
   };
@@ -1352,6 +1927,29 @@ export default function App() {
         </nav>
 
         <main className="main">
+          {/* ── Global Top Bar ── */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "flex-end",
+            gap: 10, padding: "14px 32px 0",
+            borderBottom: "1px solid var(--border)", marginBottom: 0,
+            paddingBottom: 14,
+            background: "var(--surface)",
+            position: "sticky", top: 0, zIndex: 100
+          }}>
+            {syncing && (
+              <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginRight: "auto" }}>
+                ⟳ Loading...
+              </span>
+            )}
+            <KitchenSyncButton
+              tenantId={TENANT_ID}
+              categories={categories}
+              dateRange={dateRange}
+              onSync={handleKitchenSync}
+              showToast={showToast}
+            />
+            <DateRangePicker dateRange={dateRange} setDateRange={setDateRange} />
+          </div>
           {renderScreen()}
         </main>
       </div>
