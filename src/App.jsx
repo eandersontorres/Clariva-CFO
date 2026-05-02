@@ -2482,13 +2482,15 @@ export default function App() {
   const [projects, setProjects] = useState([]);
   const [toast, setToast] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const [realtimeActive, setRealtimeActive] = useState(false);
   const [dateRange, setDateRange] = useState({ start: firstOfMonth(), end: today() });
 
-  // ── Load all data from Supabase ────────────────────────────
-  useEffect(() => {
+  // ── Core load function ─────────────────────────────────────
+  const loadAll = useCallback(async (showSpinner = true) => {
     if (TENANT_ID === "demo") return;
-    const load = async () => {
-      setSyncing(true);
+    if (showSpinner) setSyncing(true);
+    try {
       const [txns, cats, bgts, bls, projs] = await Promise.all([
         fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
@@ -2496,15 +2498,58 @@ export default function App() {
         fetchBills(TENANT_ID),
         fetchProjects(TENANT_ID),
       ]);
-      if (txns.length > 0)   setTransactions(txns.map(t => ({ ...t, category: t.category_id || "10" })));
-      if (cats.length > 0)   setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
-      if (bgts.length > 0)   setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
-      if (bls.length > 0)    setBills(bls.map(b => ({ ...b, dueDate: b.due_date, issueDate: b.issue_date, txnId: b.txn_id, category: b.category_id, paidDate: b.paid_date, paidMethod: b.paid_method })));
-      if (projs.length > 0)  setProjects(projs.map(p => ({ ...p, projectedRevenue: p.projected_revenue })));
-      setSyncing(false);
-    };
-    load();
+      if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || "10" })));
+      if (cats.length > 0)  setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
+      if (bgts.length > 0)  setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
+      if (bls.length > 0)   setBills(bls.map(b => ({ ...b, dueDate: b.due_date, issueDate: b.issue_date, txnId: b.txn_id, category: b.category_id, paidDate: b.paid_date, paidMethod: b.paid_method })));
+      if (projs.length > 0) setProjects(projs.map(p => ({ ...p, projectedRevenue: p.projected_revenue })));
+    } catch (err) {
+      console.error("loadAll failed:", err);
+    } finally {
+      if (showSpinner) setSyncing(false);
+      setLastSync(new Date());
+    }
   }, [dateRange]);
+
+  // ── 1. Initial load + reload when dateRange changes ────────
+  useEffect(() => { loadAll(true); }, [dateRange]);
+
+  // ── 2. Polling every 30 seconds (silent refresh) ───────────
+  useEffect(() => {
+    if (TENANT_ID === "demo") return;
+    const interval = setInterval(() => loadAll(false), 30000);
+    return () => clearInterval(interval);
+  }, [loadAll]);
+
+  // ── 3. Refresh when tab becomes visible (user returns) ─────
+  useEffect(() => {
+    if (TENANT_ID === "demo") return;
+    const onVisible = () => { if (document.visibilityState === "visible") loadAll(false); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [loadAll]);
+
+  // ── 4. Supabase real-time subscriptions ────────────────────
+  useEffect(() => {
+    if (TENANT_ID === "demo") return;
+    const channel = supabase
+      .channel("clariva-cfo-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_transactions", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_accounts", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_budgets", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_bills", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_projects", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") { console.log("Clariva CFO: real-time active"); setRealtimeActive(true); }
+        if (status === "CLOSED" || status === "CHANNEL_ERROR") setRealtimeActive(false);
+      });
+    return () => supabase.removeChannel(channel);
+  }, [loadAll]);
 
   // ── Save helpers ────────────────────────────────────────────
   const saveTransactions = async (txns) => {
@@ -2625,11 +2670,23 @@ export default function App() {
             background: "var(--surface)",
             position: "sticky", top: 0, zIndex: 100
           }}>
-            {syncing && (
-              <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginRight: "auto" }}>
-                ⟳ Loading...
-              </span>
-            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginRight: "auto" }}>
+              {syncing ? (
+                <span style={{ fontSize: 11, color: "var(--accent)", fontFamily: "DM Mono", display: "flex", alignItems: "center", gap: 5 }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 1s linear infinite" }}><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                  Syncing...
+                </span>
+              ) : (
+                <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: realtimeActive ? "var(--accent)" : "var(--text3)", display: "inline-block" }} title={realtimeActive ? "Real-time connected" : "Polling mode"} />
+                  {lastSync ? "Updated " + lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                  {realtimeActive && <span style={{ color: "var(--accent)" }}>· Live</span>}
+                </span>
+              )}
+              <button className="btn btn-ghost" style={{ padding: "4px 8px", fontSize: 11 }} onClick={() => loadAll(true)} title="Refresh data">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              </button>
+            </div>
             <KitchenSyncButton
               tenantId={TENANT_ID}
               categories={categories}
