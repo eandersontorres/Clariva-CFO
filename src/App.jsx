@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
-import { parseBoACSV, parseOFX } from "./lib/parsers.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 
@@ -306,7 +305,62 @@ const fmt = (v) => new Intl.NumberFormat("en-US", { style: "currency", currency:
 const fmtDate = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 const fmtShort = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-// parseBoACSV and parseOFX imported from ./lib/parsers.js
+// ─── BANK STATEMENT PARSERS (inlined) ───────────────────────────────────────
+
+function parseCSVLine(line) {
+  const cols = []; let cur = ''; let inQ = false;
+  for (const ch of line) {
+    if (ch === '"') { inQ = !inQ; }
+    else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+    else { cur += ch; }
+  }
+  cols.push(cur.trim());
+  return cols;
+}
+
+function parseBoACSV(text) {
+  const lines = text.replace(/
+/g, '
+').replace(/
+/g, '
+').trim().split('
+');
+  const txns = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const cols = parseCSVLine(line);
+    if (cols.length < 3) continue;
+    const first = cols[0].toLowerCase();
+    if (first === 'date' || first === 'posted date' || first.startsWith('account')) continue;
+    let date = cols[0], desc = cols[1] || '', amtStr = cols[2] || '';
+    if (cols.length >= 5) { desc = cols[2] || cols[1]; amtStr = cols[4]; }
+    const amount = parseFloat(amtStr.replace(/[$,\s]/g, ''));
+    if (isNaN(amount)) continue;
+    let parsedDate;
+    try { const d = new Date(date); if (isNaN(d.getTime())) continue; parsedDate = d.toISOString().split('T')[0]; }
+    catch { continue; }
+    txns.push({ id: 'csv_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2,5), date: parsedDate, description: desc.toUpperCase().trim().slice(0, 80), amount, account: 'Imported · BoA', category_id: null, category: '10', reconciled: false, source: 'csv' });
+  }
+  return txns;
+}
+
+function parseOFX(text) {
+  const txns = [];
+  const blocks = text.match(/<STMTTRN>[\s\S]*?<\/STMTTRN>/gi) || [];
+  for (const block of blocks) {
+    const get = (tag) => { const m = block.match(new RegExp('<' + tag + '>([^<\n]+)', 'i')); return m ? m[1].trim() : ''; };
+    const dtPosted = get('DTPOSTED');
+    const name = get('NAME') || get('MEMO') || get('PAYEE') || 'UNKNOWN';
+    const amtStr = get('TRNAMT');
+    const fitid = get('FITID');
+    if (!dtPosted || !amtStr) continue;
+    const amount = parseFloat(amtStr);
+    if (isNaN(amount)) continue;
+    txns.push({ id: fitid ? 'ofx_' + fitid : 'ofx_' + Date.now() + '_' + Math.random().toString(36).slice(2,5), date: dtPosted.slice(0,4) + '-' + dtPosted.slice(4,6) + '-' + dtPosted.slice(6,8), description: name.toUpperCase().trim().slice(0, 80), amount, account: 'Imported · BoA', category_id: null, category: '10', reconciled: false, source: 'ofx' });
+  }
+  return txns;
+}
 
 
 // ─── DATE HELPERS ─────────────────────────────────────────────────────────────
