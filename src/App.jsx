@@ -319,7 +319,12 @@ function parseCSVLine(line) {
 }
 
 function parseBoACSV(text) {
- const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split('\n');
+ const lines = text.replace(/
+/g, '
+').replace(/
+/g, '
+').trim().split('
+');
   const txns = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -707,21 +712,10 @@ function Transactions({ transactions, setTransactions, categories, showToast }) 
           reader.onerror = () => rej(new Error("Read failed"));
           reader.readAsDataURL(file);
         });
-        // Call Anthropic directly from browser (internal use)
-        const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
-        if (!ANTHROPIC_KEY) {
-          showToast("Add VITE_ANTHROPIC_API_KEY to Vercel environment variables", "error");
-          return;
-        }
-
-        const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+        // Call via /api/anthropic proxy (same as Clariva Kitchen invoice scanner)
+        const anthropicRes = await fetch("/api/anthropic", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": ANTHROPIC_KEY,
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-direct-browser-access": "true",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "claude-opus-4-5",
             max_tokens: 8096,
