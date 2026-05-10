@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { UNCATEGORIZED } from './constants.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -208,7 +209,7 @@ export function purchasesToTransactions(purchases, vendorMap = {}, foodBevCatego
     description: (vendorMap[p.vendor_id] || 'VENDOR PURCHASE').toUpperCase(),
     amount: -(parseFloat(p.total) || 0),
     category_id: foodBevCategoryId || null,
-    category: foodBevCategoryId || '10',
+    category: foodBevCategoryId || UNCATEGORIZED,
     account: 'Kitchen Sync',
     reconciled: p.status === 'paid',
     source: 'kitchen_purchase',
@@ -223,7 +224,7 @@ export function snapshotsToTransactions(snapshots, diningCategoryId) {
     description: 'SQUARE SALES — ' + (s.orders || 0) + ' ORDERS',
     amount: parseFloat(s.net_sales) || 0,
     category_id: diningCategoryId || null,
-    category: diningCategoryId || '10',
+    category: diningCategoryId || UNCATEGORIZED,
     account: 'Square POS',
     reconciled: true,
     source: 'square_snapshot',

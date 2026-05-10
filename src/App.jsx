@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
+import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 
@@ -272,7 +273,7 @@ const DEFAULT_CATEGORIES = [
   { id: "7", name: "Office & Supplies", type: "expense", color: "#90a0b0", taxLine: "Office" },
   { id: "8", name: "Revenue - Dining", type: "income", color: "#00d4a0", taxLine: "Gross Receipts" },
   { id: "9", name: "Revenue - Delivery", type: "income", color: "#00b890", taxLine: "Gross Receipts" },
-  { id: "10", name: "Uncategorized", type: "expense", color: "#555b6b", taxLine: "" },
+  { id: UNCATEGORIZED, name: "Uncategorized", type: "expense", color: "#555b6b", taxLine: "" },
 ];
 
 const SAMPLE_TRANSACTIONS = [
@@ -335,7 +336,7 @@ function normalizeDescription(s) {
 function getCategoryHistory(transactions) {
   const counts = new Map();
   for (const t of transactions) {
-    if (!t.category || t.category === '10' || !t.description) continue;
+    if (!t.category || t.category === UNCATEGORIZED || !t.description) continue;
     const norm = normalizeDescription(t.description);
     if (!norm) continue;
     if (!counts.has(norm)) counts.set(norm, new Map());
@@ -361,7 +362,7 @@ function suggestCategory(desc, history) {
 function applyAutoCategorize(imported, allTransactions) {
   const history = getCategoryHistory(allTransactions);
   return imported.map(t => {
-    if (t.category && t.category !== '10') return t;
+    if (t.category && t.category !== UNCATEGORIZED) return t;
     const suggested = suggestCategory(t.description, history);
     return suggested ? { ...t, category: suggested, autoCategorized: true } : t;
   });
@@ -397,7 +398,7 @@ function parseBoACSV(text) {
     let parsedDate;
     try { const d = new Date(date); if (isNaN(d.getTime())) continue; parsedDate = d.toISOString().split('T')[0]; }
     catch { continue; }
-    txns.push({ id: 'csv_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2,5), date: parsedDate, description: desc.toUpperCase().trim().slice(0, 80), amount, account: 'Imported · BoA', category_id: null, category: '10', reconciled: false, source: 'csv' });
+    txns.push({ id: 'csv_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2,5), date: parsedDate, description: desc.toUpperCase().trim().slice(0, 80), amount, account: 'Imported · BoA', category_id: null, category: UNCATEGORIZED, reconciled: false, source: 'csv' });
   }
   return txns;
 }
@@ -414,7 +415,7 @@ function parseOFX(text) {
     if (!dtPosted || !amtStr) continue;
     const amount = parseFloat(amtStr);
     if (isNaN(amount)) continue;
-    txns.push({ id: fitid ? 'ofx_' + fitid : 'ofx_' + Date.now() + '_' + Math.random().toString(36).slice(2,5), date: dtPosted.slice(0,4) + '-' + dtPosted.slice(4,6) + '-' + dtPosted.slice(6,8), description: name.toUpperCase().trim().slice(0, 80), amount, account: 'Imported · BoA', category_id: null, category: '10', reconciled: false, source: 'ofx' });
+    txns.push({ id: fitid ? 'ofx_' + fitid : 'ofx_' + Date.now() + '_' + Math.random().toString(36).slice(2,5), date: dtPosted.slice(0,4) + '-' + dtPosted.slice(4,6) + '-' + dtPosted.slice(6,8), description: name.toUpperCase().trim().slice(0, 80), amount, account: 'Imported · BoA', category_id: null, category: UNCATEGORIZED, reconciled: false, source: 'ofx' });
   }
   return txns;
 }
@@ -534,7 +535,7 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
       const expTxns = purchasesToTransactions(purchases, vendorMap, foodBevCat?.id);
       const incTxns = snapshotsToTransactions(snapshots, diningCat?.id);
 
-      const all = [...expTxns, ...incTxns].map(t => ({ ...t, category: t.category_id || "10" }));
+      const all = [...expTxns, ...incTxns].map(t => ({ ...t, category: t.category_id || UNCATEGORIZED }));
 
       if (all.length === 0) {
         showToast("No new data from Kitchen in this date range.", "info");
@@ -613,7 +614,7 @@ function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
   const totalIncome = transactions.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalExpense = Math.abs(transactions.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
   const netIncome = totalIncome - totalExpense;
-  const uncat = transactions.filter(t => t.category === "10").length;
+  const uncat = transactions.filter(t => t.category === UNCATEGORIZED).length;
 
   // Expense by category
   const expByCat = {};
@@ -749,7 +750,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
   const filtered = transactions.filter(t => {
     if (filter === "income" && t.amount < 0) return false;
     if (filter === "expense" && t.amount > 0) return false;
-    if (filter === "uncat" && t.category !== "10") return false;
+    if (filter === "uncat" && t.category !== UNCATEGORIZED) return false;
     if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
@@ -848,7 +849,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
       <div className="page-header">
         <div>
           <div className="page-title">Transactions</div>
-          <div className="page-subtitle">{transactions.length} transactions · {transactions.filter(t => t.category === "10").length} uncategorized</div>
+          <div className="page-subtitle">{transactions.length} transactions · {transactions.filter(t => t.category === UNCATEGORIZED).length} uncategorized</div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={() => fileRef.current.click()}>
           <Icon name="upload" size={13} /> Import Statement
@@ -956,7 +957,7 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
   };
 
   const remove = (id) => {
-    if (id === "10") { showToast("Cannot delete Uncategorized", "error"); return; }
+    if (id === UNCATEGORIZED) { showToast("Cannot delete Uncategorized", "error"); return; }
     setCategories(prev => prev.filter(c => c.id !== id));
     if (deleteCategoryDB) deleteCategoryDB(id);
     showToast("Category deleted", "info");
@@ -991,7 +992,7 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
                   </div>
                 </div>
                 <button className="btn btn-ghost" style={{ padding: "4px 6px" }} onClick={() => openEdit(c)}><Icon name="edit" size={13} /></button>
-                {c.id !== "10" && <button className="btn btn-ghost" style={{ padding: "4px 6px", color: "var(--red)" }} onClick={() => remove(c.id)}><Icon name="trash" size={13} /></button>}
+                {c.id !== UNCATEGORIZED && <button className="btn btn-ghost" style={{ padding: "4px 6px", color: "var(--red)" }} onClick={() => remove(c.id)}><Icon name="trash" size={13} /></button>}
               </div>
             ))}
           </div>
@@ -1051,7 +1052,7 @@ function PLReport({ transactions, categories, dateRange = {} }) {
   const [expanded, setExpanded] = useState({ income: true, expense: true });
 
   const incomeCats = categories.filter(c => c.type === "income");
-  const expenseCats = categories.filter(c => c.type === "expense" && c.id !== "10");
+  const expenseCats = categories.filter(c => c.type === "expense" && c.id !== UNCATEGORIZED);
 
   const getAmount = (catId) => transactions.filter(t => t.category === catId).reduce((s, t) => s + t.amount, 0);
 
@@ -1312,7 +1313,7 @@ function Budget({ transactions, categories, budgets, setBudgets, saveBudget, sho
     });
   };
 
-  const expCats = categories.filter(c => c.type === "expense" && c.id !== "10");
+  const expCats = categories.filter(c => c.type === "expense" && c.id !== UNCATEGORIZED);
   const totalBudget = expCats.reduce((s, c) => s + getBudget(c.id), 0);
   const totalActual = expCats.reduce((s, c) => s + getActual(c.id), 0);
 
@@ -1660,7 +1661,7 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
       date: payForm.date,
       description: "PAYMENT — " + selected.vendor,
       amount: -selected.amount,
-      category: selected.category || "10",
+      category: selected.category || UNCATEGORIZED,
       account: payForm.method,
       reconciled: true,
       source: "bill_payment",
@@ -1689,7 +1690,7 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
       dueDate: addForm.dueDate,
       issueDate: today(),
       status: "due",
-      category: addForm.category || "10",
+      category: addForm.category || UNCATEGORIZED,
       paidDate: null,
       paidMethod: null,
       notes: addForm.notes,
@@ -2516,7 +2517,7 @@ export default function App() {
         fetchBills(TENANT_ID),
         fetchProjects(TENANT_ID),
       ]);
-      if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || "10" })));
+      if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED })));
       if (cats.length > 0)  setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
       if (bgts.length > 0)  setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
       if (bls.length > 0)   setBills(bls.map(b => ({ ...b, dueDate: b.due_date, issueDate: b.issue_date, txnId: b.txn_id, category: b.category_id, paidDate: b.paid_date, paidMethod: b.paid_method })));
@@ -2609,7 +2610,7 @@ export default function App() {
 
   // ── Filter transactions by date range ──────────────────────
   const filteredByDate = transactions.filter(t => t.date >= dateRange.start && t.date <= dateRange.end);
-  const uncat = filteredByDate.filter(t => t.category === "10" || !t.category).length;
+  const uncat = filteredByDate.filter(t => t.category === UNCATEGORIZED || !t.category).length;
 
   const NAV = [
     { id: "dashboard", label: "Overview", icon: "dashboard" },
