@@ -99,7 +99,7 @@ const STYLES = `
   /* BUTTONS */
   .btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 16px; border-radius: var(--radius2); font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.15s; font-family: 'DM Sans', sans-serif; }
   .btn-primary { background: var(--accent); color: #0a0a0a; font-family: 'DM Mono', monospace; letter-spacing: 0.06em; font-size: 12px; }
-  .btn-primary:hover { background: #00f0b8; }
+  .btn-primary:hover { background: var(--accent2); }
   .btn-outline { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
   .btn-outline:hover { background: var(--surface2); color: var(--text); }
   .btn-ghost { background: transparent; color: var(--text3); border: none; padding: 6px 10px; }
