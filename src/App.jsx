@@ -1235,7 +1235,7 @@ function PLReport({ transactions, categories, dateRange = {} }) {
 }
 
 // ─── CASH FLOW ────────────────────────────────────────────────────────────────
-function CashFlow({ transactions, categories, dateRange = {} }) {
+function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) {
   const operating = transactions.filter(t => ["1","2","3","4","6","7","8","9"].includes(t.category));
   const opInflow = operating.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const opOutflow = Math.abs(operating.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
@@ -1328,6 +1328,56 @@ function CashFlow({ transactions, categories, dateRange = {} }) {
           </div>
         </div>
       </div>
+
+      {/* Recurring forecast */}
+      {recurring.filter(r => r.status === "active").length > 0 && (() => {
+        const forecast = projectRecurring(recurring, 3);
+        const forecastNet = forecast.reduce((s, m) => s + m.net, 0);
+        let cumulative = endBalance;
+        return (
+          <div className="card" style={{ marginTop: 18 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+              <div>
+                <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Recurring Forecast — Next 3 Months</div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+                  Projected from {recurring.filter(r => r.status === "active").length} active rules · normalized to monthly
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>3-Month Net</div>
+                <div className="mono" style={{ fontSize: 18, color: forecastNet >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(forecastNet)}</div>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th style={{ textAlign: "right" }}>Inflow</th>
+                    <th style={{ textAlign: "right" }}>Outflow</th>
+                    <th style={{ textAlign: "right" }}>Net</th>
+                    <th style={{ textAlign: "right" }}>Projected balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {forecast.map(m => {
+                    cumulative += m.net;
+                    return (
+                      <tr key={m.monthKey}>
+                        <td className="mono" style={{ color: "var(--text2)" }}>{m.label}</td>
+                        <td className="amount-pos text-right">{fmt(m.inflow)}</td>
+                        <td className="amount-neg text-right">{fmt(m.outflow)}</td>
+                        <td className={m.net >= 0 ? "amount-pos text-right" : "amount-neg text-right"}>{fmt(m.net)}</td>
+                        <td className="mono text-right" style={{ color: cumulative >= 0 ? "var(--text)" : "var(--red)" }}>{fmt(cumulative)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1986,7 +2036,7 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
 
 
 // ─── CFO INSIGHTS ─────────────────────────────────────────────────────────────
-function Insights({ transactions, categories, budgets, dateRange = {} }) {
+function Insights({ transactions, categories, budgets, recurring = [], dateRange = {} }) {
   const [period, setPeriod] = useState("weekly");
   const totalIncome  = transactions.filter(t => t.amount > 0).reduce((s,t) => s+t.amount, 0);
   const totalExpense = Math.abs(transactions.filter(t => t.amount < 0).reduce((s,t) => s+t.amount, 0));
@@ -2101,6 +2151,55 @@ function Insights({ transactions, categories, budgets, dateRange = {} }) {
           })}
         </div>
       </div>
+
+      {/* Recurring Health */}
+      {recurring.filter(r => r.status === "active").length > 0 && (() => {
+        const variance = getRecurringVariance(recurring, transactions, 90);
+        const missing = getMissingRecurring(recurring, transactions, new Date());
+        const drifted = variance.filter(v => Math.abs(v.drift) > parseFloat(v.rule.variance_pct ?? 10));
+        if (drifted.length === 0 && missing.length === 0) return null;
+        return (
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ fontFamily: "Cormorant Garamond,serif", fontSize: 16, fontWeight: 600, marginBottom: 14, letterSpacing: "0.04em" }}>🔁 Recurring Health</div>
+            {drifted.length > 0 && (
+              <div style={{ marginBottom: missing.length > 0 ? 14 : 0 }}>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Drift beyond tolerance ({drifted.length})</div>
+                {drifted.slice(0, 5).map(v => {
+                  const sev = Math.abs(v.drift) > 25 ? "critical" : "warn";
+                  const color = sev === "critical" ? "var(--red)" : "var(--yellow)";
+                  return (
+                    <div key={v.rule.id} style={{ background: "var(--surface2)", borderLeft: `3px solid ${color}`, borderRadius: "var(--radius2)", padding: "10px 14px", marginBottom: 6 }}>
+                      <div className="flex items-center justify-between">
+                        <div style={{ fontSize: 13, fontWeight: 500 }}>{v.rule.name}</div>
+                        <div className="mono" style={{ fontSize: 12, color }}>{v.drift > 0 ? "+" : ""}{v.drift.toFixed(1)}%</div>
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 3 }}>
+                        Expected {fmt(v.expected)} · avg actual {fmt(v.avg)} · {v.count} match{v.count === 1 ? "" : "es"} (90d)
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {missing.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Expected but not seen ({missing.length})</div>
+                {missing.slice(0, 5).map(m => (
+                  <div key={m.rule.id} style={{ background: "var(--yellowBg)", borderLeft: "3px solid var(--yellow)", borderRadius: "var(--radius2)", padding: "10px 14px", marginBottom: 6 }}>
+                    <div className="flex items-center justify-between">
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{m.rule.name}</div>
+                      <div className="mono" style={{ fontSize: 12, color: "var(--yellow)" }}>{m.daysLate}d late</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 3 }}>
+                      Expected on {m.expectedDate} · {fmt(parseFloat(m.rule.amount))} · check bank or pause the rule
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Alerts */}
       {alerts.length > 0 ? (
@@ -2544,6 +2643,62 @@ function monthlyEquivalent(amount, cadence) {
     case "annual":    return a / 12;
     default:          return a;
   }
+}
+
+function projectRecurring(rules, months = 3) {
+  const out = [];
+  const now = new Date();
+  for (let i = 0; i < months; i++) {
+    const target = new Date(now.getFullYear(), now.getMonth() + i + 1, 1);
+    const monthEnd = new Date(target.getFullYear(), target.getMonth() + 1, 0);
+    const monthKey = target.toISOString().slice(0, 7);
+    let outflow = 0, inflow = 0;
+    const items = [];
+    for (const r of rules || []) {
+      if (r.status !== "active") continue;
+      if (r.start_date && new Date(r.start_date) > monthEnd) continue;
+      if (r.end_date && new Date(r.end_date) < target) continue;
+      const m = monthlyEquivalent(parseFloat(r.amount) || 0, r.cadence);
+      if (m < 0) outflow += m; else inflow += m;
+      items.push({ name: r.name, amount: m, categoryId: r.category_id });
+    }
+    out.push({ monthKey, label: target.toLocaleString("en-US", { month: "short", year: "numeric" }), outflow, inflow, net: inflow + outflow, items });
+  }
+  return out;
+}
+
+function getRecurringVariance(rules, transactions, windowDays = 90) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - windowDays);
+  const cutoffStr = cutoff.toISOString().split("T")[0];
+  const drifts = [];
+  for (const r of rules || []) {
+    if (r.status !== "active") continue;
+    const linked = transactions.filter(t => t.recurring_id === r.id && t.date >= cutoffStr);
+    if (linked.length === 0) continue;
+    const expected = Math.abs(parseFloat(r.amount) || 0);
+    if (expected === 0) continue;
+    const avg = linked.reduce((s, t) => s + Math.abs(parseFloat(t.amount) || 0), 0) / linked.length;
+    const drift = ((avg - expected) / expected) * 100;
+    drifts.push({ rule: r, expected, avg, drift, count: linked.length });
+  }
+  return drifts.sort((a, b) => Math.abs(b.drift) - Math.abs(a.drift));
+}
+
+function getMissingRecurring(rules, transactions, asOf = new Date()) {
+  const missing = [];
+  for (const r of rules || []) {
+    if (r.status !== "active") continue;
+    if (r.cadence !== "monthly" || r.day_of_month == null) continue;
+    const expectedDate = new Date(asOf.getFullYear(), asOf.getMonth(), r.day_of_month);
+    if (asOf < expectedDate) continue;
+    const daysLate = Math.floor((asOf - expectedDate) / (1000 * 60 * 60 * 24));
+    if (daysLate <= 5) continue;
+    const monthKey = expectedDate.toISOString().slice(0, 7);
+    const found = transactions.find(t => t.recurring_id === r.id && t.date.startsWith(monthKey));
+    if (!found) missing.push({ rule: r, expectedDate: expectedDate.toISOString().slice(0, 10), daysLate });
+  }
+  return missing;
 }
 
 function ruleToFormShape(r) {
@@ -3042,13 +3197,13 @@ export default function App() {
 
   const renderScreen = () => {
     switch (screen) {
-      case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
+      case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} recurring={recurring} dateRange={dateRange} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} recurring={recurring} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
-      case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
+      case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
       case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
