@@ -233,6 +233,8 @@ const STYLES = `
   /* SELECT CAT */
   .cat-select { background: var(--surface3); border: 1px solid var(--border); border-radius: var(--radius2); padding: 4px 8px; color: var(--text2); font-size: 11px; font-family: 'DM Mono', monospace; cursor: pointer; outline: none; }
   .cat-select:focus { border-color: var(--accent); }
+  .cat-select.auto-cat { border-color: var(--accentBorder); background: var(--accentBg); color: var(--text); }
+  .auto-cat-badge { font-size: 11px; cursor: help; opacity: 0.85; line-height: 1; }
 
   /* P&L REPORT */
   .pl-section { margin-bottom: 8px; }
@@ -316,6 +318,66 @@ function parseCSVLine(line) {
   }
   cols.push(cur.trim());
   return cols;
+}
+
+// ─── AUTO-CATEGORIZATION ──────────────────────────────────────────────────────
+function normalizeDescription(s) {
+  if (!s) return '';
+  return s
+    .toUpperCase()
+    .replace(/[^A-Z\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3)
+    .slice(0, 3)
+    .join(' ');
+}
+
+function getCategoryHistory(transactions) {
+  const counts = new Map();
+  for (const t of transactions) {
+    if (!t.category || t.category === '10' || !t.description) continue;
+    const norm = normalizeDescription(t.description);
+    if (!norm) continue;
+    if (!counts.has(norm)) counts.set(norm, new Map());
+    const inner = counts.get(norm);
+    inner.set(t.category, (inner.get(t.category) || 0) + 1);
+  }
+  const out = new Map();
+  for (const [norm, inner] of counts) {
+    let best = null, bestN = 0;
+    for (const [cat, n] of inner) {
+      if (n > bestN) { best = cat; bestN = n; }
+    }
+    if (best) out.set(norm, best);
+  }
+  return out;
+}
+
+function suggestCategory(desc, history) {
+  const norm = normalizeDescription(desc);
+  return norm ? history.get(norm) : null;
+}
+
+function applyAutoCategorize(imported, allTransactions) {
+  const history = getCategoryHistory(allTransactions);
+  return imported.map(t => {
+    if (t.category && t.category !== '10') return t;
+    const suggested = suggestCategory(t.description, history);
+    return suggested ? { ...t, category: suggested, autoCategorized: true } : t;
+  });
+}
+
+function expandDateRangeIfNeeded(imported, dateRange, setDateRange) {
+  if (!imported || imported.length === 0) return;
+  const dates = imported.map(t => t.date).filter(Boolean).sort();
+  if (dates.length === 0) return;
+  const minD = dates[0];
+  const maxD = dates[dates.length - 1];
+  const newStart = minD < dateRange.start ? minD : dateRange.start;
+  const newEnd = maxD > dateRange.end ? maxD : dateRange.end;
+  if (newStart !== dateRange.start || newEnd !== dateRange.end) {
+    setDateRange({ start: newStart, end: newEnd });
+  }
 }
 
 function parseBoACSV(text) {
@@ -678,7 +740,7 @@ function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
 }
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, setTransactions, saveTransactions, categories, showToast }) {
+function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, categories, dateRange, setDateRange, showToast }) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [drag, setDrag] = useState(false);
@@ -719,14 +781,17 @@ function Transactions({ transactions, setTransactions, saveTransactions, categor
           showToast(err.error || `Server error ${apiRes.status}`, "error");
           return;
         }
-        const { transactions: imported } = await apiRes.json();
-        if (!imported || imported.length === 0) {
+        const { transactions: rawImported } = await apiRes.json();
+        if (!rawImported || rawImported.length === 0) {
           showToast("No transactions found in PDF.", "error");
           return;
         }
+        const imported = applyAutoCategorize(rawImported, allTransactions || transactions);
+        expandDateRangeIfNeeded(imported, dateRange, setDateRange);
         setTransactions(prev => [...imported, ...prev]);
         if (saveTransactions) saveTransactions(imported);
-        showToast(imported.length + " transactions extracted from PDF!", "success");
+        const autoCount = imported.filter(t => t.autoCategorized).length;
+        showToast(imported.length + " transactions extracted" + (autoCount ? ` · ${autoCount} auto-categorized` : ""), "success");
       } catch (err) {
         showToast("PDF import failed: " + err.message, "error");
       } finally {
@@ -739,23 +804,26 @@ function Transactions({ transactions, setTransactions, saveTransactions, categor
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target.result;
-      let parsed = [];
+      let rawParsed = [];
       if (ext.endsWith(".ofx") || ext.endsWith(".qfx")) {
-        parsed = parseOFX(text);
+        rawParsed = parseOFX(text);
       } else {
-        parsed = parseBoACSV(text);
+        rawParsed = parseBoACSV(text);
       }
-      if (parsed.length === 0) { showToast("No transactions found in file. Check the format.", "error"); return; }
+      if (rawParsed.length === 0) { showToast("No transactions found in file. Check the format.", "error"); return; }
+      const parsed = applyAutoCategorize(rawParsed, allTransactions || transactions);
+      expandDateRangeIfNeeded(parsed, dateRange, setDateRange);
       setTransactions(prev => [...parsed, ...prev]);
       if (saveTransactions) saveTransactions(parsed);
-      showToast(parsed.length + " transactions imported!", "success");
+      const autoCount = parsed.filter(t => t.autoCategorized).length;
+      showToast(parsed.length + " transactions imported" + (autoCount ? ` · ${autoCount} auto-categorized` : ""), "success");
     };
     reader.readAsText(file);
   };
 
   const updateCategory = (id, catId) => {
     setTransactions(prev => {
-      const updated = prev.map(t => t.id === id ? { ...t, category: catId } : t);
+      const updated = prev.map(t => t.id === id ? { ...t, category: catId, autoCategorized: false } : t);
       if (saveTransactions) { const changed = updated.filter(t => t.id === id); saveTransactions(changed); }
       return updated;
     });
@@ -834,9 +902,12 @@ function Transactions({ transactions, setTransactions, saveTransactions, categor
                   <td className="mono" style={{ color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
                   <td style={{ maxWidth: 280 }}><div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.description}</div></td>
                   <td>
-                    <select className="cat-select" value={t.category} onChange={e => updateCategory(t.id, e.target.value)}>
-                      {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {t.autoCategorized && <span className="auto-cat-badge" title="Auto-categorized from history — change to confirm">✨</span>}
+                      <select className={`cat-select${t.autoCategorized ? " auto-cat" : ""}`} value={t.category} onChange={e => updateCategory(t.id, e.target.value)}>
+                        {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                    </div>
                   </td>
                   <td className="mono" style={{ fontSize: 11, color: "var(--text3)" }}>{t.account}</td>
                   <td>
@@ -2559,7 +2630,7 @@ export default function App() {
       case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
-      case "transactions": return <Transactions transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} showToast={showToast} />;
+      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
