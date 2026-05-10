@@ -698,7 +698,7 @@ function Transactions({ transactions, setTransactions, saveTransactions, categor
     if (!file) return;
     const ext = file.name.toLowerCase();
 
-    // PDF → AI extraction
+    // PDF → AI extraction (server-side via /api/parse-statement, supports up to 20MB)
     if (ext.endsWith(".pdf")) {
       setParsing(true);
       showToast("Reading PDF with AI... 10-20 seconds", "info");
@@ -709,74 +709,21 @@ function Transactions({ transactions, setTransactions, saveTransactions, categor
           reader.onerror = () => rej(new Error("Read failed"));
           reader.readAsDataURL(file);
         });
-        // Call via /api/anthropic proxy (same as Clariva Kitchen)
-        const anthropicRes = await fetch("/api/anthropic", {
+        const apiRes = await fetch("/api/parse-statement", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-opus-4-5",
-            max_tokens: 8096,
-            messages: [{
-              role: "user",
-              content: [
-                { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-                { type: "text", text: `Parse every bank transaction in this PDF statement.
-
-Return ONLY a JSON array. Start with [ and end with ]. No markdown, no explanation, no preamble.
-
-Each object:
-- "date": "YYYY-MM-DD"
-- "description": "MERCHANT NAME" (uppercase, max 60 chars)
-- "amount": number (negative=withdrawal/purchase/debit, positive=deposit/credit)
-- "account": "Checking ••1234" or "Credit ••5678" (last 4 digits if visible)
-
-Skip balance rows, opening/closing balance, subtotals.
-Credit card charges = negative. Deposits = positive.
-
-Output only the JSON array, nothing else.` }
-              ]
-            }]
-          }),
+          body: JSON.stringify({ pdfBase64: base64, filename: file.name }),
         });
-
-        if (!anthropicRes.ok) {
-          const err = await anthropicRes.text();
-          showToast("Anthropic API error " + anthropicRes.status + ": " + err.slice(0, 100), "error");
+        if (!apiRes.ok) {
+          const err = await apiRes.json().catch(() => ({ error: `Server error ${apiRes.status}` }));
+          showToast(err.error || `Server error ${apiRes.status}`, "error");
           return;
         }
-
-        const aiData = await anthropicRes.json();
-        const rawText = (aiData.content?.[0]?.text || "").trim();
-
-        const start = rawText.indexOf("[");
-        const end = rawText.lastIndexOf("]");
-        if (start === -1 || end <= start) {
-          showToast("AI could not extract transactions. Try CSV format instead.", "error");
+        const { transactions: imported } = await apiRes.json();
+        if (!imported || imported.length === 0) {
+          showToast("No transactions found in PDF.", "error");
           return;
         }
-
-        let transactions_parsed;
-        try {
-          transactions_parsed = JSON.parse(rawText.slice(start, end + 1).replace(/,\s*([}\]])/g, "$1"));
-        } catch (e) {
-          showToast("Could not parse AI response. Try CSV instead.", "error");
-          return;
-        }
-
-        const imported = transactions_parsed
-          .filter(t => t.date && t.description && typeof t.amount === "number")
-          .map((t, i) => ({
-            id: "pdf_" + Date.now() + "_" + i,
-            date: String(t.date).slice(0, 10),
-            description: String(t.description).toUpperCase().trim().slice(0, 80),
-            amount: parseFloat(t.amount),
-            account: t.account || "Bank of America",
-            category: "10",
-            reconciled: false,
-            source: "pdf",
-          }));
-
-        if (imported.length === 0) { showToast("No transactions found in PDF.", "error"); return; }
         setTransactions(prev => [...imported, ...prev]);
         if (saveTransactions) saveTransactions(imported);
         showToast(imported.length + " transactions extracted from PDF!", "success");

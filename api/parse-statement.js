@@ -1,5 +1,3 @@
-// api/parse-statement.js
-
 // Increase Vercel body size limit to 20MB for large PDF statements
 export const config = {
   api: {
