@@ -29,6 +29,7 @@ export async function upsertTransactions(rows, tenantId) {
     amount: t.amount,
     category_id: t.category || t.category_id || null,
     recurring_id: t.recurring_id || t.recurringId || null,
+    account_id: t.account_id || t.accountId || null,
     account: t.account || 'Imported',
     reconciled: t.reconciled || false,
     source: t.source || 'manual',
@@ -162,6 +163,39 @@ export async function upsertProject(row, tenantId) {
 
 export async function deleteProject(id) {
   const { error } = await supabase.from('r7_ledger_projects').delete().eq('id', id)
+  return !error
+}
+
+// ─── BANK ACCOUNTS ────────────────────────────────────────────────────────────
+export async function fetchBankAccounts(tenantId) {
+  const { data, error } = await supabase.from('r7_ledger_bank_accounts').select('*').eq('tenant_id', tenantId).order('name')
+  if (error) { console.error('fetchBankAccounts', error); return [] }
+  return data
+}
+
+export async function upsertBankAccount(row, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return true
+  const mapped = {
+    id: row.id || undefined,
+    tenant_id: tid,
+    name: row.name,
+    type: row.type || 'checking',
+    institution: row.institution || '',
+    opening_balance: parseFloat(row.openingBalance ?? row.opening_balance ?? 0),
+    opening_date: row.openingDate || row.opening_date || new Date().toISOString().split('T')[0],
+    credit_limit: row.creditLimit != null && row.creditLimit !== '' ? parseFloat(row.creditLimit) : (row.credit_limit ?? null),
+    status: row.status || 'active',
+    notes: row.notes || '',
+  }
+  if (!mapped.id) delete mapped.id
+  const { error } = await supabase.from('r7_ledger_bank_accounts').upsert(mapped, { onConflict: 'id' })
+  if (error) console.error('upsertBankAccount', error)
+  return !error
+}
+
+export async function deleteBankAccount(id) {
+  const { error } = await supabase.from('r7_ledger_bank_accounts').delete().eq('id', id)
   return !error
 }
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -625,6 +625,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     projects: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg>,
     bills: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,
     recurring: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>,
+    wallet: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/></svg>,
     bank: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>,
   };
   return icons[name] || null;
@@ -3043,6 +3044,289 @@ function Recurring({ recurring, setRecurring, saveRecurring, deleteR, categories
   );
 }
 
+// ─── BANK ACCOUNTS ────────────────────────────────────────────────────────────
+const ACCOUNT_TYPE_META = {
+  checking: { label: "Checking",    liquid: true,  liability: false, color: "var(--accent)" },
+  savings:  { label: "Savings",     liquid: true,  liability: false, color: "var(--blue)" },
+  credit:   { label: "Credit Card", liquid: false, liability: true,  color: "var(--red)" },
+  cash:     { label: "Cash",        liquid: true,  liability: false, color: "var(--accent)" },
+  loan:     { label: "Loan",        liquid: false, liability: true,  color: "var(--red)" },
+  other:    { label: "Other",       liquid: false, liability: false, color: "var(--text2)" },
+};
+
+function calculateAccountBalance(account, transactions) {
+  if (!account) return 0;
+  const opening = parseFloat(account.opening_balance) || 0;
+  const linked = transactions.filter(t => t.account_id === account.id || (t.account && t.account === account.name));
+  const sum = linked.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+  return opening + sum;
+}
+
+function accountTransactionCount(account, transactions) {
+  if (!account) return 0;
+  return transactions.filter(t => t.account_id === account.id || (t.account && t.account === account.name)).length;
+}
+
+function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, transactions, showToast }) {
+  const [modal, setModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const blankForm = {
+    name: "",
+    type: "checking",
+    institution: "",
+    openingBalance: "0",
+    openingDate: today(),
+    creditLimit: "",
+    status: "active",
+    notes: "",
+  };
+  const [form, setForm] = useState(blankForm);
+  const [filterStatus, setFilterStatus] = useState("active");
+
+  const filtered = accounts.filter(a => filterStatus === "all" ? true : a.status === filterStatus);
+  const active = accounts.filter(a => a.status === "active");
+  const liquid = active.filter(a => ACCOUNT_TYPE_META[a.type]?.liquid).reduce((s, a) => s + calculateAccountBalance(a, transactions), 0);
+  const liabilities = active.filter(a => ACCOUNT_TYPE_META[a.type]?.liability).reduce((s, a) => s + calculateAccountBalance(a, transactions), 0);
+  const netCash = liquid + liabilities;
+
+  const openAdd = () => { setEditing(null); setForm(blankForm); setModal(true); };
+  const openEdit = (a) => {
+    setEditing(a.id);
+    setForm({
+      name: a.name || "",
+      type: a.type || "checking",
+      institution: a.institution || "",
+      openingBalance: (parseFloat(a.opening_balance) || 0).toString(),
+      openingDate: a.opening_date || today(),
+      creditLimit: a.credit_limit != null ? String(a.credit_limit) : "",
+      status: a.status || "active",
+      notes: a.notes || "",
+    });
+    setModal(true);
+  };
+
+  const save = () => {
+    if (!form.name.trim()) { showToast("Account name is required", "error"); return; }
+    const row = {
+      id: editing || undefined,
+      name: form.name.trim(),
+      type: form.type,
+      institution: form.institution.trim(),
+      openingBalance: parseFloat(form.openingBalance) || 0,
+      openingDate: form.openingDate,
+      creditLimit: form.creditLimit !== "" ? parseFloat(form.creditLimit) : null,
+      status: form.status,
+      notes: form.notes,
+    };
+    const dbShape = {
+      name: row.name,
+      type: row.type,
+      institution: row.institution,
+      opening_balance: row.openingBalance,
+      opening_date: row.openingDate,
+      credit_limit: row.creditLimit,
+      status: row.status,
+      notes: row.notes,
+    };
+    if (editing) {
+      setAccounts(prev => prev.map(a => a.id === editing ? { ...a, ...dbShape } : a));
+      showToast("Account updated", "success");
+    } else {
+      const tempId = "acc_" + Date.now();
+      setAccounts(prev => [...prev, { id: tempId, ...dbShape }]);
+      showToast("Account created", "success");
+    }
+    if (saveBankAccount) saveBankAccount(row);
+    setModal(false);
+  };
+
+  const remove = (a) => {
+    const linked = accountTransactionCount(a, transactions);
+    if (linked > 0) {
+      if (!window.confirm(`Account "${a.name}" has ${linked} linked transactions. Deleting unlinks them (account_id reset to null) but keeps the transactions. Proceed?`)) return;
+    } else {
+      if (!window.confirm(`Delete account "${a.name}"?`)) return;
+    }
+    if (deleteAcc) deleteAcc(a.id);
+    showToast("Account deleted", "info");
+  };
+
+  const archive = (a) => {
+    const newStatus = a.status === "active" ? "archived" : "active";
+    setAccounts(prev => prev.map(x => x.id === a.id ? { ...x, status: newStatus } : x));
+    if (saveBankAccount) saveBankAccount({
+      id: a.id,
+      name: a.name,
+      type: a.type,
+      institution: a.institution,
+      openingBalance: a.opening_balance,
+      openingDate: a.opening_date,
+      creditLimit: a.credit_limit,
+      status: newStatus,
+      notes: a.notes,
+    });
+  };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Bank Accounts</div>
+          <div className="page-subtitle">{active.length} active · cash position consolidated across all accounts</div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}><Icon name="plus" size={13} /> New Account</button>
+      </div>
+
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+        <div className="kpi-card">
+          <div className="kpi-label">Liquid assets</div>
+          <div className="kpi-value" style={{ color: "var(--accent)" }}>{fmt(liquid)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>checking + savings + cash</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Credit & loans</div>
+          <div className="kpi-value" style={{ color: liabilities < 0 ? "var(--red)" : "var(--text)" }}>{fmt(liabilities)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>outstanding balances (negative = owed)</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Net cash position</div>
+          <div className="kpi-value" style={{ color: netCash >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(netCash)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>liquid − debts</div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-12" style={{ marginBottom: 14 }}>
+        {["all", "active", "archived"].map(s => (
+          <button key={s} className={`btn btn-sm ${filterStatus === s ? "btn-outline" : "btn-ghost"}`} style={filterStatus === s ? { borderColor: "var(--accentBorder)", color: "var(--accent)" } : {}} onClick={() => setFilterStatus(s)}>
+            {s.charAt(0).toUpperCase() + s.slice(1)} {s !== "all" && `(${accounts.filter(a => a.status === s).length})`}
+          </button>
+        ))}
+      </div>
+
+      <div className="card" style={{ padding: 0 }}>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Account</th><th>Type</th><th>Institution</th><th style={{ textAlign: "right" }}>Balance</th><th style={{ textAlign: "right" }}>Activity</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr><td colSpan={7}><div className="empty"><div className="empty-icon">🏦</div><div className="empty-title">No accounts yet</div><div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Add Checking, Savings, Credit Cards, and Loans to track cash position and utilization across all accounts.</div></div></td></tr>
+              ) : filtered.map(a => {
+                const meta = ACCOUNT_TYPE_META[a.type] || ACCOUNT_TYPE_META.other;
+                const balance = calculateAccountBalance(a, transactions);
+                const activity = accountTransactionCount(a, transactions);
+                const utilization = (a.type === "credit" && a.credit_limit && parseFloat(a.credit_limit) > 0)
+                  ? (Math.abs(Math.min(balance, 0)) / parseFloat(a.credit_limit)) * 100
+                  : null;
+                return (
+                  <tr key={a.id}>
+                    <td>
+                      <div style={{ fontWeight: 500 }}>{a.name}</div>
+                      {a.notes && <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 2 }}>{a.notes}</div>}
+                    </td>
+                    <td>
+                      <span className="tag" style={{ background: meta.color + "18", color: meta.color, border: `1px solid ${meta.color}30`, fontSize: 11 }}>{meta.label}</span>
+                    </td>
+                    <td className="mono" style={{ fontSize: 11, color: "var(--text2)" }}>{a.institution || "—"}</td>
+                    <td className={balance >= 0 ? "amount-pos text-right" : "amount-neg text-right"}>
+                      {fmt(balance)}
+                      <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>opened {fmtDate(a.opening_date)}</div>
+                    </td>
+                    <td className="mono text-right" style={{ fontSize: 11, color: "var(--text2)" }}>
+                      {activity} txn{activity === 1 ? "" : "s"}
+                      {utilization != null && (
+                        <div style={{ fontSize: 10, color: utilization > 70 ? "var(--red)" : utilization > 40 ? "var(--yellow)" : "var(--text3)" }}>
+                          {utilization.toFixed(0)}% used
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span className="tag" style={{
+                        background: a.status === "active" ? "var(--accentBg)" : "var(--surface3)",
+                        color: a.status === "active" ? "var(--accent)" : "var(--text3)",
+                        border: `1px solid ${a.status === "active" ? "var(--accentBorder)" : "var(--border)"}`,
+                        fontSize: 10,
+                      }}>{a.status}</span>
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: 2 }}>
+                        <button className="btn btn-ghost" style={{ padding: "4px 6px" }} onClick={() => archive(a)} title={a.status === "active" ? "Archive" : "Restore"}>
+                          {a.status === "active" ? "📁" : "↺"}
+                        </button>
+                        <button className="btn btn-ghost" style={{ padding: "4px 6px" }} onClick={() => openEdit(a)}><Icon name="edit" size={13} /></button>
+                        <button className="btn btn-ghost" style={{ padding: "4px 6px", color: "var(--red)" }} onClick={() => remove(a)}><Icon name="trash" size={13} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {modal && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModal(false)}>
+          <div className="modal" style={{ maxWidth: 520 }}>
+            <div className="modal-header">
+              <div className="modal-title">{editing ? "Edit Account" : "New Bank Account"}</div>
+              <button className="btn btn-ghost" style={{ padding: 4 }} onClick={() => setModal(false)}><Icon name="close" size={16} /></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="label">Display name</label>
+                <input className="input" placeholder="e.g. Checking ••4821" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Type</label>
+                  <select className="input" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
+                    {Object.entries(ACCOUNT_TYPE_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="label">Institution</label>
+                  <input className="input" placeholder="e.g. Bank of America" value={form.institution} onChange={e => setForm(f => ({ ...f, institution: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Opening balance ($)</label>
+                  <input type="number" step="0.01" className="input" value={form.openingBalance} onChange={e => setForm(f => ({ ...f, openingBalance: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="label">Opening date</label>
+                  <input type="date" className="input" value={form.openingDate} onChange={e => setForm(f => ({ ...f, openingDate: e.target.value }))} />
+                </div>
+              </div>
+              {form.type === "credit" && (
+                <div className="form-group">
+                  <label className="label">Credit limit ($)</label>
+                  <input type="number" step="0.01" className="input" placeholder="optional — used to compute utilization" value={form.creditLimit} onChange={e => setForm(f => ({ ...f, creditLimit: e.target.value }))} />
+                </div>
+              )}
+              <div className="form-group">
+                <label className="label">Status</label>
+                <select className="input" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
+                  <option value="active">Active</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">Notes</label>
+                <textarea className="input" rows={2} placeholder="Optional context" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} style={{ resize: "vertical" }} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={save} disabled={!form.name}>{editing ? "Save" : "Create"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -3051,6 +3335,7 @@ export default function App() {
   const [budgets, setBudgets] = useState(SAMPLE_BUDGETS);
   const [bills, setBills] = useState([]);
   const [recurring, setRecurring] = useState([]);
+  const [bankAccounts, setBankAccounts] = useState([]);
   const YEAR_NOW = new Date().getFullYear();
   const [projects, setProjects] = useState([
     { id:"p1", title:"Launch Catering Service", category:"Revenue Growth", month:5, year:YEAR_NOW, status:"Planning", impact:"High", investment:2500, projectedRevenue:8000, notes:"Target corporate clients in Round Rock tech corridor.", cashRequired:2500, roi:220 },
@@ -3069,20 +3354,22 @@ export default function App() {
     if (TENANT_ID === "demo") return;
     if (showSpinner) setSyncing(true);
     try {
-      const [txns, cats, bgts, bls, projs, recs] = await Promise.all([
+      const [txns, cats, bgts, bls, projs, recs, accs] = await Promise.all([
         fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
         fetchBudgets(TENANT_ID),
         fetchBills(TENANT_ID),
         fetchProjects(TENANT_ID),
         fetchRecurring(TENANT_ID),
+        fetchBankAccounts(TENANT_ID),
       ]);
-      if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null })));
+      if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null, account_id: t.account_id || null })));
       if (cats.length > 0)  setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
       if (bgts.length > 0)  setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
       if (bls.length > 0)   setBills(bls.map(b => ({ ...b, dueDate: b.due_date, issueDate: b.issue_date, txnId: b.txn_id, category: b.category_id, paidDate: b.paid_date, paidMethod: b.paid_method })));
       if (projs.length > 0) setProjects(projs.map(p => ({ ...p, projectedRevenue: p.projected_revenue })));
       setRecurring(recs);
+      setBankAccounts(accs);
     } catch (err) {
       console.error("loadAll failed:", err);
     } finally {
@@ -3126,6 +3413,8 @@ export default function App() {
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_recurring", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_bank_accounts", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
       .subscribe((status) => {
         if (status === "SUBSCRIBED") { console.log("Clariva CFO: real-time active"); setRealtimeActive(true); }
         if (status === "CLOSED" || status === "CHANNEL_ERROR") setRealtimeActive(false);
@@ -3164,6 +3453,11 @@ export default function App() {
     await upsertRecurring(rule, TENANT_ID);
   };
 
+  const saveBankAccount = async (account) => {
+    if (TENANT_ID === "demo") return;
+    await upsertBankAccount(account, TENANT_ID);
+  };
+
   // ── Kitchen sync handler ────────────────────────────────────
   const handleKitchenSync = async (imported) => {
     const existingIds = new Set(transactions.map(t => t.id));
@@ -3191,6 +3485,7 @@ export default function App() {
     { id: "budget", label: "Budget", icon: "budget" },
     { id: "bills", label: "Bills & Payments", icon: "bills", badge: null },
     { id: "recurring", label: "Recurring", icon: "recurring", badge: recurring.filter(r => r.status === "active").length || null },
+    { id: "accounts", label: "Bank Accounts", icon: "wallet", badge: bankAccounts.filter(a => a.status === "active").length || null },
     { id: "reconcile", label: "Reconciliation", icon: "reconcile" },
     { id: "tax", label: "Tax Summary", icon: "tax" },
   ];
@@ -3207,6 +3502,7 @@ export default function App() {
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
       case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
+      case "accounts":     return <BankAccounts accounts={bankAccounts} setAccounts={setBankAccounts} saveBankAccount={saveBankAccount} deleteAcc={async(id)=>{setBankAccounts(p=>p.filter(a=>a.id!==id));if(TENANT_ID!=="demo")await deleteBankAccount(id);}} transactions={transactions} showToast={showToast} />;
       case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} showToast={showToast} />;
       case "tax":          return <TaxSummary transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       default: return null;
