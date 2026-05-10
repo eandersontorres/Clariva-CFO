@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -381,6 +381,38 @@ function expandDateRangeIfNeeded(imported, dateRange, setDateRange) {
   }
 }
 
+// ─── RECURRING MATCH ──────────────────────────────────────────────────────────
+function matchRecurring(txn, rules) {
+  if (!rules || rules.length === 0 || !txn.description) return null;
+  const desc = txn.description.toUpperCase();
+  for (const r of rules) {
+    if (r.status !== 'active') continue;
+    if (!r.vendor_pattern) continue;
+    if (!desc.includes(r.vendor_pattern.toUpperCase())) continue;
+    const expected = Math.abs(parseFloat(r.amount) || 0);
+    const actual = Math.abs(parseFloat(txn.amount) || 0);
+    if (expected > 0) {
+      const drift = Math.abs(actual - expected) / expected * 100;
+      if (drift > parseFloat(r.variance_pct ?? 10)) continue;
+    }
+    return r;
+  }
+  return null;
+}
+
+function applyRecurringMatch(imported, rules) {
+  if (!rules || rules.length === 0) return imported;
+  return imported.map(t => {
+    const rule = matchRecurring(t, rules);
+    if (!rule) return t;
+    return {
+      ...t,
+      category: rule.category_id || t.category,
+      recurring_id: rule.id,
+    };
+  });
+}
+
 function parseBoACSV(text) {
   const lines = text.split('\n').map(l => l.replace('\r', '')).filter(l => l.trim());
   const txns = [];
@@ -592,6 +624,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     insights: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
     projects: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg>,
     bills: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,
+    recurring: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>,
     bank: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>,
   };
   return icons[name] || null;
@@ -741,7 +774,7 @@ function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
 }
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, categories, dateRange, setDateRange, showToast }) {
+function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, categories, recurring, dateRange, setDateRange, showToast }) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [drag, setDrag] = useState(false);
@@ -787,12 +820,15 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           showToast("No transactions found in PDF.", "error");
           return;
         }
-        const imported = applyAutoCategorize(rawImported, allTransactions || transactions);
+        const matched = applyRecurringMatch(rawImported, recurring);
+        const imported = applyAutoCategorize(matched, allTransactions || transactions);
         expandDateRangeIfNeeded(imported, dateRange, setDateRange);
         setTransactions(prev => [...imported, ...prev]);
         if (saveTransactions) saveTransactions(imported);
+        const recCount = imported.filter(t => t.recurring_id).length;
         const autoCount = imported.filter(t => t.autoCategorized).length;
-        showToast(imported.length + " transactions extracted" + (autoCount ? ` · ${autoCount} auto-categorized` : ""), "success");
+        const tags = [recCount && `${recCount} matched recurring`, autoCount && `${autoCount} auto-categorized`].filter(Boolean).join(" · ");
+        showToast(imported.length + " transactions extracted" + (tags ? ` · ${tags}` : ""), "success");
       } catch (err) {
         showToast("PDF import failed: " + err.message, "error");
       } finally {
@@ -812,12 +848,15 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         rawParsed = parseBoACSV(text);
       }
       if (rawParsed.length === 0) { showToast("No transactions found in file. Check the format.", "error"); return; }
-      const parsed = applyAutoCategorize(rawParsed, allTransactions || transactions);
+      const matched = applyRecurringMatch(rawParsed, recurring);
+      const parsed = applyAutoCategorize(matched, allTransactions || transactions);
       expandDateRangeIfNeeded(parsed, dateRange, setDateRange);
       setTransactions(prev => [...parsed, ...prev]);
       if (saveTransactions) saveTransactions(parsed);
+      const recCount = parsed.filter(t => t.recurring_id).length;
       const autoCount = parsed.filter(t => t.autoCategorized).length;
-      showToast(parsed.length + " transactions imported" + (autoCount ? ` · ${autoCount} auto-categorized` : ""), "success");
+      const tags = [recCount && `${recCount} matched recurring`, autoCount && `${autoCount} auto-categorized`].filter(Boolean).join(" · ");
+      showToast(parsed.length + " transactions imported" + (tags ? ` · ${tags}` : ""), "success");
     };
     reader.readAsText(file);
   };
@@ -2485,6 +2524,370 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
   );
 }
 
+// ─── RECURRING ────────────────────────────────────────────────────────────────
+const CADENCE_LABELS = {
+  monthly: "Monthly",
+  biweekly: "Biweekly (every 2 weeks)",
+  weekly: "Weekly",
+  quarterly: "Quarterly",
+  annual: "Annual",
+};
+const DOW_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function monthlyEquivalent(amount, cadence) {
+  const a = parseFloat(amount) || 0;
+  switch (cadence) {
+    case "monthly":   return a;
+    case "biweekly":  return a * (26 / 12);
+    case "weekly":    return a * (52 / 12);
+    case "quarterly": return a / 3;
+    case "annual":    return a / 12;
+    default:          return a;
+  }
+}
+
+function ruleToFormShape(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    vendorPattern: r.vendor_pattern,
+    categoryId: r.category_id,
+    account: r.account,
+    amount: r.amount,
+    variancePct: r.variance_pct,
+    cadence: r.cadence,
+    dayOfMonth: r.day_of_month,
+    dayOfWeek: r.day_of_week,
+    startDate: r.start_date,
+    endDate: r.end_date,
+    status: r.status,
+    notes: r.notes,
+  };
+}
+
+function Recurring({ recurring, setRecurring, saveRecurring, deleteR, categories, transactions, showToast }) {
+  const [modal, setModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const blankForm = {
+    name: "",
+    vendorPattern: "",
+    categoryId: "",
+    account: "",
+    amount: "",
+    variancePct: 10,
+    cadence: "monthly",
+    dayOfMonth: 1,
+    dayOfWeek: 1,
+    startDate: today(),
+    endDate: "",
+    status: "active",
+    notes: "",
+  };
+  const [form, setForm] = useState(blankForm);
+  const [filterStatus, setFilterStatus] = useState("all");
+
+  const filtered = recurring.filter(r => filterStatus === "all" ? true : r.status === filterStatus);
+  const active = recurring.filter(r => r.status === "active");
+  const monthlyOutflow = active.reduce((s, r) => {
+    const m = monthlyEquivalent(r.amount, r.cadence);
+    return s + (m < 0 ? m : 0);
+  }, 0);
+  const monthlyInflow = active.reduce((s, r) => {
+    const m = monthlyEquivalent(r.amount, r.cadence);
+    return s + (m > 0 ? m : 0);
+  }, 0);
+
+  const openAdd = () => { setEditing(null); setForm(blankForm); setModal(true); };
+  const openEdit = (r) => {
+    setEditing(r.id);
+    setForm({
+      name: r.name || "",
+      vendorPattern: r.vendor_pattern || "",
+      categoryId: r.category_id || "",
+      account: r.account || "",
+      amount: Math.abs(parseFloat(r.amount) || 0).toString(),
+      variancePct: r.variance_pct ?? 10,
+      cadence: r.cadence || "monthly",
+      dayOfMonth: r.day_of_month ?? 1,
+      dayOfWeek: r.day_of_week ?? 1,
+      startDate: r.start_date || today(),
+      endDate: r.end_date || "",
+      status: r.status || "active",
+      notes: r.notes || "",
+    });
+    setModal(true);
+  };
+
+  const save = () => {
+    if (!form.name.trim() || !form.vendorPattern.trim() || !form.amount) {
+      showToast("Name, vendor pattern, and amount are required", "error");
+      return;
+    }
+    const cat = categories.find(c => c.id === form.categoryId);
+    const isIncome = cat && cat.type === "income";
+    const signedAmount = isIncome ? Math.abs(parseFloat(form.amount)) : -Math.abs(parseFloat(form.amount));
+    const monthlyish = form.cadence === "monthly" || form.cadence === "quarterly" || form.cadence === "annual";
+    const weeklyish = form.cadence === "weekly" || form.cadence === "biweekly";
+
+    const row = {
+      id: editing || undefined,
+      name: form.name.trim(),
+      vendorPattern: form.vendorPattern.trim().toUpperCase(),
+      categoryId: form.categoryId || null,
+      account: form.account.trim(),
+      amount: signedAmount,
+      variancePct: parseFloat(form.variancePct) || 10,
+      cadence: form.cadence,
+      dayOfMonth: monthlyish ? parseInt(form.dayOfMonth) || 1 : null,
+      dayOfWeek: weeklyish ? parseInt(form.dayOfWeek) : null,
+      startDate: form.startDate,
+      endDate: form.endDate || null,
+      status: form.status,
+      notes: form.notes,
+    };
+
+    const dbShape = {
+      name: row.name,
+      vendor_pattern: row.vendorPattern,
+      category_id: row.categoryId,
+      account: row.account,
+      amount: row.amount,
+      variance_pct: row.variancePct,
+      cadence: row.cadence,
+      day_of_month: row.dayOfMonth,
+      day_of_week: row.dayOfWeek,
+      start_date: row.startDate,
+      end_date: row.endDate,
+      status: row.status,
+      notes: row.notes,
+    };
+
+    if (editing) {
+      setRecurring(prev => prev.map(r => r.id === editing ? { ...r, ...dbShape } : r));
+      showToast("Recurring rule updated", "success");
+    } else {
+      const tempId = "rec_" + Date.now();
+      setRecurring(prev => [...prev, { id: tempId, ...dbShape }]);
+      showToast("Recurring rule created", "success");
+    }
+    if (saveRecurring) saveRecurring(row);
+    setModal(false);
+  };
+
+  const remove = (r) => {
+    if (!window.confirm(`Delete rule "${r.name}"? Linked transactions keep their categories but lose the link.`)) return;
+    if (deleteR) deleteR(r.id);
+    showToast("Recurring rule deleted", "info");
+  };
+
+  const toggleStatus = (r) => {
+    const newStatus = r.status === "active" ? "paused" : "active";
+    setRecurring(prev => prev.map(x => x.id === r.id ? { ...x, status: newStatus } : x));
+    if (saveRecurring) saveRecurring({ ...ruleToFormShape(r), status: newStatus });
+  };
+
+  // Per-rule stats: hits in current transaction list, last seen date, drift
+  const ruleStats = (r) => {
+    const linked = transactions.filter(t => t.recurring_id === r.id);
+    const lastSeen = linked.length > 0 ? linked.map(t => t.date).sort().slice(-1)[0] : null;
+    const expected = Math.abs(parseFloat(r.amount) || 0);
+    const lastAmt = linked.length > 0 ? Math.abs(parseFloat(linked.sort((a, b) => a.date.localeCompare(b.date)).slice(-1)[0].amount) || 0) : null;
+    const drift = lastAmt != null && expected > 0 ? ((lastAmt - expected) / expected) * 100 : null;
+    return { count: linked.length, lastSeen, drift };
+  };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Recurring</div>
+          <div className="page-subtitle">{active.length} active · {recurring.length} total · used to forecast cash and auto-match imports</div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}><Icon name="plus" size={13} /> New Rule</button>
+      </div>
+
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+        <div className="kpi-card">
+          <div className="kpi-label">Monthly outflow (recurring)</div>
+          <div className="kpi-value" style={{ color: "var(--red)" }}>{fmt(monthlyOutflow)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>fixed expenses commitment</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Monthly inflow (recurring)</div>
+          <div className="kpi-value" style={{ color: "var(--accent)" }}>{fmt(monthlyInflow)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>predictable revenue</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Net recurring</div>
+          <div className="kpi-value">{fmt(monthlyInflow + monthlyOutflow)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>monthly baseline</div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-12" style={{ marginBottom: 14 }}>
+        {["all", "active", "paused", "ended"].map(s => (
+          <button key={s} className={`btn btn-sm ${filterStatus === s ? "btn-outline" : "btn-ghost"}`} style={filterStatus === s ? { borderColor: "var(--accentBorder)", color: "var(--accent)" } : {}} onClick={() => setFilterStatus(s)}>
+            {s.charAt(0).toUpperCase() + s.slice(1)} {s !== "all" && `(${recurring.filter(r => r.status === s).length})`}
+          </button>
+        ))}
+      </div>
+
+      <div className="card" style={{ padding: 0 }}>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Pattern</th><th>Category</th><th>Cadence</th><th style={{ textAlign: "right" }}>Expected</th><th>Last seen</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr><td colSpan={8}><div className="empty"><div className="empty-icon">🔁</div><div className="empty-title">No recurring rules yet</div><div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Add rent, payroll, insurance, or SaaS subscriptions to auto-match imports and forecast cash flow.</div></div></td></tr>
+              ) : filtered.map(r => {
+                const cat = categories.find(c => c.id === r.category_id);
+                const stats = ruleStats(r);
+                const driftWarn = stats.drift != null && Math.abs(stats.drift) > parseFloat(r.variance_pct ?? 10);
+                return (
+                  <tr key={r.id}>
+                    <td>
+                      <div style={{ fontWeight: 500 }}>{r.name}</div>
+                      {r.notes && <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 2 }}>{r.notes}</div>}
+                    </td>
+                    <td className="mono" style={{ fontSize: 11, color: "var(--text2)" }}>{r.vendor_pattern}</td>
+                    <td>{cat && <span className="tag" style={{ background: cat.color + "18", color: cat.color, border: `1px solid ${cat.color}30` }}>{cat.name}</span>}</td>
+                    <td className="mono" style={{ fontSize: 11, color: "var(--text2)" }}>
+                      {CADENCE_LABELS[r.cadence] || r.cadence}
+                      {r.day_of_month && <div style={{ color: "var(--text3)", fontSize: 10 }}>day {r.day_of_month}</div>}
+                      {r.day_of_week != null && <div style={{ color: "var(--text3)", fontSize: 10 }}>{DOW_LABELS[r.day_of_week]}</div>}
+                    </td>
+                    <td className={parseFloat(r.amount) >= 0 ? "amount-pos text-right" : "amount-neg text-right"}>
+                      {fmt(parseFloat(r.amount))}
+                      <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>±{r.variance_pct}%</div>
+                    </td>
+                    <td className="mono" style={{ fontSize: 11, color: "var(--text2)" }}>
+                      {stats.lastSeen ? fmtDate(stats.lastSeen) : "—"}
+                      <div style={{ fontSize: 10, color: driftWarn ? "var(--yellow)" : "var(--text3)" }}>
+                        {stats.count} matches{stats.drift != null ? ` · ${stats.drift > 0 ? "+" : ""}${stats.drift.toFixed(1)}%` : ""}
+                      </div>
+                    </td>
+                    <td>
+                      <span className="tag" style={{
+                        background: r.status === "active" ? "var(--accentBg)" : "var(--surface3)",
+                        color: r.status === "active" ? "var(--accent)" : "var(--text3)",
+                        border: `1px solid ${r.status === "active" ? "var(--accentBorder)" : "var(--border)"}`,
+                        fontSize: 10,
+                      }}>{r.status}</span>
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: 2 }}>
+                        <button className="btn btn-ghost" style={{ padding: "4px 6px" }} onClick={() => toggleStatus(r)} title={r.status === "active" ? "Pause" : "Activate"}>
+                          {r.status === "active" ? "⏸" : "▶"}
+                        </button>
+                        <button className="btn btn-ghost" style={{ padding: "4px 6px" }} onClick={() => openEdit(r)}><Icon name="edit" size={13} /></button>
+                        <button className="btn btn-ghost" style={{ padding: "4px 6px", color: "var(--red)" }} onClick={() => remove(r)}><Icon name="trash" size={13} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {modal && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModal(false)}>
+          <div className="modal" style={{ maxWidth: 580 }}>
+            <div className="modal-header">
+              <div className="modal-title">{editing ? "Edit Recurring Rule" : "New Recurring Rule"}</div>
+              <button className="btn btn-ghost" style={{ padding: 4 }} onClick={() => setModal(false)}><Icon name="close" size={16} /></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="label">Name</label>
+                <input className="input" placeholder="e.g. Rent · TPC Tower" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="label">Vendor pattern (substring matched against descriptions)</label>
+                <input className="input" placeholder="e.g. TPC TOWER, GUSTO PAYROLL" value={form.vendorPattern} onChange={e => setForm(f => ({ ...f, vendorPattern: e.target.value }))} />
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Category</label>
+                  <select className="input" value={form.categoryId} onChange={e => setForm(f => ({ ...f, categoryId: e.target.value }))}>
+                    <option value="">— None —</option>
+                    {categories.map(c => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="label">Account</label>
+                  <input className="input" placeholder="e.g. Checking ••4821" value={form.account} onChange={e => setForm(f => ({ ...f, account: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Expected amount ($)</label>
+                  <input type="number" step="0.01" className="input" placeholder="5000.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="label">Tolerance (±%)</label>
+                  <input type="number" step="1" className="input" value={form.variancePct} onChange={e => setForm(f => ({ ...f, variancePct: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Cadence</label>
+                  <select className="input" value={form.cadence} onChange={e => setForm(f => ({ ...f, cadence: e.target.value }))}>
+                    {Object.entries(CADENCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  {(form.cadence === "monthly" || form.cadence === "quarterly" || form.cadence === "annual") && (
+                    <>
+                      <label className="label">Day of month</label>
+                      <input type="number" min="1" max="31" className="input" value={form.dayOfMonth} onChange={e => setForm(f => ({ ...f, dayOfMonth: e.target.value }))} />
+                    </>
+                  )}
+                  {(form.cadence === "weekly" || form.cadence === "biweekly") && (
+                    <>
+                      <label className="label">Day of week</label>
+                      <select className="input" value={form.dayOfWeek} onChange={e => setForm(f => ({ ...f, dayOfWeek: e.target.value }))}>
+                        {DOW_LABELS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                      </select>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Start date</label>
+                  <input type="date" className="input" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="label">End date (optional)</label>
+                  <input type="date" className="input" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="label">Status</label>
+                <select className="input" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
+                  <option value="active">Active</option>
+                  <option value="paused">Paused</option>
+                  <option value="ended">Ended</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">Notes</label>
+                <textarea className="input" rows={2} placeholder="Optional context" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} style={{ resize: "vertical" }} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={save} disabled={!form.name || !form.vendorPattern || !form.amount}>{editing ? "Save" : "Create"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -2492,6 +2895,7 @@ export default function App() {
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [budgets, setBudgets] = useState(SAMPLE_BUDGETS);
   const [bills, setBills] = useState([]);
+  const [recurring, setRecurring] = useState([]);
   const YEAR_NOW = new Date().getFullYear();
   const [projects, setProjects] = useState([
     { id:"p1", title:"Launch Catering Service", category:"Revenue Growth", month:5, year:YEAR_NOW, status:"Planning", impact:"High", investment:2500, projectedRevenue:8000, notes:"Target corporate clients in Round Rock tech corridor.", cashRequired:2500, roi:220 },
@@ -2510,18 +2914,20 @@ export default function App() {
     if (TENANT_ID === "demo") return;
     if (showSpinner) setSyncing(true);
     try {
-      const [txns, cats, bgts, bls, projs] = await Promise.all([
+      const [txns, cats, bgts, bls, projs, recs] = await Promise.all([
         fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
         fetchBudgets(TENANT_ID),
         fetchBills(TENANT_ID),
         fetchProjects(TENANT_ID),
+        fetchRecurring(TENANT_ID),
       ]);
-      if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED })));
+      if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null })));
       if (cats.length > 0)  setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
       if (bgts.length > 0)  setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
       if (bls.length > 0)   setBills(bls.map(b => ({ ...b, dueDate: b.due_date, issueDate: b.issue_date, txnId: b.txn_id, category: b.category_id, paidDate: b.paid_date, paidMethod: b.paid_method })));
       if (projs.length > 0) setProjects(projs.map(p => ({ ...p, projectedRevenue: p.projected_revenue })));
+      setRecurring(recs);
     } catch (err) {
       console.error("loadAll failed:", err);
     } finally {
@@ -2563,6 +2969,8 @@ export default function App() {
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_projects", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_recurring", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
       .subscribe((status) => {
         if (status === "SUBSCRIBED") { console.log("Clariva CFO: real-time active"); setRealtimeActive(true); }
         if (status === "CLOSED" || status === "CHANNEL_ERROR") setRealtimeActive(false);
@@ -2596,6 +3004,11 @@ export default function App() {
     await upsertProject(project, TENANT_ID);
   };
 
+  const saveRecurring = async (rule) => {
+    if (TENANT_ID === "demo") return;
+    await upsertRecurring(rule, TENANT_ID);
+  };
+
   // ── Kitchen sync handler ────────────────────────────────────
   const handleKitchenSync = async (imported) => {
     const existingIds = new Set(transactions.map(t => t.id));
@@ -2622,6 +3035,7 @@ export default function App() {
     { id: "cashflow", label: "Cash Flow", icon: "cashflow" },
     { id: "budget", label: "Budget", icon: "budget" },
     { id: "bills", label: "Bills & Payments", icon: "bills", badge: null },
+    { id: "recurring", label: "Recurring", icon: "recurring", badge: recurring.filter(r => r.status === "active").length || null },
     { id: "reconcile", label: "Reconciliation", icon: "reconcile" },
     { id: "tax", label: "Tax Summary", icon: "tax" },
   ];
@@ -2631,12 +3045,13 @@ export default function App() {
       case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
-      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
+      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} recurring={recurring} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
+      case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
       case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} showToast={showToast} />;
       case "tax":          return <TaxSummary transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       default: return null;

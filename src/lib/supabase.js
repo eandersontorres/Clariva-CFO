@@ -28,6 +28,7 @@ export async function upsertTransactions(rows, tenantId) {
     description: t.description,
     amount: t.amount,
     category_id: t.category || t.category_id || null,
+    recurring_id: t.recurring_id || t.recurringId || null,
     account: t.account || 'Imported',
     reconciled: t.reconciled || false,
     source: t.source || 'manual',
@@ -161,6 +162,44 @@ export async function upsertProject(row, tenantId) {
 
 export async function deleteProject(id) {
   const { error } = await supabase.from('r7_ledger_projects').delete().eq('id', id)
+  return !error
+}
+
+// ─── RECURRING ────────────────────────────────────────────────────────────────
+export async function fetchRecurring(tenantId) {
+  const { data, error } = await supabase.from('r7_ledger_recurring').select('*').eq('tenant_id', tenantId).order('name')
+  if (error) { console.error('fetchRecurring', error); return [] }
+  return data
+}
+
+export async function upsertRecurring(row, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return true
+  const mapped = {
+    id: row.id || undefined,
+    tenant_id: tid,
+    name: row.name,
+    vendor_pattern: row.vendorPattern || row.vendor_pattern || '',
+    category_id: row.categoryId || row.category_id || null,
+    account: row.account || '',
+    amount: parseFloat(row.amount) || 0,
+    variance_pct: parseFloat(row.variancePct ?? row.variance_pct ?? 10),
+    cadence: row.cadence || 'monthly',
+    day_of_month: row.dayOfMonth ?? row.day_of_month ?? null,
+    day_of_week: row.dayOfWeek ?? row.day_of_week ?? null,
+    start_date: row.startDate || row.start_date || new Date().toISOString().split('T')[0],
+    end_date: row.endDate || row.end_date || null,
+    status: row.status || 'active',
+    notes: row.notes || '',
+  }
+  if (!mapped.id) delete mapped.id
+  const { error } = await supabase.from('r7_ledger_recurring').upsert(mapped, { onConflict: 'id' })
+  if (error) console.error('upsertRecurring', error)
+  return !error
+}
+
+export async function deleteRecurring(id) {
+  const { error } = await supabase.from('r7_ledger_recurring').delete().eq('id', id)
   return !error
 }
 
