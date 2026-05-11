@@ -27,7 +27,7 @@ export async function upsertTransactions(rows, tenantId) {
     date: t.date,
     description: t.description,
     amount: t.amount,
-    category_id: t.category || t.category_id || null,
+    category_id: ((t.category && t.category !== UNCATEGORIZED) ? t.category : t.category_id) || null,
     recurring_id: t.recurring_id || t.recurringId || null,
     account_id: t.account_id || t.accountId || null,
     account: t.account || 'Imported',

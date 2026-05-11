@@ -3470,7 +3470,7 @@ export default function App() {
         fetchBankAccounts(TENANT_ID),
       ]);
       if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null, account_id: t.account_id || null })));
-      if (cats.length > 0)  setCategories(cats.map(c => ({ ...c, taxLine: c.tax_line || "" })));
+      if (cats.length > 0)  setCategories(cats.map(c => ({ ...c, id: c.name === "Uncategorized" ? UNCATEGORIZED : c.id, taxLine: c.tax_line || "" })));
       if (bgts.length > 0)  setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
       if (bls.length > 0)   setBills(bls.map(b => ({ ...b, dueDate: b.due_date, issueDate: b.issue_date, txnId: b.txn_id, category: b.category_id, paidDate: b.paid_date, paidMethod: b.paid_method })));
       if (projs.length > 0) setProjects(projs.map(p => ({ ...p, projectedRevenue: p.projected_revenue })));
