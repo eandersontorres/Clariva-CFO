@@ -274,6 +274,27 @@ export async function fetchTenant(tenantId) {
   return data
 }
 
+// ─── MARKETING BRIDGE ─────────────────────────────────────────────────────────
+// Goes through /api/sync-marketing because mkt_* tables have RLS that blocks
+// the anon key the browser holds. The endpoint runs with the service role.
+export async function fetchMarketingSpend(tenantId, { start, end } = {}) {
+  try {
+    const res = await fetch('/api/sync-marketing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenant_id: tenantId, start, end }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+      throw new Error(err.error || 'Server error ' + res.status)
+    }
+    return await res.json()
+  } catch (err) {
+    console.error('fetchMarketingSpend', err)
+    throw err
+  }
+}
+
 // ─── CONVERTERS ───────────────────────────────────────────────────────────────
 export function purchasesToTransactions(purchases, vendorMap = {}, foodBevCategoryId) {
   return purchases.map(p => ({

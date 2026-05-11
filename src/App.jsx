@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -596,6 +596,52 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
         <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
       </svg>
       {loading ? "Syncing..." : "Sync Kitchen"}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+    </button>
+  );
+}
+
+function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+
+  const sync = async () => {
+    setLoading(true);
+    showToast("Syncing ad spend from Clariva Marketing...", "info");
+    try {
+      const result = await fetchMarketingSpend(tenantId, dateRange);
+      const txns = result.transactions || [];
+      if (txns.length === 0) {
+        if (!result.accounts) {
+          showToast("No connected ad accounts in Marketing yet.", "info");
+        } else {
+          showToast("No ad-spend snapshots in this date range.", "info");
+        }
+      } else {
+        onSync(txns);
+        setLastSync(new Date().toLocaleTimeString());
+        const providers = (result.providers || []).join(", ").toUpperCase() || "Marketing";
+        showToast(txns.length + " ad-spend accrual(s) synced from " + providers, "success");
+      }
+    } catch (err) {
+      showToast("Marketing sync failed: " + err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      className="btn btn-outline btn-sm"
+      onClick={sync}
+      disabled={loading}
+      style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
+      title="Pull ad spend from Clariva Marketing (Meta + Google)"
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
+        <path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>
+      </svg>
+      {loading ? "Syncing..." : "Sync Marketing"}
       {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
     </button>
   );
@@ -3468,6 +3514,34 @@ export default function App() {
     }
   };
 
+  // ── Marketing sync handler ──────────────────────────────────
+  // Apply recurring match + auto-categorize so accruals pick up a
+  // "Marketing" category automatically when the user has one defined.
+  // IDs are deterministic (per ad_account x month) so repeated syncs upsert
+  // the same row — first sync creates, follow-ups refresh the amount.
+  const handleMarketingSync = async (imported) => {
+    const matched = applyRecurringMatch(imported, recurring);
+    const enriched = applyAutoCategorize(matched, transactions);
+    const existingMap = new Map(transactions.map(t => [t.id, t]));
+    const fresh = enriched.filter(t => !existingMap.has(t.id));
+    const updated = enriched.filter(t => {
+      const existing = existingMap.get(t.id);
+      return existing && (parseFloat(existing.amount) !== parseFloat(t.amount) || existing.notes !== t.notes);
+    });
+    const toPersist = [...fresh, ...updated];
+    if (toPersist.length === 0) return;
+    setTransactions(prev => {
+      const next = prev.map(t => {
+        const m = enriched.find(x => x.id === t.id);
+        return m ? { ...t, ...m } : t;
+      });
+      const existingIds = new Set(next.map(t => t.id));
+      const onlyNew = enriched.filter(t => !existingIds.has(t.id));
+      return [...onlyNew, ...next];
+    });
+    await saveTransactions(toPersist);
+  };
+
   const showToast = (message, type = "info") => setToast({ message, type, id: Date.now() });
 
   // ── Filter transactions by date range ──────────────────────
@@ -3577,6 +3651,12 @@ export default function App() {
               categories={categories}
               dateRange={dateRange}
               onSync={handleKitchenSync}
+              showToast={showToast}
+            />
+            <MarketingSyncButton
+              tenantId={TENANT_ID}
+              dateRange={dateRange}
+              onSync={handleMarketingSync}
               showToast={showToast}
             />
             <DateRangePicker dateRange={dateRange} setDateRange={setDateRange} />
