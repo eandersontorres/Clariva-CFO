@@ -274,6 +274,28 @@ export async function fetchTenant(tenantId) {
   return data
 }
 
+// ─── BOOKINGS FORECAST ────────────────────────────────────────────────────────
+// Goes through /api/forecast-bookings because r7_reservations has RLS that
+// blocks the anon key. Returns upcoming demand + no-show rate + avg ticket
+// in one payload for the Insights forecast card.
+export async function fetchBookingsForecast(tenantId) {
+  try {
+    const res = await fetch('/api/forecast-bookings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenant_id: tenantId }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+      throw new Error(err.error || 'Server error ' + res.status)
+    }
+    return await res.json()
+  } catch (err) {
+    console.error('fetchBookingsForecast', err)
+    return null
+  }
+}
+
 // ─── MARKETING BRIDGE ─────────────────────────────────────────────────────────
 // Goes through /api/sync-marketing because mkt_* tables have RLS that blocks
 // the anon key the browser holds. The endpoint runs with the service role.

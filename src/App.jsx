@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -2083,7 +2083,14 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
 
 
 // ─── CFO INSIGHTS ─────────────────────────────────────────────────────────────
-function Insights({ transactions, categories, budgets, recurring = [], dateRange = {} }) {
+function Insights({ transactions, categories, budgets, recurring = [], tenantId, dateRange = {} }) {
+  const [bookForecast, setBookForecast] = useState(null);
+  useEffect(() => {
+    if (!tenantId || tenantId === "demo") return;
+    let cancelled = false;
+    fetchBookingsForecast(tenantId).then(data => { if (!cancelled) setBookForecast(data); });
+    return () => { cancelled = true; };
+  }, [tenantId]);
   const [period, setPeriod] = useState("weekly");
   const totalIncome  = transactions.filter(t => t.amount > 0).reduce((s,t) => s+t.amount, 0);
   const totalExpense = Math.abs(transactions.filter(t => t.amount < 0).reduce((s,t) => s+t.amount, 0));
@@ -2198,6 +2205,59 @@ function Insights({ transactions, categories, budgets, recurring = [], dateRange
           })}
         </div>
       </div>
+
+      {/* Bookings Forecast (Clariva Book bridge) */}
+      {bookForecast && bookForecast.upcoming && bookForecast.upcoming.reservations > 0 && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+            <div>
+              <div style={{ fontFamily: "Cormorant Garamond,serif", fontSize: 16, fontWeight: 600, letterSpacing: "0.04em" }}>📅 Bookings Forecast</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+                From Clariva Book · next {bookForecast.window.horizon_days} days
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Projected revenue (7d)</div>
+              <div className="mono" style={{ fontSize: 22, color: "var(--accent)" }}>{fmt(bookForecast.projected_revenue_7d || 0)}</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Reservations</div>
+              <div className="mono" style={{ fontSize: 18 }}>{bookForecast.upcoming.reservations}</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{bookForecast.upcoming.by_day.length} day{bookForecast.upcoming.by_day.length === 1 ? "" : "s"} on the books</div>
+            </div>
+            <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Covers (7d)</div>
+              <div className="mono" style={{ fontSize: 18 }}>{bookForecast.upcoming.covers_next_7d}</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{bookForecast.upcoming.covers} across {bookForecast.window.horizon_days}d</div>
+            </div>
+            <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Avg ticket (30d)</div>
+              <div className="mono" style={{ fontSize: 18 }}>{fmt(bookForecast.avg_ticket.value)}</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>over {bookForecast.avg_ticket.based_on_orders} orders</div>
+            </div>
+            <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>No-show rate</div>
+              <div className="mono" style={{ fontSize: 18, color: bookForecast.no_show.rate > 0.15 ? "var(--yellow)" : "var(--text)" }}>{(bookForecast.no_show.rate * 100).toFixed(1)}%</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{bookForecast.no_show.sample_size} reservation{bookForecast.no_show.sample_size === 1 ? "" : "s"} (60d)</div>
+            </div>
+          </div>
+          {bookForecast.upcoming.by_day.length > 0 && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Daily breakdown</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {bookForecast.upcoming.by_day.slice(0, 14).map(d => (
+                  <div key={d.date} style={{ background: "var(--surface3)", borderRadius: "var(--radius2)", padding: "6px 10px", fontSize: 11, fontFamily: "DM Mono" }} title={`${d.reservations} reservation${d.reservations === 1 ? "" : "s"}`}>
+                    <span style={{ color: "var(--text3)" }}>{d.date.slice(5)}</span>
+                    <span style={{ color: "var(--accent)", marginLeft: 6 }}>{d.covers}c</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Recurring Health */}
       {recurring.filter(r => r.status === "active").length > 0 && (() => {
@@ -3566,7 +3626,7 @@ export default function App() {
 
   const renderScreen = () => {
     switch (screen) {
-      case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} recurring={recurring} dateRange={dateRange} />;
+      case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} recurring={recurring} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
