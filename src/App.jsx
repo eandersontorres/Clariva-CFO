@@ -2216,12 +2216,14 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
                 From Clariva Book · next {bookForecast.window.horizon_days} days
               </div>
             </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Projected revenue (7d)</div>
-              <div className="mono" style={{ fontSize: 22, color: "var(--accent)" }}>{fmt(bookForecast.projected_revenue_7d || 0)}</div>
-            </div>
+            {bookForecast.projected_revenue_7d > 0 && (
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Projected revenue (7d)</div>
+                <div className="mono" style={{ fontSize: 22, color: "var(--accent)" }}>{fmt(bookForecast.projected_revenue_7d)}</div>
+              </div>
+            )}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: bookForecast.avg_ticket && bookForecast.avg_ticket.value > 0 ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12 }}>
             <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
               <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Reservations</div>
               <div className="mono" style={{ fontSize: 18 }}>{bookForecast.upcoming.reservations}</div>
@@ -2232,11 +2234,13 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
               <div className="mono" style={{ fontSize: 18 }}>{bookForecast.upcoming.covers_next_7d}</div>
               <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{bookForecast.upcoming.covers} across {bookForecast.window.horizon_days}d</div>
             </div>
-            <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Avg ticket (30d)</div>
-              <div className="mono" style={{ fontSize: 18 }}>{fmt(bookForecast.avg_ticket.value)}</div>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>over {bookForecast.avg_ticket.based_on_orders} orders</div>
-            </div>
+            {bookForecast.avg_ticket && bookForecast.avg_ticket.value > 0 && (
+              <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Avg ticket (30d)</div>
+                <div className="mono" style={{ fontSize: 18 }}>{fmt(bookForecast.avg_ticket.value)}</div>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>over {bookForecast.avg_ticket.based_on_orders} orders</div>
+              </div>
+            )}
             <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
               <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>No-show rate</div>
               <div className="mono" style={{ fontSize: 18, color: bookForecast.no_show.rate > 0.15 ? "var(--yellow)" : "var(--text)" }}>{(bookForecast.no_show.rate * 100).toFixed(1)}%</div>

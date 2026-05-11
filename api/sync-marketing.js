@@ -25,11 +25,32 @@ export default async function handler(req, res) {
   });
 
   try {
+    // r7_tenants and mkt_restaurants are separate tables with their own UUIDs.
+    // They line up by slug, not by id — resolve via slug to find the matching
+    // mkt_restaurants.id, which is what mkt_ad_accounts.restaurant_id points to.
+    const { data: tenant, error: tenErr } = await supabase
+      .from("r7_tenants")
+      .select("slug")
+      .eq("id", tenant_id)
+      .maybeSingle();
+    if (tenErr) return res.status(500).json({ error: "tenant lookup: " + tenErr.message });
+    if (!tenant || !tenant.slug) return res.status(200).json({ transactions: [], count: 0, accounts: 0, note: "no tenant slug" });
+
+    const { data: restaurant, error: restErr } = await supabase
+      .from("mkt_restaurants")
+      .select("id")
+      .eq("slug", tenant.slug)
+      .maybeSingle();
+    if (restErr) return res.status(500).json({ error: "mkt_restaurants lookup: " + restErr.message });
+    if (!restaurant) return res.status(200).json({ transactions: [], count: 0, accounts: 0, note: "no matching mkt_restaurants slug=" + tenant.slug });
+
+    const restaurantId = restaurant.id;
+
     const { data: accounts, error: accErr } = await supabase
       .from("mkt_ad_accounts")
       .select("id, provider, account_name, currency, status")
-      .eq("restaurant_id", tenant_id)
-      .eq("status", "connected");
+      .eq("restaurant_id", restaurantId)
+      .in("status", ["connected", "error"]);
 
     if (accErr) return res.status(500).json({ error: "Failed to read ad accounts: " + accErr.message });
     if (!accounts || accounts.length === 0) {

@@ -9,7 +9,9 @@ import { createClient } from "@supabase/supabase-js";
 
 const HORIZON_DAYS = 14;            // upcoming window
 const NOSHOW_LOOKBACK_DAYS = 60;    // for no-show rate
-const TICKET_LOOKBACK_DAYS = 30;    // for avg ticket
+// avg_ticket source is currently unavailable — r7_snapshots is an inventory
+// snapshot table (label/counts JSONB), not Square POS revenue. When pos_orders
+// starts receiving data (Clariva POS launch), wire it back in here.
 
 function isoDateOffset(days) {
   const d = new Date();
@@ -38,10 +40,9 @@ export default async function handler(req, res) {
   const today = isoDateOffset(0);
   const horizonEnd = isoDateOffset(HORIZON_DAYS);
   const noShowStart = isoDateOffset(-NOSHOW_LOOKBACK_DAYS);
-  const ticketStart = isoDateOffset(-TICKET_LOOKBACK_DAYS);
 
   try {
-    const [upcomingRes, historicalRes, snapshotsRes] = await Promise.all([
+    const [upcomingRes, historicalRes] = await Promise.all([
       supabase
         .from("r7_reservations")
         .select("id, date, time, party_size, status")
@@ -57,21 +58,13 @@ export default async function handler(req, res) {
         .gte("date", noShowStart)
         .lt("date", today)
         .in("status", ["completed", "noshow", "cancelled"]),
-      supabase
-        .from("r7_snapshots")
-        .select("avg_ticket, net_sales, orders")
-        .eq("tenant_id", tenant_id)
-        .gte("date", ticketStart)
-        .lte("date", today),
     ]);
 
     if (upcomingRes.error)   return res.status(500).json({ error: "reservations upcoming: " + upcomingRes.error.message });
     if (historicalRes.error) return res.status(500).json({ error: "reservations history: " + historicalRes.error.message });
-    if (snapshotsRes.error)  return res.status(500).json({ error: "snapshots: " + snapshotsRes.error.message });
 
     const upcoming = upcomingRes.data || [];
     const history  = historicalRes.data || [];
-    const snaps    = snapshotsRes.data || [];
 
     // Upcoming demand by day
     const byDay = {};
@@ -91,16 +84,9 @@ export default async function handler(req, res) {
     const denominator = completed + noshow;
     const noShowRate = denominator > 0 ? noshow / denominator : 0;
 
-    // Avg ticket from snapshots: weighted by orders for accuracy
-    const totalOrders = snaps.reduce((s, x) => s + (parseInt(x.orders, 10) || 0), 0);
-    const totalNet    = snaps.reduce((s, x) => s + (parseFloat(x.net_sales) || 0), 0);
-    const avgTicket = totalOrders > 0 ? totalNet / totalOrders : 0;
-
-    // Project revenue: covers x avg_ticket x (1 - noShowRate)
     const next7Covers = byDayArr
       .filter(d => d.date <= isoDateOffset(7))
       .reduce((s, d) => s + d.covers, 0);
-    const projectedRevenue7d = next7Covers * avgTicket * (1 - noShowRate);
 
     return res.status(200).json({
       window: { start: today, end: horizonEnd, horizon_days: HORIZON_DAYS },
@@ -115,12 +101,8 @@ export default async function handler(req, res) {
         sample_size: denominator,
         lookback_days: NOSHOW_LOOKBACK_DAYS,
       },
-      avg_ticket: {
-        value: avgTicket,
-        based_on_orders: totalOrders,
-        lookback_days: TICKET_LOOKBACK_DAYS,
-      },
-      projected_revenue_7d: projectedRevenue7d,
+      avg_ticket: { value: 0, based_on_orders: 0, note: "no POS data source yet" },
+      projected_revenue_7d: 0,
     });
   } catch (err) {
     console.error("forecast-bookings unhandled:", err);
