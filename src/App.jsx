@@ -1155,7 +1155,7 @@ function PLReport({ transactions, categories, dateRange = {} }) {
       <div className="page-header">
         <div>
           <div className="page-title">Profit & Loss</div>
-          <div className="page-subtitle">{dateRange ? dateRange.start + " → " + dateRange.end : "January 2025"} · TorresBee</div>
+          <div className="page-subtitle">{dateRange.start} → {dateRange.end} · TorresBee</div>
         </div>
         <div className="flex gap-8">
           <div className="tabs" style={{ marginBottom: 0 }}>
@@ -1314,7 +1314,7 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
       <div className="page-header">
         <div>
           <div className="page-title">Cash Flow Statement</div>
-          <div className="page-subtitle">January 2025 · Direct Method</div>
+          <div className="page-subtitle">{dateRange.start} → {dateRange.end} · Direct Method</div>
         </div>
         <button className="btn btn-outline btn-sm"><Icon name="download" size={13} /> Export</button>
       </div>
