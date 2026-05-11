@@ -1544,6 +1544,7 @@ function Budget({ transactions, categories, budgets, setBudgets, saveBudget, sho
 
 // ─── TAX SUMMARY ──────────────────────────────────────────────────────────────
 function TaxSummary({ transactions, categories, dateRange = {} }) {
+  const fiscalYear = (dateRange.start || new Date().toISOString().slice(0, 10)).slice(0, 4);
   const byTaxLine = {};
   categories.forEach(c => {
     const total = transactions.filter(t => t.category === c.id).reduce((s, t) => s + t.amount, 0);
@@ -1568,7 +1569,7 @@ function TaxSummary({ transactions, categories, dateRange = {} }) {
     const csv = rows.map(r => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = "tax_summary_2025.csv"; a.click();
+    const a = document.createElement("a"); a.href = url; a.download = `tax_summary_${fiscalYear}.csv`; a.click();
   };
 
   return (
@@ -1576,7 +1577,7 @@ function TaxSummary({ transactions, categories, dateRange = {} }) {
       <div className="page-header">
         <div>
           <div className="page-title">Tax Summary</div>
-          <div className="page-subtitle">Schedule C · Fiscal Year 2025</div>
+          <div className="page-subtitle">Schedule C · Fiscal Year {fiscalYear}</div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={exportCSV}><Icon name="download" size={13} /> Export CSV</button>
       </div>
