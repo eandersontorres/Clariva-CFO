@@ -713,11 +713,20 @@ function Toast({ message, type = "info", onClose }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
+function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTransactions, dateRange = {} }) {
   const totalIncome = transactions.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalExpense = Math.abs(transactions.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
   const netIncome = totalIncome - totalExpense;
   const uncat = transactions.filter(t => t.category === UNCATEGORIZED).length;
+
+  // Bank account balances are computed from ALL transactions (not date-range
+  // filtered) because a balance is a point-in-time number, not a window total.
+  const activeAccounts = (bankAccounts || []).filter(a => a.status === "active");
+  const txnsForBalance = allTransactions || transactions;
+  const accountBalances = activeAccounts.map(a => ({ acc: a, balance: calculateAccountBalance(a, txnsForBalance) }));
+  const liquid = accountBalances.filter(x => ACCOUNT_TYPE_META[x.acc.type]?.liquid).reduce((s, x) => s + x.balance, 0);
+  const debt = accountBalances.filter(x => ACCOUNT_TYPE_META[x.acc.type]?.liability).reduce((s, x) => s + x.balance, 0);
+  const cashPosition = liquid + debt;
 
   // Expense by category
   const expByCat = {};
@@ -772,6 +781,51 @@ function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
           </div>
         </div>
       </div>
+
+      {activeAccounts.length > 0 && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+            <div>
+              <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Cash Position</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+                {activeAccounts.length} active account{activeAccounts.length === 1 ? "" : "s"} · point-in-time across all dates
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Liquid</div>
+                <div className="mono" style={{ fontSize: 14, color: "var(--accent)" }}>{fmt(liquid)}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Debt</div>
+                <div className="mono" style={{ fontSize: 14, color: debt < 0 ? "var(--red)" : "var(--text)" }}>{fmt(debt)}</div>
+              </div>
+              <div style={{ textAlign: "right", paddingLeft: 18, borderLeft: "1px solid var(--border2)" }}>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Net</div>
+                <div className="mono" style={{ fontSize: 18, color: cashPosition >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(cashPosition)}</div>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(activeAccounts.length, 4)}, 1fr)`, gap: 10 }}>
+            {accountBalances.slice(0, 4).map(({ acc, balance }) => {
+              const meta = ACCOUNT_TYPE_META[acc.type] || ACCOUNT_TYPE_META.other;
+              const utilization = (acc.type === "credit" && acc.credit_limit && parseFloat(acc.credit_limit) > 0)
+                ? (Math.abs(Math.min(balance, 0)) / parseFloat(acc.credit_limit)) * 100
+                : null;
+              return (
+                <div key={acc.id} style={{ background: "var(--surface2)", borderLeft: `3px solid ${meta.color}`, borderRadius: "var(--radius2)", padding: "10px 14px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 500 }}>{acc.name}</div>
+                  <div className="mono" style={{ fontSize: 16, marginTop: 4, color: balance >= 0 ? "var(--text)" : "var(--red)" }}>{fmt(balance)}</div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>
+                    {meta.label}
+                    {utilization != null && <span style={{ color: utilization > 70 ? "var(--red)" : utilization > 40 ? "var(--yellow)" : "var(--text3)", marginLeft: 6 }}>· {utilization.toFixed(0)}% used</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="grid-2 mt-4" style={{ marginBottom: 20 }}>
         <div className="card">
@@ -3676,7 +3730,7 @@ export default function App() {
     switch (screen) {
       case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
-      case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
+      case "dashboard":    return <Dashboard transactions={filteredByDate} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} recurring={recurring} bankAccounts={bankAccounts} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
