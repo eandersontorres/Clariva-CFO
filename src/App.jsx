@@ -200,6 +200,7 @@ const STYLES = `
   .items-center { align-items: center; }
   .justify-between { justify-content: space-between; }
   .gap-8 { gap: 8px; }
+  .gap-10 { gap: 10px; }
   .gap-12 { gap: 12px; }
   .gap-16 { gap: 16px; }
   .gap-20 { gap: 20px; }
