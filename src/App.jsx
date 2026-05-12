@@ -382,6 +382,37 @@ function expandDateRangeIfNeeded(imported, dateRange, setDateRange) {
   }
 }
 
+// ─── INTERNAL TRANSFER DETECTION ──────────────────────────────────────────────
+// A transfer between your own accounts (Checking -> Savings, payment of credit
+// card from checking) shows up in the ledger as two transactions: one negative
+// in the source account, one positive in the destination. They cancel out at
+// the entity level, so counting them as income/expense double-inflates both.
+// We pair them when: opposite signs, matching absolute amount, different
+// account_id, and dates within 2 days. Skip ambiguous matches (>1 candidate).
+function detectTransferPairs(transactions) {
+  const pairs = new Map();
+  const candidates = (transactions || []).filter(t => t.account_id && !isNaN(parseFloat(t.amount)));
+  const negatives = candidates.filter(t => parseFloat(t.amount) < 0);
+  const positives = candidates.filter(t => parseFloat(t.amount) > 0);
+  const dayMs = 24 * 60 * 60 * 1000;
+  for (const neg of negatives) {
+    if (pairs.has(neg.id)) continue;
+    const negAmt = parseFloat(neg.amount);
+    const negDate = new Date(neg.date).getTime();
+    const matches = positives.filter(p =>
+      !pairs.has(p.id) &&
+      p.account_id !== neg.account_id &&
+      Math.abs(parseFloat(p.amount) + negAmt) < 0.01 &&
+      Math.abs(new Date(p.date).getTime() - negDate) <= 2 * dayMs
+    );
+    if (matches.length === 1) {
+      pairs.set(neg.id, matches[0].id);
+      pairs.set(matches[0].id, neg.id);
+    }
+  }
+  return pairs;
+}
+
 // ─── BANK ACCOUNT LINK ────────────────────────────────────────────────────────
 // Imports arrive with an "account" display string (e.g. "Checking ••4821" from
 // the BoA parser) but no account_id. Once the user has registered Bank Accounts
@@ -714,10 +745,15 @@ function Toast({ message, type = "info", onClose }) {
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTransactions, dateRange = {} }) {
-  const totalIncome = transactions.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-  const totalExpense = Math.abs(transactions.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
+  // Detect internal transfers across ALL transactions (not just the date window)
+  // so a transfer that straddles a date boundary still pairs correctly.
+  const transferPairs = detectTransferPairs(allTransactions || transactions);
+  const realTxns = transactions.filter(t => !transferPairs.has(t.id));
+  const transferCount = transactions.filter(t => transferPairs.has(t.id)).length;
+  const totalIncome = realTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const totalExpense = Math.abs(realTxns.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
   const netIncome = totalIncome - totalExpense;
-  const uncat = transactions.filter(t => t.category === UNCATEGORIZED).length;
+  const uncat = realTxns.filter(t => t.category === UNCATEGORIZED).length;
 
   // Bank account balances are computed from ALL transactions (not date-range
   // filtered) because a balance is a point-in-time number, not a window total.
@@ -728,9 +764,9 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
   const debt = accountBalances.filter(x => ACCOUNT_TYPE_META[x.acc.type]?.liability).reduce((s, x) => s + x.balance, 0);
   const cashPosition = liquid + debt;
 
-  // Expense by category
+  // Expense by category (transfers already excluded via realTxns)
   const expByCat = {};
-  transactions.filter(t => t.amount < 0).forEach(t => {
+  realTxns.filter(t => t.amount < 0).forEach(t => {
     expByCat[t.category] = (expByCat[t.category] || 0) + Math.abs(t.amount);
   });
   const catItems = Object.entries(expByCat)
@@ -750,7 +786,10 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
       <div className="page-header">
         <div>
           <div className="page-title">Overview</div>
-          <div className="page-subtitle">{dateRange ? dateRange.start + " → " + dateRange.end : ""} · TorresBee</div>
+          <div className="page-subtitle">
+            {dateRange ? dateRange.start + " → " + dateRange.end : ""} · TorresBee
+            {transferCount > 0 && <span style={{ marginLeft: 8, color: "var(--text3)" }}>· {transferCount} internal transfer{transferCount === 1 ? "" : "s"} excluded</span>}
+          </div>
         </div>
         <div className="flex gap-8">
           <button className="btn btn-outline btn-sm"><Icon name="download" size={13} /> Export</button>
@@ -904,6 +943,8 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
   const [search, setSearch] = useState("");
   const [drag, setDrag] = useState(false);
   const fileRef = useRef();
+
+  const transferPairs = detectTransferPairs(allTransactions || transactions);
 
   const filtered = transactions.filter(t => {
     if (filter === "income" && t.amount < 0) return false;
@@ -1085,6 +1126,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                   <td style={{ maxWidth: 280 }}><div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.description}</div></td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {transferPairs.has(t.id) && <span title="Internal transfer between your own accounts — excluded from income/expense totals" style={{ fontSize: 10, fontFamily: "DM Mono", padding: "2px 6px", borderRadius: 4, background: "var(--blueBg)", color: "var(--blue)", border: "1px solid var(--blue)40" }}>↔ Internal</span>}
                       {t.autoCategorized && <span className="auto-cat-badge" title="Auto-categorized from history — change to confirm">✨</span>}
                       <select className={`cat-select${t.autoCategorized ? " auto-cat" : ""}`} value={t.category} onChange={e => updateCategory(t.id, e.target.value)}>
                         {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
