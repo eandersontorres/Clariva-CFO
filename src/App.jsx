@@ -382,6 +382,28 @@ function expandDateRangeIfNeeded(imported, dateRange, setDateRange) {
   }
 }
 
+// ─── BANK ACCOUNT LINK ────────────────────────────────────────────────────────
+// Imports arrive with an "account" display string (e.g. "Checking ••4821" from
+// the BoA parser) but no account_id. Once the user has registered Bank Accounts
+// we can wire account_id automatically: exact name match first, then a fallback
+// on the last 4 digits — handles "Checking ••4821" vs. "Checking ...4821" drift.
+function linkAccountId(txn, accounts) {
+  if (txn.account_id || !txn.account || !accounts || accounts.length === 0) return txn;
+  const direct = accounts.find(a => a.name === txn.account);
+  if (direct) return { ...txn, account_id: direct.id };
+  const last4 = (txn.account.match(/(\d{4})/) || [])[1];
+  if (last4) {
+    const byLast4 = accounts.find(a => a.name.includes(last4));
+    if (byLast4) return { ...txn, account_id: byLast4.id };
+  }
+  return txn;
+}
+
+function applyAccountLink(transactions, accounts) {
+  if (!accounts || accounts.length === 0) return transactions;
+  return transactions.map(t => linkAccountId(t, accounts));
+}
+
 // ─── RECURRING MATCH ──────────────────────────────────────────────────────────
 function matchRecurring(txn, rules) {
   if (!rules || rules.length === 0 || !txn.description) return null;
@@ -822,7 +844,7 @@ function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
 }
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, categories, recurring, dateRange, setDateRange, showToast }) {
+function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, categories, recurring, bankAccounts, dateRange, setDateRange, showToast }) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [drag, setDrag] = useState(false);
@@ -868,14 +890,16 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           showToast("No transactions found in PDF.", "error");
           return;
         }
-        const matched = applyRecurringMatch(rawImported, recurring);
+        const linked = applyAccountLink(rawImported, bankAccounts);
+        const matched = applyRecurringMatch(linked, recurring);
         const imported = applyAutoCategorize(matched, allTransactions || transactions);
         expandDateRangeIfNeeded(imported, dateRange, setDateRange);
         setTransactions(prev => [...imported, ...prev]);
         if (saveTransactions) saveTransactions(imported);
+        const acctCount = imported.filter(t => t.account_id).length;
         const recCount = imported.filter(t => t.recurring_id).length;
         const autoCount = imported.filter(t => t.autoCategorized).length;
-        const tags = [recCount && `${recCount} matched recurring`, autoCount && `${autoCount} auto-categorized`].filter(Boolean).join(" · ");
+        const tags = [acctCount && `${acctCount} linked to accounts`, recCount && `${recCount} matched recurring`, autoCount && `${autoCount} auto-categorized`].filter(Boolean).join(" · ");
         showToast(imported.length + " transactions extracted" + (tags ? ` · ${tags}` : ""), "success");
       } catch (err) {
         showToast("PDF import failed: " + err.message, "error");
@@ -896,14 +920,16 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         rawParsed = parseBoACSV(text);
       }
       if (rawParsed.length === 0) { showToast("No transactions found in file. Check the format.", "error"); return; }
-      const matched = applyRecurringMatch(rawParsed, recurring);
+      const linked = applyAccountLink(rawParsed, bankAccounts);
+      const matched = applyRecurringMatch(linked, recurring);
       const parsed = applyAutoCategorize(matched, allTransactions || transactions);
       expandDateRangeIfNeeded(parsed, dateRange, setDateRange);
       setTransactions(prev => [...parsed, ...prev]);
       if (saveTransactions) saveTransactions(parsed);
+      const acctCount = parsed.filter(t => t.account_id).length;
       const recCount = parsed.filter(t => t.recurring_id).length;
       const autoCount = parsed.filter(t => t.autoCategorized).length;
-      const tags = [recCount && `${recCount} matched recurring`, autoCount && `${autoCount} auto-categorized`].filter(Boolean).join(" · ");
+      const tags = [acctCount && `${acctCount} linked to accounts`, recCount && `${recCount} matched recurring`, autoCount && `${autoCount} auto-categorized`].filter(Boolean).join(" · ");
       showToast(parsed.length + " transactions imported" + (tags ? ` · ${tags}` : ""), "success");
     };
     reader.readAsText(file);
@@ -3572,8 +3598,9 @@ export default function App() {
 
   // ── Kitchen sync handler ────────────────────────────────────
   const handleKitchenSync = async (imported) => {
+    const linked = applyAccountLink(imported, bankAccounts);
     const existingIds = new Set(transactions.map(t => t.id));
-    const newOnes = imported.filter(t => !existingIds.has(t.id));
+    const newOnes = linked.filter(t => !existingIds.has(t.id));
     if (newOnes.length > 0) {
       setTransactions(prev => [...newOnes, ...prev]);
       await saveTransactions(newOnes);
@@ -3586,7 +3613,8 @@ export default function App() {
   // IDs are deterministic (per ad_account x month) so repeated syncs upsert
   // the same row — first sync creates, follow-ups refresh the amount.
   const handleMarketingSync = async (imported) => {
-    const matched = applyRecurringMatch(imported, recurring);
+    const linked = applyAccountLink(imported, bankAccounts);
+    const matched = applyRecurringMatch(linked, recurring);
     const enriched = applyAutoCategorize(matched, transactions);
     const existingMap = new Map(transactions.map(t => [t.id, t]));
     const fresh = enriched.filter(t => !existingMap.has(t.id));
@@ -3635,7 +3663,7 @@ export default function App() {
       case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} categories={categories} budgets={budgets} dateRange={dateRange} />;
-      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} recurring={recurring} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
+      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} recurring={recurring} bankAccounts={bankAccounts} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
