@@ -846,6 +846,7 @@ function Dashboard({ transactions, categories, budgets, dateRange = {} }) {
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
 function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, categories, recurring, bankAccounts, dateRange, setDateRange, showToast }) {
   const [filter, setFilter] = useState("all");
+  const [accountFilter, setAccountFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [drag, setDrag] = useState(false);
   const fileRef = useRef();
@@ -854,6 +855,11 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     if (filter === "income" && t.amount < 0) return false;
     if (filter === "expense" && t.amount > 0) return false;
     if (filter === "uncat" && t.category !== UNCATEGORIZED) return false;
+    if (accountFilter !== "all") {
+      const acc = (bankAccounts || []).find(a => a.id === accountFilter);
+      if (!acc) return false;
+      if (t.account_id !== acc.id && t.account !== acc.name) return false;
+    }
     if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
@@ -1001,6 +1007,14 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
             </div>
           ))}
         </div>
+        {bankAccounts && bankAccounts.length > 0 && (
+          <select className="input" style={{ maxWidth: 200, fontSize: 12 }} value={accountFilter} onChange={e => setAccountFilter(e.target.value)}>
+            <option value="all">All accounts</option>
+            {bankAccounts.filter(a => a.status === "active").map(a => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        )}
         <input className="input" style={{ maxWidth: 240 }} placeholder="Search transactions..." value={search} onChange={e => setSearch(e.target.value)} />
       </div>
 
