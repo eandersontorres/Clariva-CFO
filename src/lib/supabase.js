@@ -32,6 +32,7 @@ export async function upsertTransactions(rows, tenantId) {
     account_id: t.account_id || t.accountId || null,
     account: t.account || 'Imported',
     reconciled: t.reconciled || false,
+    prior_period: t.prior_period || t.priorPeriod || false,
     source: t.source || 'manual',
     notes: t.notes || '',
   }))

@@ -409,6 +409,23 @@ function expandDateRangeIfNeeded(imported, dateRange, setDateRange) {
   }
 }
 
+// ─── ACCRUAL DATE ─────────────────────────────────────────────────────────────
+// For transactions Anderson flags as "prior period" (e.g. payroll earned in Dec
+// but cleared in Jan), reports that track operational performance (P&L, Tax
+// Summary, Insights) want the expense in the period it was *earned*, not paid.
+// Cash Flow, account balance, and the transaction date itself stay on the
+// actual payment date. accrualDate(t) returns the date the row should land on
+// for accrual-style reports.
+function accrualDate(t) {
+  if (!t || !t.date) return t?.date;
+  if (!t.prior_period) return t.date;
+  const [y, m] = t.date.split("-").map(s => parseInt(s, 10));
+  // Last day of (month - 1). new Date(year, month, 0) gives the last day of
+  // the previous month because month is 0-indexed and day=0 rolls back one.
+  const lastDay = new Date(y, m - 1, 0);
+  return lastDay.toISOString().slice(0, 10);
+}
+
 // ─── INTERNAL TRANSFER DETECTION ──────────────────────────────────────────────
 // A transfer between your own accounts (Checking -> Savings, payment of credit
 // card from checking) shows up in the ledger as two transactions: one negative
@@ -1181,6 +1198,14 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     showToast(`${ids.size} transaction${ids.size === 1 ? "" : "s"} linked to ${acc.name}`, "success");
   };
 
+  const togglePriorPeriod = (id) => {
+    setTransactions(prev => {
+      const updated = prev.map(t => t.id === id ? { ...t, prior_period: !t.prior_period } : t);
+      if (saveTransactions) { const changed = updated.filter(t => t.id === id); saveTransactions(changed); }
+      return updated;
+    });
+  };
+
   const removeTransaction = async (id) => {
     if (!window.confirm("Delete this transaction? It will be removed from the ledger permanently.")) return;
     setTransactions(prev => prev.filter(t => t.id !== id));
@@ -1298,6 +1323,21 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                   <td style={{ maxWidth: 280 }}><div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.description}</div></td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button
+                        type="button"
+                        onClick={() => togglePriorPeriod(t.id)}
+                        title={t.prior_period
+                          ? `P&L counts this in ${accrualDate(t).slice(0, 7)} (prior-period flag on) — click to clear`
+                          : "Flag as prior-period: P&L/Tax shift this row to the last day of the previous month. Cash Flow stays on the actual date."}
+                        style={{
+                          fontSize: 11, fontFamily: "DM Mono", padding: "2px 6px",
+                          borderRadius: 4, cursor: "pointer", lineHeight: 1,
+                          background: t.prior_period ? "var(--yellowBg)" : "transparent",
+                          color: t.prior_period ? "var(--yellow)" : "var(--text3)",
+                          border: t.prior_period ? "1px solid var(--yellow)40" : "1px solid transparent",
+                          opacity: t.prior_period ? 1 : 0.45,
+                        }}
+                      >↩</button>
                       {transferPairs.has(t.id) && <span title="Internal transfer between your own accounts — excluded from income/expense totals" style={{ fontSize: 10, fontFamily: "DM Mono", padding: "2px 6px", borderRadius: 4, background: "var(--blueBg)", color: "var(--blue)", border: "1px solid var(--blue)40" }}>↔ Internal</span>}
                       {t.autoCategorized && <span className="auto-cat-badge" title="Auto-categorized from history — change to confirm">✨</span>}
                       <select className={`cat-select${t.autoCategorized ? " auto-cat" : ""}`} value={t.category} onChange={e => updateCategory(t.id, e.target.value)}>
@@ -3853,7 +3893,7 @@ export default function App() {
       // async upsertTransactions round-trip yet — exactly what happens when
       // categorising one row triggers a realtime push that fires loadAll
       // before the bulk save settles.
-      const mappedTxns = txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null, account_id: t.account_id || null }));
+      const mappedTxns = txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null, account_id: t.account_id || null, prior_period: t.prior_period || false }));
       setTransactions(prev => {
         if (mappedTxns.length === 0) return prev;
         const dbIds = new Set(mappedTxns.map(t => t.id));
@@ -4008,6 +4048,13 @@ export default function App() {
 
   // ── Filter transactions by date range ──────────────────────
   const filteredByDate = transactions.filter(t => t.date >= dateRange.start && t.date <= dateRange.end);
+  // Same window but using the accrual date — used by reports that should show
+  // operational performance per period (P&L, Tax Summary). A row flagged as
+  // prior_period gets pulled back into the previous month via accrualDate().
+  const filteredByAccrual = transactions.filter(t => {
+    const d = accrualDate(t);
+    return d >= dateRange.start && d <= dateRange.end;
+  });
   const uncat = filteredByDate.filter(t => t.category === UNCATEGORIZED || !t.category).length;
 
   const NAV = [
@@ -4033,14 +4080,14 @@ export default function App() {
       case "dashboard":    return <Dashboard transactions={filteredByDate} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
-      case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
+      case "pl":           return <PLReport transactions={filteredByAccrual} categories={categories} dateRange={dateRange} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
       case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
       case "accounts":     return <BankAccounts accounts={bankAccounts} setAccounts={setBankAccounts} saveBankAccount={saveBankAccount} deleteAcc={async(id)=>{setBankAccounts(p=>p.filter(a=>a.id!==id));if(TENANT_ID!=="demo")await deleteBankAccount(id);}} transactions={transactions} showToast={showToast} />;
       case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} showToast={showToast} />;
-      case "tax":          return <TaxSummary transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
+      case "tax":          return <TaxSummary transactions={filteredByAccrual} categories={categories} dateRange={dateRange} />;
       default: return null;
     }
   };
