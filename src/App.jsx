@@ -2042,25 +2042,85 @@ function TaxSummary({ transactions, categories, dateRange = {} }) {
 }
 
 // ─── RECONCILIATION ───────────────────────────────────────────────────────────
-function Reconciliation({ transactions, categories, showToast }) {
-  const unreconciled = transactions.filter(t => !t.reconciled && t.amount < 0);
+function Reconciliation({ transactions, setTransactions, saveTransactions, categories, tenantId, dateRange, showToast }) {
+  const [kitchenInvoices, setKitchenInvoices] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  // Mock invoices from Clariva Kitchen
-  const mockInvoices = [
-    { id: "inv1", vendor: "SYSCO FOODS", date: "2025-01-03", amount: 2340.50, status: "pending" },
-    { id: "inv2", vendor: "US FOODS INC", date: "2025-01-10", amount: 1890.00, status: "pending" },
-    { id: "inv3", vendor: "SYSCO FOODS", date: "2025-01-20", amount: 1980.00, status: "pending" },
-  ];
+  // Pull real invoices from Clariva Kitchen (r7_purchases) for the current window.
+  // The mock list this used to render was already stale by the time the screen
+  // shipped; nothing here should fall back to fixtures in production.
+  useEffect(() => {
+    if (!tenantId || tenantId === "demo") return;
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([
+      fetchKitchenPurchases(tenantId, dateRange),
+      fetchKitchenVendors(tenantId),
+    ]).then(([purchases, vendors]) => {
+      if (cancelled) return;
+      const vendorMap = Object.fromEntries((vendors || []).map(v => [v.id, v.name]));
+      const invoices = (purchases || []).map(p => ({
+        id: p.id,
+        vendor: (vendorMap[p.vendor_id] || "VENDOR " + (p.vendor_id || "").slice(0, 8)).toUpperCase(),
+        date: p.date,
+        amount: Math.abs(parseFloat(p.total) || 0),
+        status: p.status,
+        kitchenTxnId: "kitchen_purchase_" + p.id,
+      }));
+      setKitchenInvoices(invoices);
+    }).catch(err => {
+      console.error("Reconciliation kitchen fetch failed:", err);
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [tenantId, dateRange?.start, dateRange?.end]);
 
-  // Find matching transactions
-  const findMatch = (inv) => unreconciled.find(t => Math.abs(Math.abs(t.amount) - inv.amount) < 1 && Math.abs(new Date(t.date) - new Date(inv.date)) < 3 * 86400000);
+  // Bank-side rows are unreconciled outflows from any source that ISN'T a
+  // Kitchen purchase shadow — the real card/check that hit the bank.
+  const unreconciled = transactions.filter(t =>
+    !t.reconciled && t.amount < 0 && t.source !== "kitchen_purchase"
+  );
+
+  // Match heuristic: amount within $1, dates within 5 days, vendor name appears
+  // in the bank description (case-insensitive). The Kitchen-side row that was
+  // already synced into the ledger is ignored — we only want bank-side matches.
+  const findMatch = (inv) => {
+    const invTime = new Date(inv.date).getTime();
+    return unreconciled.find(t => {
+      if (Math.abs(Math.abs(t.amount) - inv.amount) > 1) return false;
+      if (Math.abs(new Date(t.date).getTime() - invTime) > 5 * 86400000) return false;
+      const desc = (t.description || "").toUpperCase();
+      const vendor = inv.vendor || "";
+      // Soften the vendor check: any token of length >= 4 from vendor must
+      // appear in description (handles "SYSCO" matching "SYSCO FOODS USA").
+      const tokens = vendor.split(/\s+/).filter(w => w.length >= 4);
+      return tokens.length === 0 || tokens.some(w => desc.includes(w));
+    });
+  };
+
+  const markReconciled = async (txnId, invoice) => {
+    setTransactions(prev => {
+      const updated = prev.map(t => t.id === txnId
+        ? { ...t, reconciled: true, notes: t.notes ? `${t.notes} · matched ${invoice.vendor} ${invoice.date}` : `Matched ${invoice.vendor} invoice ${invoice.date}` }
+        : t);
+      if (saveTransactions) {
+        const changed = updated.filter(t => t.id === txnId);
+        saveTransactions(changed);
+      }
+      return updated;
+    });
+    showToast(`Reconciled with ${invoice.vendor}`, "success");
+  };
+
+  const autoMatched = kitchenInvoices.filter(inv => findMatch(inv)).length;
 
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <div className="page-title">Reconciliation</div>
-          <div className="page-subtitle">Match bank transactions with vendor invoices</div>
+          <div className="page-subtitle">{dateRange?.start} → {dateRange?.end} · Kitchen invoices ↔ bank transactions</div>
         </div>
       </div>
 
@@ -2071,23 +2131,30 @@ function Reconciliation({ transactions, categories, showToast }) {
         </div>
         <div className="kpi-card kpi-red">
           <div className="kpi-label">Pending Invoices</div>
-          <div className="kpi-value">{mockInvoices.length}</div>
+          <div className="kpi-value">{kitchenInvoices.length}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>{loading ? "loading…" : "from Clariva Kitchen"}</div>
         </div>
         <div className="kpi-card kpi-accent">
           <div className="kpi-label">Auto-Matched</div>
-          <div className="kpi-value">{mockInvoices.filter(i => findMatch(i)).length}</div>
+          <div className="kpi-value">{autoMatched}</div>
         </div>
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Invoice ↔ Bank Match</div>
-        {mockInvoices.map(inv => {
+        {kitchenInvoices.length === 0 ? (
+          <div className="empty" style={{ padding: 30 }}>
+            <div className="empty-icon">📭</div>
+            <div className="empty-title">{loading ? "Loading invoices…" : "No Kitchen invoices in this date range"}</div>
+            <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Scan invoices in Clariva Kitchen or expand the date range</div>
+          </div>
+        ) : kitchenInvoices.map(inv => {
           const match = findMatch(inv);
           return (
             <div key={inv.id} className="recon-row">
               <div className="recon-card">
                 <div className="desc">📄 {inv.vendor}</div>
-                <div className="meta">{fmtDate(inv.date)} · Invoice · {fmt(inv.amount)}</div>
+                <div className="meta">{fmtDate(inv.date)} · {inv.status || "pending"} · {fmt(inv.amount)}</div>
               </div>
               <div className="recon-arrow">{match ? "⇆" : "?"}</div>
               <div className="recon-card" style={{ borderColor: match ? "var(--accentBorder)" : "var(--border)" }}>
@@ -2095,6 +2162,9 @@ function Reconciliation({ transactions, categories, showToast }) {
                   <>
                     <div className="desc" style={{ color: "var(--accent)" }}>🏦 {match.description}</div>
                     <div className="meta">{fmtDate(match.date)} · {match.account} · {fmt(Math.abs(match.amount))}</div>
+                    <button className="btn btn-sm" style={{ marginTop: 8, background: "var(--accentBg)", color: "var(--accent)", border: "1px solid var(--accentBorder)", fontSize: 11 }} onClick={() => markReconciled(match.id, inv)}>
+                      Mark reconciled
+                    </button>
                   </>
                 ) : (
                   <div style={{ color: "var(--text3)", fontSize: 12, fontFamily: "DM Mono" }}>No match found — review manually</div>
@@ -4086,7 +4156,7 @@ export default function App() {
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
       case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
       case "accounts":     return <BankAccounts accounts={bankAccounts} setAccounts={setBankAccounts} saveBankAccount={saveBankAccount} deleteAcc={async(id)=>{setBankAccounts(p=>p.filter(a=>a.id!==id));if(TENANT_ID!=="demo")await deleteBankAccount(id);}} transactions={transactions} showToast={showToast} />;
-      case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} showToast={showToast} />;
+      case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} showToast={showToast} />;
       case "tax":          return <TaxSummary transactions={filteredByAccrual} categories={categories} dateRange={dateRange} />;
       default: return null;
     }
