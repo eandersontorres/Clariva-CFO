@@ -556,7 +556,15 @@ function parseBoACSV(text) {
 
       let amount = NaN;
       if (amountIdx >= 0) {
-        amount = parseFloat((cols[amountIdx] || '').replace(/[$,\s]/g, ''));
+        amount = parseFloat((cols[amountIdx] || '').replace(/[$,\s()]/g, ''));
+        // Multi-cardholder credit-card exports list every charge as a positive
+        // number ("$133.82"). For the ledger these are expenses and have to be
+        // negative. Detect the format via the CardHolder Name column and flip
+        // the sign; refunds/credits show up in real life as parenthesised or
+        // explicitly-negative values, both of which already arrived negative.
+        if (cardHolderIdx >= 0 && !isNaN(amount) && amount > 0) {
+          amount = -amount;
+        }
       } else if (debitIdx >= 0 || creditIdx >= 0) {
         const debit  = parseFloat((cols[debitIdx]  || '').replace(/[$,\s]/g, '')) || 0;
         const credit = parseFloat((cols[creditIdx] || '').replace(/[$,\s]/g, '')) || 0;
