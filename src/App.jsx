@@ -496,11 +496,84 @@ function applyRecurringMatch(imported, rules) {
 
 function parseBoACSV(text) {
   const lines = text.split('\n').map(l => l.replace('\r', '')).filter(l => l.trim());
+  if (lines.length === 0) return [];
+
+  // Detect the header row by looking for a line that mentions both a date column
+  // and at least one money column. Handles BoA's plain export (Date / Description /
+  // Amount) and the multi-cardholder format (Date / CardHolder Name / Account/Card
+  // Number / Description / Amount or Debit/Credit). Skips preamble rows like
+  // "Total credits / Total debits" that appear above the real header.
+  let headerIdx = -1;
+  let headers = [];
+  for (let i = 0; i < Math.min(lines.length, 30); i++) {
+    const cols = parseCSVLine(lines[i]).map(c => c.trim().toLowerCase());
+    const hasDate = cols.some(c => c.includes('date'));
+    const hasMoney = cols.some(c => c === 'amount' || c.includes('debit') || c.includes('credit'));
+    if (hasDate && hasMoney && cols.length >= 3) {
+      headerIdx = i;
+      headers = cols;
+      break;
+    }
+  }
+
+  const find = (...needles) => headers.findIndex(h => needles.some(n => h.includes(n)));
   const txns = [];
+
+  if (headerIdx >= 0) {
+    const dateIdx       = find('posted date', 'date');
+    const descIdx       = find('description', 'merchant', 'payee');
+    const cardHolderIdx = find('cardholder');
+    const last4Idx      = find('account/card', 'last 4', 'card number');
+    const amountIdx     = find('amount');
+    const debitIdx      = find('debit');
+    const creditIdx     = find('credit');
+
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+      const cols = parseCSVLine(lines[i]);
+      if (cols.length < Math.max(dateIdx, 1) + 1) continue;
+      const dateStr = (cols[dateIdx] || '').trim();
+      if (!dateStr) continue;
+      let parsedDate;
+      try { const d = new Date(dateStr); if (isNaN(d.getTime())) continue; parsedDate = d.toISOString().split('T')[0]; }
+      catch { continue; }
+
+      let amount = NaN;
+      if (amountIdx >= 0) {
+        amount = parseFloat((cols[amountIdx] || '').replace(/[$,\s]/g, ''));
+      } else if (debitIdx >= 0 || creditIdx >= 0) {
+        const debit  = parseFloat((cols[debitIdx]  || '').replace(/[$,\s]/g, '')) || 0;
+        const credit = parseFloat((cols[creditIdx] || '').replace(/[$,\s]/g, '')) || 0;
+        amount = credit - debit;
+      }
+      if (isNaN(amount) || amount === 0) continue;
+
+      const desc = ((cols[descIdx] || '') || (cols[cardHolderIdx] || '')).trim();
+      const cardHolder = (cols[cardHolderIdx] || '').trim();
+      const last4 = (cols[last4Idx] || '').trim().match(/\d{4}/)?.[0] || '';
+
+      let account = 'Imported · BoA';
+      if (cardHolder && last4) account = cardHolder.toUpperCase() + ' – ' + last4;
+      else if (cardHolder)     account = cardHolder.toUpperCase();
+      else if (last4)          account = 'Card ' + last4;
+
+      txns.push({
+        id: 'csv_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2,5),
+        date: parsedDate,
+        description: desc.toUpperCase().slice(0, 80),
+        amount,
+        account,
+        category_id: null,
+        category: UNCATEGORIZED,
+        reconciled: false,
+        source: 'csv',
+      });
+    }
+    return txns;
+  }
+
+  // Legacy fallback: no recognizable header — assume positional date, desc, amount.
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const cols = parseCSVLine(line);
+    const cols = parseCSVLine(lines[i]);
     if (cols.length < 3) continue;
     const first = cols[0].toLowerCase();
     if (first === 'date' || first === 'posted date' || first.startsWith('account')) continue;
