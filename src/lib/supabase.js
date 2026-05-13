@@ -18,9 +18,9 @@ export async function fetchTransactions(tenantId, { start, end } = {}) {
 }
 
 export async function upsertTransactions(rows, tenantId) {
-  if (!rows || rows.length === 0) return true
+  if (!rows || rows.length === 0) return { ok: true, saved: 0 }
   const tid = tenantId || TENANT()
-  if (tid === 'demo') return true
+  if (tid === 'demo') return { ok: true, saved: rows.length, demo: true }
   const mapped = rows.map(t => ({
     id: t.id,
     tenant_id: tid,
@@ -35,9 +35,12 @@ export async function upsertTransactions(rows, tenantId) {
     source: t.source || 'manual',
     notes: t.notes || '',
   }))
-  const { error } = await supabase.from('r7_ledger_transactions').upsert(mapped, { onConflict: 'id' })
-  if (error) console.error('upsertTransactions', error)
-  return !error
+  const { data, error } = await supabase.from('r7_ledger_transactions').upsert(mapped, { onConflict: 'id' }).select('id')
+  if (error) {
+    console.error('upsertTransactions', error, { firstRow: mapped[0] })
+    return { ok: false, saved: 0, error: error.message || String(error), rows: rows.length }
+  }
+  return { ok: true, saved: (data || []).length }
 }
 
 export async function deleteTransaction(id) {

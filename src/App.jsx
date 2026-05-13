@@ -3919,9 +3919,19 @@ export default function App() {
   }, [loadAll]);
 
   // ── Save helpers ────────────────────────────────────────────
+  // Bubble the supabase error up to the UI so silent failures during an
+  // import stop being invisible. Anderson saw 50 imported rows survive in the
+  // client but only 2 actually persisted — the rest were rejected by Postgres
+  // and the toast layer never knew.
   const saveTransactions = async (txns) => {
-    if (TENANT_ID === "demo") return;
-    await upsertTransactions(txns, TENANT_ID);
+    if (TENANT_ID === "demo") return { ok: true, saved: txns.length, demo: true };
+    const result = await upsertTransactions(txns, TENANT_ID);
+    if (!result.ok) {
+      showToast(`Save failed: ${result.error || "unknown error"} (${result.rows || txns.length} rows lost)`, "error");
+    } else if (txns.length > 1 && result.saved < txns.length) {
+      showToast(`Saved ${result.saved} of ${txns.length} — ${txns.length - result.saved} rejected by the database`, "error");
+    }
+    return result;
   };
 
   const saveCategory = async (cat) => {
