@@ -979,7 +979,9 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     if (filter === "income" && t.amount < 0) return false;
     if (filter === "expense" && t.amount > 0) return false;
     if (filter === "uncat" && t.category !== UNCATEGORIZED) return false;
-    if (accountFilter !== "all") {
+    if (accountFilter === "unassigned") {
+      if (t.account_id) return false;
+    } else if (accountFilter !== "all") {
       const acc = (bankAccounts || []).find(a => a.id === accountFilter);
       if (!acc) return false;
       if (t.account_id !== acc.id && t.account !== acc.name) return false;
@@ -1081,6 +1083,31 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     });
   };
 
+  const updateAccountLink = (id, accountId) => {
+    setTransactions(prev => {
+      const updated = prev.map(t => t.id === id ? { ...t, account_id: accountId || null } : t);
+      if (saveTransactions) { const changed = updated.filter(t => t.id === id); saveTransactions(changed); }
+      return updated;
+    });
+  };
+
+  const linkFilteredToAccount = async (accountId) => {
+    if (!accountId || filtered.length === 0) return;
+    const acc = (bankAccounts || []).find(a => a.id === accountId);
+    if (!acc) return;
+    if (!window.confirm(`Link ${filtered.length} filtered transaction${filtered.length === 1 ? "" : "s"} to "${acc.name}"?`)) return;
+    const ids = new Set(filtered.map(t => t.id));
+    setTransactions(prev => {
+      const updated = prev.map(t => ids.has(t.id) ? { ...t, account_id: accountId } : t);
+      if (saveTransactions) {
+        const changed = updated.filter(t => ids.has(t.id));
+        saveTransactions(changed);
+      }
+      return updated;
+    });
+    showToast(`${ids.size} transaction${ids.size === 1 ? "" : "s"} linked to ${acc.name}`, "success");
+  };
+
   const removeTransaction = async (id) => {
     if (!window.confirm("Delete this transaction? It will be removed from the ledger permanently.")) return;
     setTransactions(prev => prev.filter(t => t.id !== id));
@@ -1116,6 +1143,20 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           <div className="page-subtitle">{transactions.length} transactions · {transactions.filter(t => t.category === UNCATEGORIZED).length} uncategorized</div>
         </div>
         <div className="flex gap-8">
+          {bankAccounts && bankAccounts.length > 0 && (filter !== "all" || accountFilter !== "all" || search) && filtered.length > 0 && (
+            <select
+              className="btn btn-outline btn-sm"
+              style={{ color: "var(--accent)", borderColor: "var(--accentBorder)", paddingRight: 24 }}
+              value=""
+              onChange={e => { if (e.target.value) linkFilteredToAccount(e.target.value); e.target.value = ""; }}
+              title="Bulk-assign these filtered transactions to a bank account"
+            >
+              <option value="">Link filtered to… ({filtered.length})</option>
+              {bankAccounts.filter(a => a.status === "active").map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          )}
           {(filter !== "all" || accountFilter !== "all" || search) && filtered.length > 0 && (
             <button className="btn btn-outline btn-sm" style={{ color: "var(--red)", borderColor: "rgba(192,97,74,0.3)" }} onClick={removeFiltered} title="Delete every transaction currently visible in the table">
               <Icon name="trash" size={13} /> Delete filtered ({filtered.length})
@@ -1162,6 +1203,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         {bankAccounts && bankAccounts.length > 0 && (
           <select className="input" style={{ maxWidth: 200, fontSize: 12 }} value={accountFilter} onChange={e => setAccountFilter(e.target.value)}>
             <option value="all">All accounts</option>
+            <option value="unassigned">— Unassigned —</option>
             {bankAccounts.filter(a => a.status === "active").map(a => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
@@ -1190,7 +1232,24 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                       </select>
                     </div>
                   </td>
-                  <td className="mono" style={{ fontSize: 11, color: "var(--text3)" }}>{t.account}</td>
+                  <td>
+                    {bankAccounts && bankAccounts.length > 0 ? (
+                      <select
+                        className="cat-select"
+                        style={{ minWidth: 130, color: t.account_id ? "var(--text)" : "var(--text3)" }}
+                        value={t.account_id || ""}
+                        onChange={e => updateAccountLink(t.id, e.target.value)}
+                        title={t.account_id ? "Linked" : (t.account ? `Unlinked — original: ${t.account}` : "Unlinked")}
+                      >
+                        <option value="">— {t.account || "Unassigned"} —</option>
+                        {bankAccounts.filter(a => a.status === "active").map(a => (
+                          <option key={a.id} value={a.id}>{a.name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="mono" style={{ fontSize: 11, color: "var(--text3)" }}>{t.account}</span>
+                    )}
+                  </td>
                   <td>
                     <div
                       style={{ width: 20, height: 20, borderRadius: 4, border: `1.5px solid ${t.reconciled ? "var(--accent)" : "var(--border2)"}`, background: t.reconciled ? "var(--accentBg)" : "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
