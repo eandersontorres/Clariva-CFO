@@ -242,8 +242,12 @@ export async function deleteRecurring(id) {
 }
 
 // ─── KITCHEN BRIDGE ───────────────────────────────────────────────────────────
+// r7_purchases columns are: id, user_id, date, supplier, "vendorId" (camelCase!),
+// items, total, invoice_path, tenant_id, ... Selecting * because the legacy
+// names (vendor_id, status, invoice_url) don't exist on this table and used
+// to silently 400-out — see ROADMAP "Bug hunt round 2".
 export async function fetchKitchenPurchases(tenantId, { start, end } = {}) {
-  let q = supabase.from('r7_purchases').select('id, date, total, vendor_id, status, invoice_url').eq('tenant_id', tenantId).order('date', { ascending: false })
+  let q = supabase.from('r7_purchases').select('*').eq('tenant_id', tenantId).order('date', { ascending: false })
   if (start) q = q.gte('date', start)
   if (end)   q = q.lte('date', end)
   const { data, error } = await q
@@ -323,18 +327,24 @@ export async function fetchMarketingSpend(tenantId, { start, end } = {}) {
 
 // ─── CONVERTERS ───────────────────────────────────────────────────────────────
 export function purchasesToTransactions(purchases, vendorMap = {}, foodBevCategoryId) {
-  return purchases.map(p => ({
-    id: 'kitchen_purchase_' + p.id,
-    date: p.date,
-    description: (vendorMap[p.vendor_id] || 'VENDOR PURCHASE').toUpperCase(),
-    amount: -(parseFloat(p.total) || 0),
-    category_id: foodBevCategoryId || null,
-    category: foodBevCategoryId || UNCATEGORIZED,
-    account: 'Kitchen Sync',
-    reconciled: p.status === 'paid',
-    source: 'kitchen_purchase',
-    notes: p.invoice_url ? 'Invoice: ' + p.invoice_url : '',
-  }))
+  return purchases.map(p => {
+    // r7_purchases stores the supplier name inline AND a vendorId FK; prefer
+    // the inline supplier (always populated by Kitchen's invoice scanner),
+    // fall back to vendorMap lookup, then to a generic label.
+    const vendor = p.supplier || vendorMap[p.vendorId] || vendorMap[p.vendor_id] || 'VENDOR PURCHASE';
+    return {
+      id: 'kitchen_purchase_' + p.id,
+      date: p.date,
+      description: String(vendor).toUpperCase(),
+      amount: -(parseFloat(p.total) || 0),
+      category_id: foodBevCategoryId || null,
+      category: foodBevCategoryId || UNCATEGORIZED,
+      account: 'Kitchen Sync',
+      reconciled: false,
+      source: 'kitchen_purchase',
+      notes: p.invoice_path ? 'Invoice: ' + p.invoice_path : '',
+    };
+  })
 }
 
 export function snapshotsToTransactions(snapshots, diningCategoryId) {

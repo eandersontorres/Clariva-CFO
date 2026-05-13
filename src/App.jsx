@@ -2059,14 +2059,17 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     ]).then(([purchases, vendors]) => {
       if (cancelled) return;
       const vendorMap = Object.fromEntries((vendors || []).map(v => [v.id, v.name]));
-      const invoices = (purchases || []).map(p => ({
-        id: p.id,
-        vendor: (vendorMap[p.vendor_id] || "VENDOR " + (p.vendor_id || "").slice(0, 8)).toUpperCase(),
-        date: p.date,
-        amount: Math.abs(parseFloat(p.total) || 0),
-        status: p.status,
-        kitchenTxnId: "kitchen_purchase_" + p.id,
-      }));
+      const invoices = (purchases || []).map(p => {
+        const vendorRaw = p.supplier || vendorMap[p.vendorId] || vendorMap[p.vendor_id] || "VENDOR";
+        return {
+          id: p.id,
+          vendor: String(vendorRaw).toUpperCase(),
+          date: p.date,
+          amount: Math.abs(parseFloat(p.total) || 0),
+          status: p.status || "pending",
+          kitchenTxnId: "kitchen_purchase_" + p.id,
+        };
+      });
       setKitchenInvoices(invoices);
     }).catch(err => {
       console.error("Reconciliation kitchen fetch failed:", err);
