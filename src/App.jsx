@@ -1180,7 +1180,12 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           showToast("No transactions found in PDF.", "error");
           return;
         }
-        const linked = applyAccountLink(rawImported, bankAccounts);
+        const { fresh, skipped } = dedupAgainstExisting(rawImported);
+        if (fresh.length === 0) {
+          showToast(`All ${rawImported.length} transactions were already in the ledger (same date + amount + description). Nothing imported.`, "info");
+          return;
+        }
+        const linked = applyAccountLink(fresh, bankAccounts);
         const matched = applyRecurringMatch(linked, recurring);
         const imported = applyAutoCategorize(matched, allTransactions || transactions);
         expandDateRangeIfNeeded(imported, dateRange, setDateRange);
@@ -1189,7 +1194,12 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         const acctCount = imported.filter(t => t.account_id).length;
         const recCount = imported.filter(t => t.recurring_id).length;
         const autoCount = imported.filter(t => t.autoCategorized).length;
-        const tags = [acctCount && `${acctCount} linked to accounts`, recCount && `${recCount} matched recurring`, autoCount && `${autoCount} auto-categorized`].filter(Boolean).join(" · ");
+        const tags = [
+          skipped.length && `${skipped.length} duplicate${skipped.length === 1 ? "" : "s"} skipped`,
+          acctCount && `${acctCount} linked to accounts`,
+          recCount && `${recCount} matched recurring`,
+          autoCount && `${autoCount} auto-categorized`,
+        ].filter(Boolean).join(" · ");
         showToast(imported.length + " transactions extracted" + (tags ? ` · ${tags}` : ""), "success");
       } catch (err) {
         showToast("PDF import failed: " + err.message, "error");
@@ -1210,7 +1220,12 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         rawParsed = parseBoACSV(text);
       }
       if (rawParsed.length === 0) { showToast("No transactions found in file. Check the format.", "error"); return; }
-      const linked = applyAccountLink(rawParsed, bankAccounts);
+      const { fresh, skipped } = dedupAgainstExisting(rawParsed);
+      if (fresh.length === 0) {
+        showToast(`All ${rawParsed.length} transactions were already in the ledger (same date + amount + description). Nothing imported.`, "info");
+        return;
+      }
+      const linked = applyAccountLink(fresh, bankAccounts);
       const matched = applyRecurringMatch(linked, recurring);
       const parsed = applyAutoCategorize(matched, allTransactions || transactions);
       expandDateRangeIfNeeded(parsed, dateRange, setDateRange);
@@ -1219,7 +1234,12 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
       const acctCount = parsed.filter(t => t.account_id).length;
       const recCount = parsed.filter(t => t.recurring_id).length;
       const autoCount = parsed.filter(t => t.autoCategorized).length;
-      const tags = [acctCount && `${acctCount} linked to accounts`, recCount && `${recCount} matched recurring`, autoCount && `${autoCount} auto-categorized`].filter(Boolean).join(" · ");
+      const tags = [
+        skipped.length && `${skipped.length} duplicate${skipped.length === 1 ? "" : "s"} skipped`,
+        acctCount && `${acctCount} linked to accounts`,
+        recCount && `${recCount} matched recurring`,
+        autoCount && `${autoCount} auto-categorized`,
+      ].filter(Boolean).join(" · ");
       showToast(parsed.length + " transactions imported" + (tags ? ` · ${tags}` : ""), "success");
     };
     reader.readAsText(file);
@@ -1264,6 +1284,33 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
       return updated;
     });
     showToast(`${ids.size} transaction${ids.size === 1 ? "" : "s"} linked to ${acc.name}`, "success");
+  };
+
+  // Build a fingerprint over (date, amount-in-cents, first 40 chars of
+  // description) so re-importing the same statement doesn't double-count rows.
+  // Description is included to keep two legit same-day $5.50 STARBUCKS lines
+  // from collapsing into one.
+  const txnFingerprint = (t) => {
+    const desc = (t.description || "").toUpperCase().trim().slice(0, 40);
+    const cents = Math.round((parseFloat(t.amount) || 0) * 100);
+    return `${t.date}__${cents}__${desc}`;
+  };
+
+  const dedupAgainstExisting = (incoming) => {
+    const base = allTransactions || transactions;
+    const seen = new Set(base.map(txnFingerprint));
+    const fresh = [];
+    const skipped = [];
+    for (const t of incoming) {
+      const k = txnFingerprint(t);
+      if (seen.has(k)) {
+        skipped.push(t);
+      } else {
+        seen.add(k);
+        fresh.push(t);
+      }
+    }
+    return { fresh, skipped };
   };
 
   const matchInvoice = (txnId, invoice) => {
