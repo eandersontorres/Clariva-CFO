@@ -435,6 +435,13 @@ function accrualDate(t) {
 // account_id, and dates within 2 days. Skip ambiguous matches (>1 candidate).
 function detectTransferPairs(transactions) {
   const pairs = new Map();
+  // Transactions explicitly tagged source='internal_transfer' (set by parser
+  // pattern detection or by direct DB update for half-imported transfers like
+  // "ONLINE BANKING PAYMENT TO CRD") count as transfers even without a matching
+  // partner row — they're already known not to be revenue or expense.
+  for (const t of transactions || []) {
+    if (t.source === 'internal_transfer') pairs.set(t.id, null);
+  }
   const candidates = (transactions || []).filter(t => t.account_id && !isNaN(parseFloat(t.amount)));
   const negatives = candidates.filter(t => parseFloat(t.amount) < 0);
   const positives = candidates.filter(t => parseFloat(t.amount) > 0);
@@ -554,15 +561,26 @@ function parseBoACSV(text) {
       try { const d = new Date(dateStr); if (isNaN(d.getTime())) continue; parsedDate = d.toISOString().split('T')[0]; }
       catch { continue; }
 
+      // Detect pattern BEFORE touching the sign — payments/transfers shouldn't
+      // be flipped by the cardholder-spend convention even when a CardHolder
+      // column is present, because they're not charges to begin with.
+      const desc = ((cols[descIdx] || '') || (cols[cardHolderIdx] || '')).trim();
+      const upper = desc.toUpperCase();
+      const isInternalTransfer =
+        /PAYMENT (TO|FROM) (CRD|CHK)/.test(upper) ||
+        /\bAUTOPAY\b/.test(upper) ||
+        /TRANSFER (TO|FROM) /.test(upper);
+
       let amount = NaN;
       if (amountIdx >= 0) {
         amount = parseFloat((cols[amountIdx] || '').replace(/[$,\s()]/g, ''));
         // Multi-cardholder credit-card exports list every charge as a positive
         // number ("$133.82"). For the ledger these are expenses and have to be
         // negative. Detect the format via the CardHolder Name column and flip
-        // the sign; refunds/credits show up in real life as parenthesised or
-        // explicitly-negative values, both of which already arrived negative.
-        if (cardHolderIdx >= 0 && !isNaN(amount) && amount > 0) {
+        // the sign — but skip the flip for internal transfers, whose sign in
+        // the export already matches the ledger convention (negative when the
+        // user's account is the source, positive when destination).
+        if (cardHolderIdx >= 0 && !isNaN(amount) && amount > 0 && !isInternalTransfer) {
           amount = -amount;
         }
       } else if (debitIdx >= 0 || creditIdx >= 0) {
@@ -572,7 +590,6 @@ function parseBoACSV(text) {
       }
       if (isNaN(amount) || amount === 0) continue;
 
-      const desc = ((cols[descIdx] || '') || (cols[cardHolderIdx] || '')).trim();
       const cardHolder = (cols[cardHolderIdx] || '').trim();
       const last4 = (cols[last4Idx] || '').trim().match(/\d{4}/)?.[0] || '';
 
@@ -590,7 +607,7 @@ function parseBoACSV(text) {
         category_id: null,
         category: UNCATEGORIZED,
         reconciled: false,
-        source: 'csv',
+        source: isInternalTransfer ? 'internal_transfer' : 'csv',
       });
     }
     return txns;
