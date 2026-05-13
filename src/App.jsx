@@ -1354,7 +1354,37 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
   const [editing, setEditing] = useState(null);
 
   const COLORS = ["#f05e5e", "#f0c84a", "#4a9ff0", "#a47ff0", "#00d4a0", "#f0904a", "#4af0d0", "#90a0b0", "#e06090", "#60c0e0"];
-  const TAX_LINES = ["COGS", "Wages", "Rent", "Advertising", "Depreciation", "Insurance", "Office", "Utilities", "Repairs", "Travel", "Meals", "Gross Receipts", "Other Income", ""];
+  // Mirrors IRS Schedule C 2024/2025. Income = Part I lines, COGS = Part III
+  // aggregate, Expenses = Part II lines 8–27. Strings are stable identifiers;
+  // changing them retroactively unmaps existing categories from the Tax
+  // Summary report, so add new ones instead of renaming.
+  const TAX_LINES_INCOME = ["Gross Receipts", "Returns and Allowances", "Other Income"];
+  const TAX_LINES_EXPENSE = [
+    "Advertising",
+    "Car and Truck Expenses",
+    "COGS",
+    "Commissions and Fees",
+    "Contract Labor",
+    "Depletion",
+    "Depreciation",
+    "Employee Benefits",
+    "Insurance",
+    "Legal & Professional Services",
+    "Meals",
+    "Mortgage Interest",
+    "Office Expense",
+    "Other Expenses",
+    "Other Interest",
+    "Pension & Profit-Sharing",
+    "Rent",
+    "Rent - Vehicles/Equipment",
+    "Repairs & Maintenance",
+    "Supplies",
+    "Taxes & Licenses",
+    "Travel",
+    "Utilities",
+    "Wages",
+  ];
 
   const openAdd = () => { setEditing(null); setForm({ name: "", type: "expense", color: "#f05e5e", taxLine: "" }); setModal(true); };
   const openEdit = (c) => { setEditing(c.id); setForm({ name: c.name, type: c.type, color: c.color, taxLine: c.taxLine }); setModal(true); };
@@ -1439,7 +1469,13 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
                 <div className="form-group">
                   <label className="label">Tax Line (Schedule C)</label>
                   <select className="input" value={form.taxLine} onChange={e => setForm(f => ({ ...f, taxLine: e.target.value }))}>
-                    {TAX_LINES.map(l => <option key={l} value={l}>{l || "— none —"}</option>)}
+                    <option value="">— none —</option>
+                    <optgroup label="Income (Part I)">
+                      {TAX_LINES_INCOME.map(l => <option key={l} value={l}>{l}</option>)}
+                    </optgroup>
+                    <optgroup label="Expenses (Part II) & COGS (Part III)">
+                      {TAX_LINES_EXPENSE.map(l => <option key={l} value={l}>{l}</option>)}
+                    </optgroup>
                   </select>
                 </div>
               </div>
