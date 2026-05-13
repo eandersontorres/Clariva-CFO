@@ -1056,9 +1056,51 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
 }
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, deleteTxn, categories, recurring, bankAccounts, dateRange, setDateRange, showToast }) {
-  const [filter, setFilter] = useState("all");
+function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, deleteTxn, categories, recurring, bankAccounts, tenantId, dateRange, setDateRange, showToast }) {
+  const [filter, setFilter] = useState("uncat");
   const [accountFilter, setAccountFilter] = useState("all");
+  const [kitchenInvoices, setKitchenInvoices] = useState([]);
+
+  // Pull Kitchen invoices in the same window so we can show "match this row to
+  // invoice X" suggestions inline next to each uncategorized transaction.
+  useEffect(() => {
+    if (!tenantId || tenantId === "demo") return;
+    let cancelled = false;
+    Promise.all([
+      fetchKitchenPurchases(tenantId, dateRange),
+      fetchKitchenVendors(tenantId),
+    ]).then(([purchases, vendors]) => {
+      if (cancelled) return;
+      const vendorMap = Object.fromEntries((vendors || []).map(v => [v.id, v.name]));
+      setKitchenInvoices((purchases || []).map(p => ({
+        id: p.id,
+        vendor: String(p.supplier || vendorMap[p.vendorId] || vendorMap[p.vendor_id] || "VENDOR").toUpperCase(),
+        date: p.date,
+        amount: Math.abs(parseFloat(p.total) || 0),
+      })));
+    }).catch(err => console.error("Transactions kitchen fetch:", err));
+    return () => { cancelled = true; };
+  }, [tenantId, dateRange?.start, dateRange?.end]);
+
+  // Best-fit invoice for a single bank transaction. Same heuristic as the
+  // Reconciliation screen so the two views agree.
+  const findInvoiceFor = (t) => {
+    if (!t || t.amount >= 0 || t.source === "kitchen_purchase") return null;
+    const tAmt = Math.abs(parseFloat(t.amount) || 0);
+    const tTime = new Date(t.date).getTime();
+    const desc = (t.description || "").toUpperCase();
+    return kitchenInvoices.find(inv => {
+      if (Math.abs(inv.amount - tAmt) > 1) return false;
+      if (Math.abs(new Date(inv.date).getTime() - tTime) > 5 * 86400000) return false;
+      const tokens = (inv.vendor || "").split(/\s+/).filter(w => w.length >= 4);
+      return tokens.length === 0 || tokens.some(w => desc.includes(w));
+    });
+  };
+
+  // Find a "Food & Beverage" / COGS-tagged category to drop matched rows into.
+  // Falls back to the first expense category so the match button always works.
+  const foodCat = categories.find(c => c.taxLine === "COGS" || c.name === "Food & Beverage")
+    || categories.find(c => c.type === "expense" && c.id !== UNCATEGORIZED);
   const [search, setSearch] = useState("");
   const [drag, setDrag] = useState(false);
   const fileRef = useRef();
@@ -1069,6 +1111,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     if (filter === "income" && t.amount < 0) return false;
     if (filter === "expense" && t.amount > 0) return false;
     if (filter === "uncat" && t.category !== UNCATEGORIZED) return false;
+    if (filter === "cat" && (t.category === UNCATEGORIZED || !t.category)) return false;
     if (accountFilter === "unassigned") {
       if (t.account_id) return false;
     } else if (accountFilter !== "all") {
@@ -1198,6 +1241,27 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     showToast(`${ids.size} transaction${ids.size === 1 ? "" : "s"} linked to ${acc.name}`, "success");
   };
 
+  const matchInvoice = (txnId, invoice) => {
+    const catId = foodCat?.id || null;
+    setTransactions(prev => {
+      const updated = prev.map(t => t.id === txnId
+        ? {
+            ...t,
+            category: catId || t.category,
+            autoCategorized: false,
+            reconciled: true,
+            notes: t.notes ? `${t.notes} · matched ${invoice.vendor} ${invoice.date}` : `Matched ${invoice.vendor} invoice ${invoice.date}`,
+          }
+        : t);
+      if (saveTransactions) {
+        const changed = updated.filter(t => t.id === txnId);
+        saveTransactions(changed);
+      }
+      return updated;
+    });
+    showToast(`Categorized as ${foodCat?.name || "expense"} · reconciled with ${invoice.vendor}`, "success");
+  };
+
   const togglePriorPeriod = (id) => {
     setTransactions(prev => {
       const updated = prev.map(t => t.id === id ? { ...t, prior_period: !t.prior_period } : t);
@@ -1292,11 +1356,21 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
 
       <div className="flex items-center gap-12 mb-16">
         <div className="tabs" style={{ marginBottom: 0 }}>
-          {["all", "income", "expense", "uncat"].map(f => (
-            <div key={f} className={`tab ${filter === f ? "active" : ""}`} onClick={() => setFilter(f)}>
-              {f === "all" ? "All" : f === "income" ? "Income" : f === "expense" ? "Expenses" : "Uncategorized"}
-            </div>
-          ))}
+          {["uncat", "cat", "income", "expense", "all"].map(f => {
+            const counts = {
+              uncat: transactions.filter(t => t.category === UNCATEGORIZED || !t.category).length,
+              cat: transactions.filter(t => t.category && t.category !== UNCATEGORIZED).length,
+              income: transactions.filter(t => t.amount > 0).length,
+              expense: transactions.filter(t => t.amount < 0).length,
+              all: transactions.length,
+            };
+            const labels = { uncat: "Uncategorized", cat: "Categorized", income: "Income", expense: "Expenses", all: "All" };
+            return (
+              <div key={f} className={`tab ${filter === f ? "active" : ""}`} onClick={() => setFilter(f)}>
+                {labels[f]} <span style={{ fontSize: 10, opacity: 0.6, marginLeft: 4 }}>({counts[f]})</span>
+              </div>
+            );
+          })}
         </div>
         {bankAccounts && bankAccounts.length > 0 && (
           <select className="input" style={{ maxWidth: 200, fontSize: 12 }} value={accountFilter} onChange={e => setAccountFilter(e.target.value)}>
@@ -1320,7 +1394,26 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
               ) : filtered.map(t => (
                 <tr key={t.id}>
                   <td className="mono" style={{ color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
-                  <td style={{ maxWidth: 280 }}><div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.description}</div></td>
+                  <td style={{ maxWidth: 320 }}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.description}</div>
+                    {t.category === UNCATEGORIZED && (() => {
+                      const inv = findInvoiceFor(t);
+                      if (!inv) return null;
+                      return (
+                        <button
+                          onClick={() => matchInvoice(t.id, inv)}
+                          title={`Apply "${foodCat?.name || "expense"}" category and reconcile with this invoice`}
+                          style={{
+                            marginTop: 4, padding: "2px 8px", fontSize: 10, fontFamily: "DM Mono",
+                            background: "var(--accentBg)", color: "var(--accent)",
+                            border: "1px solid var(--accentBorder)", borderRadius: 4, cursor: "pointer",
+                          }}
+                        >
+                          🧾 Match → {inv.vendor} · {fmt(inv.amount)}
+                        </button>
+                      );
+                    })()}
+                  </td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <button
@@ -4151,7 +4244,7 @@ export default function App() {
       case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
-      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
+      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByAccrual} categories={categories} dateRange={dateRange} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
