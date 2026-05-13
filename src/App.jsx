@@ -3812,7 +3812,18 @@ export default function App() {
         fetchRecurring(TENANT_ID),
         fetchBankAccounts(TENANT_ID),
       ]);
-      if (txns.length > 0)  setTransactions(txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null, account_id: t.account_id || null })));
+      // Merge DB rows with whatever is in local state. A naive replace would
+      // drop transactions that were just imported but haven't finished their
+      // async upsertTransactions round-trip yet — exactly what happens when
+      // categorising one row triggers a realtime push that fires loadAll
+      // before the bulk save settles.
+      const mappedTxns = txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null, account_id: t.account_id || null }));
+      setTransactions(prev => {
+        if (mappedTxns.length === 0) return prev;
+        const dbIds = new Set(mappedTxns.map(t => t.id));
+        const localOnly = prev.filter(t => !dbIds.has(t.id));
+        return [...mappedTxns, ...localOnly];
+      });
       if (cats.length > 0)  setCategories(cats.map(c => ({ ...c, id: c.name === "Uncategorized" ? UNCATEGORIZED : c.id, taxLine: c.tax_line || "" })));
       if (bgts.length > 0)  setBudgets(bgts.map(b => ({ ...b, categoryId: b.category_id })));
       if (bls.length > 0)   setBills(bls.map(b => ({ ...b, dueDate: b.due_date, issueDate: b.issue_date, txnId: b.txn_id, category: b.category_id, paidDate: b.paid_date, paidMethod: b.paid_method })));
