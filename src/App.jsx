@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -36,6 +36,33 @@ const STYLES = `
     --radius: 10px;
     --radius2: 6px;
   }
+
+  :root.theme-light {
+    --bg: #faf7ef;
+    --surface: #ffffff;
+    --surface2: #f3eee0;
+    --surface3: #e8e1cd;
+    --border: rgba(78,62,22,0.12);
+    --border2: rgba(78,62,22,0.28);
+    --text: #2a2317;
+    --text2: #5a5040;
+    --text3: #8a7e68;
+    --accent: #8a6f1e;
+    --accent2: #6e5818;
+    --accentBg: rgba(138,111,30,0.1);
+    --accentBorder: rgba(138,111,30,0.35);
+    --red: #a23f25;
+    --redBg: rgba(162,63,37,0.08);
+    --yellow: #a37008;
+    --yellowBg: rgba(163,112,8,0.08);
+    --blue: #2f6b97;
+    --blueBg: rgba(47,107,151,0.08);
+    --purple: #6e5d80;
+    --purpleBg: rgba(110,93,128,0.08);
+  }
+  :root.theme-light .sidebar { background: #f3eee0; }
+  :root.theme-light .logo-icon { background: var(--accentBg); }
+  :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(78,62,22,0.25); }
 
   html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; letter-spacing: 0.01em; }
   #root { height: 100%; }
@@ -726,6 +753,8 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     bills: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,
     recurring: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>,
     wallet: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/></svg>,
+    sun: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>,
+    moon: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
     bank: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>,
   };
   return icons[name] || null;
@@ -937,7 +966,7 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
 }
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, categories, recurring, bankAccounts, dateRange, setDateRange, showToast }) {
+function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, deleteTxn, categories, recurring, bankAccounts, dateRange, setDateRange, showToast }) {
   const [filter, setFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -1052,6 +1081,27 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     });
   };
 
+  const removeTransaction = async (id) => {
+    if (!window.confirm("Delete this transaction? It will be removed from the ledger permanently.")) return;
+    setTransactions(prev => prev.filter(t => t.id !== id));
+    if (deleteTxn) await deleteTxn(id);
+    showToast("Transaction deleted", "info");
+  };
+
+  const removeFiltered = async () => {
+    if (filtered.length === 0) return;
+    const label = filter !== "all" || accountFilter !== "all" || search
+      ? `${filtered.length} filtered transaction${filtered.length === 1 ? "" : "s"}`
+      : `ALL ${filtered.length} transactions`;
+    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+    const ids = new Set(filtered.map(t => t.id));
+    setTransactions(prev => prev.filter(t => !ids.has(t.id)));
+    if (deleteTxn) {
+      for (const id of ids) await deleteTxn(id);
+    }
+    showToast(`${ids.size} transaction${ids.size === 1 ? "" : "s"} deleted`, "info");
+  };
+
   const handleDrop = (e) => {
     e.preventDefault(); setDrag(false);
     const file = e.dataTransfer.files[0];
@@ -1065,9 +1115,16 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           <div className="page-title">Transactions</div>
           <div className="page-subtitle">{transactions.length} transactions · {transactions.filter(t => t.category === UNCATEGORIZED).length} uncategorized</div>
         </div>
-        <button className="btn btn-primary btn-sm" onClick={() => fileRef.current.click()}>
-          <Icon name="upload" size={13} /> Import Statement
-        </button>
+        <div className="flex gap-8">
+          {(filter !== "all" || accountFilter !== "all" || search) && filtered.length > 0 && (
+            <button className="btn btn-outline btn-sm" style={{ color: "var(--red)", borderColor: "rgba(192,97,74,0.3)" }} onClick={removeFiltered} title="Delete every transaction currently visible in the table">
+              <Icon name="trash" size={13} /> Delete filtered ({filtered.length})
+            </button>
+          )}
+          <button className="btn btn-primary btn-sm" onClick={() => fileRef.current.click()}>
+            <Icon name="upload" size={13} /> Import Statement
+          </button>
+        </div>
         <input type="file" ref={fileRef} accept=".pdf,.csv,.ofx,.qfx" style={{ display: "none" }} onChange={e => handleFile(e.target.files[0])} />
       </div>
 
@@ -1116,10 +1173,10 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
       <div className="card" style={{ padding: 0 }}>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Reconciled</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
+            <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Reconciled</th><th style={{ textAlign: "right" }}>Amount</th><th></th></tr></thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={6}><div className="empty"><div className="empty-icon">🔍</div><div className="empty-title">No transactions found</div></div></td></tr>
+                <tr><td colSpan={7}><div className="empty"><div className="empty-icon">🔍</div><div className="empty-title">No transactions found</div></div></td></tr>
               ) : filtered.map(t => (
                 <tr key={t.id}>
                   <td className="mono" style={{ color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
@@ -1143,6 +1200,11 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                     </div>
                   </td>
                   <td className={t.amount >= 0 ? "amount-pos text-right" : "amount-neg text-right"}>{fmt(t.amount)}</td>
+                  <td>
+                    <button className="btn btn-ghost" style={{ padding: "4px 6px", color: "var(--red)" }} title="Delete transaction" onClick={() => removeTransaction(t.id)}>
+                      <Icon name="trash" size={13} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -3578,6 +3640,13 @@ function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, trans
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("clariva-cfo-theme") || "dark"; } catch { return "dark"; }
+  });
+  useEffect(() => {
+    document.documentElement.classList.toggle("theme-light", theme === "light");
+    try { localStorage.setItem("clariva-cfo-theme", theme); } catch {}
+  }, [theme]);
   const [transactions, setTransactions] = useState(SAMPLE_TRANSACTIONS);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [budgets, setBudgets] = useState(SAMPLE_BUDGETS);
@@ -3773,7 +3842,7 @@ export default function App() {
       case "insights":     return <Insights transactions={filteredByDate} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByDate} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
-      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} recurring={recurring} bankAccounts={bankAccounts} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
+      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByDate} categories={categories} dateRange={dateRange} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
@@ -3863,6 +3932,14 @@ export default function App() {
               onSync={handleMarketingSync}
               showToast={showToast}
             />
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ padding: "6px 10px", color: "var(--text2)" }}
+              onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
+              title={theme === "dark" ? "Switch to Day theme" : "Switch to Night theme"}
+            >
+              <Icon name={theme === "dark" ? "sun" : "moon"} size={14} />
+            </button>
             <DateRangePicker dateRange={dateRange} setDateRange={setDateRange} />
           </div>
           {renderScreen()}
