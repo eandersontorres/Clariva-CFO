@@ -509,10 +509,26 @@ function detectSalesTaxGap(transactions, categories) {
   return null;
 }
 
-function runBookkeeperRules(transactions, categories) {
+// Persist global dismissals (sales_tax, duplicates) per tenant + year in
+// localStorage. Per-row dismissals use t.tags so they sync across devices.
+function dismissalKey(tenantId) {
+  return `cfo_dismissed_${tenantId || "demo"}_${new Date().getFullYear()}`;
+}
+function getDismissals(tenantId) {
+  try { return new Set(JSON.parse(localStorage.getItem(dismissalKey(tenantId)) || "[]")); }
+  catch { return new Set(); }
+}
+function dismissIssueGlobal(tenantId, issueId) {
+  const set = getDismissals(tenantId);
+  set.add(issueId);
+  localStorage.setItem(dismissalKey(tenantId), JSON.stringify([...set]));
+}
+
+function runBookkeeperRules(transactions, categories, tenantId) {
+  const dismissed = getDismissals(tenantId);
   const issues = [];
   const missing1099 = detectMissing1099(transactions);
-  if (missing1099.length > 0) {
+  if (missing1099.length > 0 && !dismissed.has("1099")) {
     issues.push({
       id: "1099", severity: "critical",
       title: missing1099.length + " vendor" + (missing1099.length === 1 ? "" : "s") + " owed a 1099-NEC (>$600/yr)",
@@ -523,7 +539,7 @@ function runBookkeeperRules(transactions, categories) {
     });
   }
   const dups = detectDuplicateCharges(transactions);
-  if (dups.length > 0) {
+  if (dups.length > 0 && !dismissed.has("duplicates")) {
     issues.push({
       id: "duplicates", severity: "critical",
       title: dups.length + " possible duplicate charge" + (dups.length === 1 ? "" : "s"),
@@ -532,7 +548,7 @@ function runBookkeeperRules(transactions, categories) {
     });
   }
   const taxGap = detectSalesTaxGap(transactions, categories);
-  if (taxGap) {
+  if (taxGap && !dismissed.has("sales_tax")) {
     issues.push({
       id: "sales_tax", severity: "critical",
       title: "Sales tax not tracked for the current year",
@@ -1398,8 +1414,12 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         const matched = applyRecurringMatch(linked, recurring);
         const imported = applyAutoCategorize(matched, allTransactions || transactions);
         expandDateRangeIfNeeded(imported, dateRange, setDateRange);
+        const baseTxns = allTransactions || transactions;
+        const before1099 = new Set(detectMissing1099(baseTxns).map(v => v.vendor));
         setTransactions(prev => [...imported, ...prev]);
         if (saveTransactions) saveTransactions(imported);
+        const after1099 = detectMissing1099([...baseTxns, ...imported]);
+        const crossedVendors = after1099.filter(v => !before1099.has(v.vendor));
         const acctCount = imported.filter(t => t.account_id).length;
         const recCount = imported.filter(t => t.recurring_id).length;
         const autoCount = imported.filter(t => t.autoCategorized).length;
@@ -1410,6 +1430,9 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           autoCount && `${autoCount} auto-categorized`,
         ].filter(Boolean).join(" · ");
         showToast(imported.length + " transactions extracted" + (tags ? ` · ${tags}` : ""), "success");
+        if (crossedVendors.length > 0) {
+          setTimeout(() => showToast(`⚠ ${crossedVendors.length} vendor${crossedVendors.length === 1 ? "" : "s"} crossed $600/year — open Bookkeeper to flag 1099`, "error"), 400);
+        }
       } catch (err) {
         showToast("PDF import failed: " + err.message, "error");
       } finally {
@@ -1438,8 +1461,12 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
       const matched = applyRecurringMatch(linked, recurring);
       const parsed = applyAutoCategorize(matched, allTransactions || transactions);
       expandDateRangeIfNeeded(parsed, dateRange, setDateRange);
+      const baseTxns = allTransactions || transactions;
+      const before1099 = new Set(detectMissing1099(baseTxns).map(v => v.vendor));
       setTransactions(prev => [...parsed, ...prev]);
       if (saveTransactions) saveTransactions(parsed);
+      const after1099 = detectMissing1099([...baseTxns, ...parsed]);
+      const crossedVendors = after1099.filter(v => !before1099.has(v.vendor));
       const acctCount = parsed.filter(t => t.account_id).length;
       const recCount = parsed.filter(t => t.recurring_id).length;
       const autoCount = parsed.filter(t => t.autoCategorized).length;
@@ -1450,6 +1477,9 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         autoCount && `${autoCount} auto-categorized`,
       ].filter(Boolean).join(" · ");
       showToast(parsed.length + " transactions imported" + (tags ? ` · ${tags}` : ""), "success");
+      if (crossedVendors.length > 0) {
+        setTimeout(() => showToast(`⚠ ${crossedVendors.length} vendor${crossedVendors.length === 1 ? "" : "s"} crossed $600/year — open Bookkeeper to flag 1099`, "error"), 400);
+      }
     };
     reader.readAsText(file);
   };
@@ -2324,8 +2354,40 @@ function Budget({ transactions, categories, budgets, setBudgets, saveBudget, sho
 }
 
 // ─── TAX SUMMARY ──────────────────────────────────────────────────────────────
-function TaxSummary({ transactions, categories, dateRange = {} }) {
+function TaxSummary({ transactions, categories, allTransactions, dateRange = {} }) {
   const fiscalYear = (dateRange.start || new Date().toISOString().slice(0, 10)).slice(0, 4);
+
+  // 1099-NEC contractors: every vendor that received >$600 in expenses this
+  // fiscal year. Includes both already-flagged and pending so the operator
+  // sees the full pre-filing list in one place. Pulls from allTransactions
+  // because the accrual filter in the parent might cut off some payments
+  // legitimately due to a contractor that the IRS wants reported anyway.
+  const contractors = (() => {
+    const txns = (allTransactions || transactions).filter(t =>
+      t.date >= `${fiscalYear}-01-01` && t.date <= `${fiscalYear}-12-31` &&
+      parseFloat(t.amount) < 0 && t.source !== "internal_transfer"
+    );
+    const byVendor = {};
+    for (const t of txns) {
+      const key = normalizeVendorKey(t.description);
+      if (!key) continue;
+      if (!byVendor[key]) byVendor[key] = { vendor: key, total: 0, count: 0, flagged: false, items: [] };
+      byVendor[key].total += Math.abs(parseFloat(t.amount));
+      byVendor[key].count += 1;
+      byVendor[key].items.push(t);
+      if (hasTag(t, "1099_flag")) byVendor[key].flagged = true;
+    }
+    return Object.values(byVendor).filter(v => v.total >= 600).sort((a, b) => b.total - a.total);
+  })();
+
+  const export1099CSV = () => {
+    const rows = [["Vendor", "Total Paid", "Transactions", "Status"]];
+    contractors.forEach(c => rows.push([c.vendor, c.total.toFixed(2), c.count, c.flagged ? "flagged" : "PENDING"]));
+    const csv = rows.map(r => r.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `1099_contractors_${fiscalYear}.csv`; a.click();
+  };
   const byTaxLine = {};
   categories.forEach(c => {
     const total = transactions.filter(t => t.category === c.id).reduce((s, t) => s + t.amount, 0);
@@ -2401,6 +2463,42 @@ function TaxSummary({ transactions, categories, dateRange = {} }) {
           </table>
         </div>
       </div>
+
+      {contractors.length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+            <div>
+              <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>1099-NEC Contractors · FY {fiscalYear}</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+                Vendors paid $600+ this year · {contractors.filter(c => c.flagged).length} flagged · {contractors.filter(c => !c.flagged).length} pending
+              </div>
+            </div>
+            <button className="btn btn-outline btn-sm" onClick={export1099CSV}><Icon name="download" size={13} /> Export 1099 list</button>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Vendor</th><th style={{ textAlign: "right" }}>Total Paid</th><th style={{ textAlign: "right" }}>Transactions</th><th style={{ textAlign: "right" }}>Status</th></tr></thead>
+              <tbody>
+                {contractors.map(c => (
+                  <tr key={c.vendor}>
+                    <td className="mono" style={{ fontWeight: 500 }}>{c.vendor}</td>
+                    <td className="text-right amount-neg">{fmt(c.total)}</td>
+                    <td className="text-right mono" style={{ color: "var(--text2)" }}>{c.count}</td>
+                    <td className="text-right">
+                      <span className="tag" style={{
+                        background: c.flagged ? "var(--accentBg)" : "var(--yellowBg)",
+                        color: c.flagged ? "var(--accent)" : "var(--yellow)",
+                        border: `1px solid ${c.flagged ? "var(--accentBorder)" : "var(--yellow)40"}`,
+                        fontSize: 10,
+                      }}>{c.flagged ? "✓ Flagged" : "⚠ Pending"}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ background: "var(--yellowBg)", borderColor: "rgba(240,200,74,0.2)" }}>
         <div className="flex items-center gap-10">
@@ -4293,9 +4391,10 @@ function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, trans
 }
 
 // ─── BOOKKEEPER ───────────────────────────────────────────────────────────────
-function Bookkeeper({ transactions, allTransactions, categories, setTransactions, saveTransactions, dateRange, setScreen, showToast }) {
+function Bookkeeper({ transactions, allTransactions, categories, setTransactions, saveTransactions, tenantId, dateRange, setScreen, showToast }) {
   const txns = allTransactions || transactions;
-  const issues = runBookkeeperRules(txns, categories);
+  const [dismissalsVersion, setDismissalsVersion] = useState(0);
+  const issues = runBookkeeperRules(txns, categories, tenantId);
   const score = computeComplianceScore(issues);
   const deadline = daysUntilNextDeadline();
   const sevColor = { critical: "var(--red)", medium: "var(--yellow)", hygiene: "var(--blue)" };
@@ -4319,6 +4418,22 @@ function Bookkeeper({ transactions, allTransactions, categories, setTransactions
       return updated;
     });
     showToast(ids.length + " transaction" + (ids.length === 1 ? "" : "s") + " tagged " + tag, "success");
+  };
+
+  const dismissIssue = (issue) => {
+    // For rules tied to specific rows, tag each row with the matching
+    // *_dismissed flag so a future re-import can revive them automatically.
+    // For global rules (sales_tax, duplicates) we persist in localStorage.
+    const dismissTagMap = { section_179: "section_179_dismissed", meals_50: "meals_50pct_dismissed", docs: "doc_dismissed", "1099": "1099_dismissed" };
+    const tag = dismissTagMap[issue.id];
+    if (tag && (issue.items || issue.groups)) {
+      const ids = issue.items?.map(t => t.id) || issue.groups.flatMap(g => g.items.map(t => t.id));
+      applyTagBulk(ids, tag);
+    } else {
+      dismissIssueGlobal(tenantId, issue.id);
+      setDismissalsVersion(v => v + 1);
+      showToast(`Dismissed "${issue.title}" for ${new Date().getFullYear()}`, "info");
+    }
   };
 
   // Period close checklist — derived live
@@ -4432,6 +4547,14 @@ function Bookkeeper({ transactions, allTransactions, categories, setTransactions
                             onClick={() => setExpanded(e => ({ ...e, [issue.id]: !exp }))}
                           >
                             {exp ? "Hide" : "Details"}
+                          </button>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: 11, color: "var(--text3)" }}
+                            onClick={() => dismissIssue(issue)}
+                            title="Dismiss this issue for the current year. Re-runs of the rule that match the same rows will keep them hidden."
+                          >
+                            Dismiss
                           </button>
                         </div>
                       </div>
@@ -4716,7 +4839,7 @@ export default function App() {
   const renderScreen = () => {
     switch (screen) {
       case "insights":     return <Insights transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
-      case "bookkeeper":   return <Bookkeeper transactions={filteredByAccrual} allTransactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} dateRange={dateRange} setScreen={setScreen} showToast={showToast} />;
+      case "bookkeeper":   return <Bookkeeper transactions={filteredByAccrual} allTransactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} dateRange={dateRange} setScreen={setScreen} showToast={showToast} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
@@ -4728,7 +4851,7 @@ export default function App() {
       case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
       case "accounts":     return <BankAccounts accounts={bankAccounts} setAccounts={setBankAccounts} saveBankAccount={saveBankAccount} deleteAcc={async(id)=>{setBankAccounts(p=>p.filter(a=>a.id!==id));if(TENANT_ID!=="demo")await deleteBankAccount(id);}} transactions={transactions} showToast={showToast} />;
       case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} showToast={showToast} />;
-      case "tax":          return <TaxSummary transactions={filteredByAccrual} categories={categories} dateRange={dateRange} />;
+      case "tax":          return <TaxSummary transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} />;
       default: return null;
     }
   };
