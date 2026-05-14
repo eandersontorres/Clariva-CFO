@@ -83,36 +83,70 @@ export default async function handler(req, res) {
       cursor = data.cursor;
     } while (cursor);
 
-    // Walk each order's tenders. Each tender carries its own tip_money and
-    // team_member_id (the team member that processed that specific tender).
-    // For a split bill this correctly distributes tips by server.
+    // Walk each order's tenders + service_charges. tip_money is voluntary tip
+    // per tender, attributed to the server who processed it. AUTO_GRATUITY is
+    // a mandatory service charge applied to large parties — Square reports
+    // both in Team Sales but in separate columns. We capture each in its own
+    // bucket so the UI can show them apart and the Payroll roll-up sums them.
     const byKey = {};
     let ordersWithTips = 0;
+    let ordersWithAutoGrat = 0;
     let tipCentsFromTenderless = 0;
+    let autoGratCentsUnassigned = 0;
+    const bump = (date, memberId, field, cents) => {
+      const k = `${date}__${memberId}`;
+      if (!byKey[k]) byKey[k] = { date, team_member_id: memberId, tip_cents: 0, auto_grat_cents: 0 };
+      byKey[k][field] += cents;
+    };
     for (const o of allOrders) {
       const closedAt = o.closed_at || o.created_at;
       if (!closedAt) continue;
       const date = closedAt.slice(0, 10);
       const tenders = Array.isArray(o.tenders) ? o.tenders : [];
+
+      // Pick the primary server for this order — used as the fallback for
+      // service charges and for tenders missing their own team_member_id.
+      const orderTender = tenders.find(t => t.team_member_id || t.tipped_team_member_id);
+      const orderMember = o.team_member_id
+        || orderTender?.tipped_team_member_id
+        || orderTender?.team_member_id
+        || null;
+
       let orderHadTip = false;
       for (const t of tenders) {
         const tipCents = t.tip_money?.amount || 0;
         if (tipCents <= 0) continue;
-        const memberId = t.tipped_team_member_id || t.team_member_id || o.team_member_id;
+        const memberId = t.tipped_team_member_id || t.team_member_id || orderMember;
         if (!memberId) {
           tipCentsFromTenderless += tipCents;
           continue;
         }
         orderHadTip = true;
-        const k = `${date}__${memberId}`;
-        if (!byKey[k]) byKey[k] = { date, team_member_id: memberId, cents: 0 };
-        byKey[k].cents += tipCents;
+        bump(date, memberId, "tip_cents", tipCents);
       }
       if (orderHadTip) ordersWithTips++;
+
+      const charges = Array.isArray(o.service_charges) ? o.service_charges : [];
+      let orderHadAutoGrat = false;
+      for (const c of charges) {
+        const isAutoGrat = c.type === "AUTO_GRATUITY"
+          || (c.calculation_phase === "TOTAL_PHASE" && /gratu/i.test(c.name || ""));
+        if (!isAutoGrat) continue;
+        const cents = c.applied_money?.amount || c.total_money?.amount || c.amount_money?.amount || 0;
+        if (cents <= 0) continue;
+        const memberId = orderMember;
+        if (!memberId) {
+          autoGratCentsUnassigned += cents;
+          continue;
+        }
+        orderHadAutoGrat = true;
+        bump(date, memberId, "auto_grat_cents", cents);
+      }
+      if (orderHadAutoGrat) ordersWithAutoGrat++;
     }
 
     // Resolve team member names
-    const memberIds = [...new Set(Object.values(byKey).map(v => v.team_member_id))];
+    const memberIds = [...new Set(Object.values(byKey).map(v => v.team_member_id).filter(Boolean))];
     const memberMap = {};
     if (memberIds.length > 0) {
       try {
@@ -143,7 +177,7 @@ export default async function handler(req, res) {
     if (dates.length > 0) {
       const { data: existing } = await supabase
         .from("r7_labor_tips_daily")
-        .select("id, date, team_member_id, employee_name, pool_method, pool_share, pool_participant_count, pool_total")
+        .select("id, date, team_member_id, employee_name, card_tips, auto_grat, pool_method, pool_share, pool_participant_count, pool_total")
         .eq("tenant_id", tenant_id)
         .in("date", dates);
       for (const row of (existing || [])) {
@@ -159,7 +193,8 @@ export default async function handler(req, res) {
     for (const g of Object.values(byKey)) {
       const k = `${g.date}__${g.team_member_id}`;
       seenKeys.add(k);
-      const card = Math.round(g.cents) / 100;
+      const card = Math.round(g.tip_cents) / 100;
+      const autoGrat = Math.round(g.auto_grat_cents) / 100;
       const existing = existingMap.get(k);
       const row = {
         tenant_id,
@@ -167,6 +202,7 @@ export default async function handler(req, res) {
         team_member_id: g.team_member_id,
         employee_name: memberMap[g.team_member_id] || existing?.employee_name || null,
         card_tips: card,
+        auto_grat: autoGrat,
         pool_method: existing?.pool_method || "none",
         pool_share: existing?.pool_share || 0,
         pool_participant_count: existing?.pool_participant_count || 0,
@@ -180,7 +216,7 @@ export default async function handler(req, res) {
     // Reset card_tips=0 on existing rows in the window we didn't see in this pull
     for (const [k, existing] of existingMap.entries()) {
       if (seenKeys.has(k)) continue;
-      if (parseFloat(existing.card_tips || 0) === 0) continue;
+      if (parseFloat(existing.card_tips || 0) === 0 && parseFloat(existing.auto_grat || 0) === 0) continue;
       toWrite.push({
         id: existing.id,
         tenant_id,
@@ -188,6 +224,7 @@ export default async function handler(req, res) {
         team_member_id: existing.team_member_id,
         employee_name: existing.employee_name,
         card_tips: 0,
+        auto_grat: 0,
         pool_method: existing.pool_method || "none",
         pool_share: existing.pool_share || 0,
         pool_participant_count: existing.pool_participant_count || 0,
@@ -210,9 +247,11 @@ export default async function handler(req, res) {
       source: "orders_api",
       orders_scanned: allOrders.length,
       orders_with_tips: ordersWithTips,
+      orders_with_auto_grat: ordersWithAutoGrat,
       tipped_tender_pairs: Object.keys(byKey).length,
       employees_with_tips: memberIds.length,
       unassigned_tip_cents: tipCentsFromTenderless,
+      unassigned_auto_grat_cents: autoGratCentsUnassigned,
       rows_written: written,
       window: { start: beginTime.slice(0, 10), end: endTime.slice(0, 10) },
     });

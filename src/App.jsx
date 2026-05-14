@@ -4399,9 +4399,10 @@ function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, trans
 
 function finalTip(row) {
   if (!row) return 0;
-  return row.pool_method === "equal_split"
-    ? parseFloat(row.pool_share || 0)
-    : parseFloat(row.card_tips || 0);
+  if (row.pool_method === "equal_split") {
+    return parseFloat(row.pool_share || 0);
+  }
+  return parseFloat(row.card_tips || 0) + parseFloat(row.auto_grat || 0);
 }
 
 function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
@@ -4437,6 +4438,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
 
   // KPIs over the visible window
   const totalCard = rows.reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+  const totalAutoGrat = rows.reduce((s, r) => s + parseFloat(r.auto_grat || 0), 0);
   const totalFinal = rows.reduce((s, r) => s + finalTip(r), 0);
   const poolDays = new Set(rows.filter(r => r.pool_method === "equal_split").map(r => r.date)).size;
   const totalDays = dates.length;
@@ -4444,12 +4446,12 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
   const openPool = (date) => {
     const tipsOnDate = byDate[date] || [];
     // Eligible = anyone who had tips OR a shift that day
-    const tipMembers = new Map(tipsOnDate.map(r => [r.team_member_id, { id: r.team_member_id, name: r.employee_name || r.team_member_id.slice(0, 8), card_tips: parseFloat(r.card_tips || 0), hours: 0 }]));
+    const tipMembers = new Map(tipsOnDate.map(r => [r.team_member_id, { id: r.team_member_id, name: r.employee_name || r.team_member_id.slice(0, 8), card_tips: parseFloat(r.card_tips || 0), auto_grat: parseFloat(r.auto_grat || 0), hours: 0 }]));
     const shiftsOnDate = (shifts || []).filter(s => s.start_at && s.start_at.slice(0, 10) === date);
     for (const s of shiftsOnDate) {
       const key = s.team_member_id || s.square_employee_id;
       if (!key) continue;
-      if (!tipMembers.has(key)) tipMembers.set(key, { id: key, name: s.employee_name || key.slice(0, 8), card_tips: 0, hours: 0 });
+      if (!tipMembers.has(key)) tipMembers.set(key, { id: key, name: s.employee_name || key.slice(0, 8), card_tips: 0, auto_grat: 0, hours: 0 });
       const entry = tipMembers.get(key);
       entry.hours += parseFloat(s.hours || 0);
     }
@@ -4477,7 +4479,9 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
   const applyPool = async (clear = false) => {
     if (!poolModal) return;
     const tipsOnDate = byDate[poolModal.date] || [];
-    const total = tipsOnDate.reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+    // Pool base = card tips + auto-gratuity for the day, so large parties don't
+    // get carved out of the share.
+    const total = tipsOnDate.reduce((s, r) => s + parseFloat(r.card_tips || 0) + parseFloat(r.auto_grat || 0), 0);
     const count = poolModal.selected.size;
     const share = clear || count === 0 ? 0 : round2(total / count);
     const ids = clear ? new Set() : poolModal.selected;
@@ -4494,6 +4498,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
         team_member_id: memberId,
         employee_name: existing?.employee_name || listEntry?.name || null,
         card_tips: existing?.card_tips || 0,
+        auto_grat: existing?.auto_grat || 0,
         pool_method: clear ? "none" : (ids.has(memberId) ? "equal_split" : "none"),
         pool_share: clear ? 0 : (ids.has(memberId) ? share : 0),
         pool_participant_count: clear ? 0 : count,
@@ -4532,21 +4537,26 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
         </button>
       </div>
 
-      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
         <div className="kpi-card">
-          <div className="kpi-label">Card tips total</div>
+          <div className="kpi-label">Voluntary tips</div>
           <div className="kpi-value">{fmt(totalCard)}</div>
-          <div className="kpi-delta" style={{ color: "var(--text3)" }}>across {totalDays} day{totalDays === 1 ? "" : "s"}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>card tip_money</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Auto-gratuity</div>
+          <div className="kpi-value">{fmt(totalAutoGrat)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>large party surcharge</div>
         </div>
         <div className="kpi-card kpi-yellow">
           <div className="kpi-label">Pool days</div>
           <div className="kpi-value">{poolDays}</div>
-          <div className="kpi-delta" style={{ color: "var(--text3)" }}>of {totalDays} day{totalDays === 1 ? "" : "s"} with tips</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>of {totalDays} day{totalDays === 1 ? "" : "s"}</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-label">Final tips (after pool)</div>
+          <div className="kpi-label">Final (to Payroll)</div>
           <div className="kpi-value">{fmt(totalFinal)}</div>
-          <div className="kpi-delta" style={{ color: "var(--text3)" }}>used by Payroll</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>after pool</div>
         </div>
       </div>
 
@@ -4565,6 +4575,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
                   <th>Date</th>
                   <th>Employee</th>
                   <th style={{ textAlign: "right" }}>Card tips</th>
+                  <th style={{ textAlign: "right" }}>Auto-grat</th>
                   <th style={{ textAlign: "right" }}>Pool share</th>
                   <th style={{ textAlign: "right" }}>Final</th>
                   <th>Pool</th>
@@ -4573,13 +4584,15 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
               <tbody>
                 {dates.map(date => {
                   const dayRows = byDate[date].sort((a, b) => finalTip(b) - finalTip(a));
-                  const dayTotal = dayRows.reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+                  const dayCard = dayRows.reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+                  const dayAuto = dayRows.reduce((s, r) => s + parseFloat(r.auto_grat || 0), 0);
+                  const dayTotal = dayCard + dayAuto;
                   const isPool = dayRows.some(r => r.pool_method === "equal_split");
                   return (
                     <Fragment key={date}>
                       <tr style={{ background: "var(--surface2)" }}>
-                        <td colSpan={5} className="mono" style={{ fontWeight: 500 }}>
-                          {fmtDate(date)} · <span style={{ color: "var(--text3)" }}>{fmt(dayTotal)} across {dayRows.length} employee{dayRows.length === 1 ? "" : "s"}</span>
+                        <td colSpan={6} className="mono" style={{ fontWeight: 500 }}>
+                          {fmtDate(date)} · <span style={{ color: "var(--text3)" }}>{fmt(dayTotal)} ({fmt(dayCard)} tip + {fmt(dayAuto)} auto-grat) · {dayRows.length} employee{dayRows.length === 1 ? "" : "s"}</span>
                         </td>
                         <td>
                           <button
@@ -4601,6 +4614,9 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
                           <td className="mono" style={{ color: "var(--text3)", fontSize: 11 }}></td>
                           <td>{r.employee_name || r.team_member_id.slice(0, 8)}</td>
                           <td className="text-right mono" style={{ color: "var(--text2)" }}>{fmt(r.card_tips || 0)}</td>
+                          <td className="text-right mono" style={{ color: parseFloat(r.auto_grat) > 0 ? "var(--text2)" : "var(--text3)" }}>
+                            {parseFloat(r.auto_grat) > 0 ? fmt(r.auto_grat) : "—"}
+                          </td>
                           <td className="text-right mono" style={{ color: r.pool_method === "equal_split" ? "var(--yellow)" : "var(--text3)" }}>
                             {r.pool_method === "equal_split" ? fmt(r.pool_share || 0) : "—"}
                           </td>
@@ -4622,7 +4638,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
       )}
 
       {poolModal && (() => {
-        const total = (byDate[poolModal.date] || []).reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+        const total = (byDate[poolModal.date] || []).reduce((s, r) => s + parseFloat(r.card_tips || 0) + parseFloat(r.auto_grat || 0), 0);
         const count = poolModal.selected.size;
         const share = count > 0 ? total / count : 0;
         return (
