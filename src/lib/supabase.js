@@ -283,6 +283,41 @@ export async function fetchTenant(tenantId) {
   return data
 }
 
+// ─── PAYROLL RUNS ─────────────────────────────────────────────────────────────
+export async function fetchPayrollRuns(tenantId) {
+  const { data, error } = await supabase.from('r7_payroll_runs').select('*').eq('tenant_id', tenantId).order('period_end', { ascending: false })
+  if (error) { console.error('fetchPayrollRuns', error); return [] }
+  return data
+}
+
+export async function upsertPayrollRun(row, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return { ok: true, demo: true }
+  const mapped = {
+    id: row.id || undefined,
+    tenant_id: tid,
+    period_start: row.period_start || row.periodStart,
+    period_end: row.period_end || row.periodEnd,
+    pay_date: row.pay_date || row.payDate || null,
+    status: row.status || 'draft',
+    lines: row.lines || [],
+    totals: row.totals || {},
+    notes: row.notes || '',
+    submitted_at: row.submitted_at || row.submittedAt || null,
+    reconciled_txn_id: row.reconciled_txn_id || row.reconciledTxnId || null,
+    updated_at: new Date().toISOString(),
+  }
+  if (!mapped.id) delete mapped.id
+  const { data, error } = await supabase.from('r7_payroll_runs').upsert(mapped, { onConflict: 'id' }).select('*').maybeSingle()
+  if (error) { console.error('upsertPayrollRun', error); return { ok: false, error: error.message } }
+  return { ok: true, data }
+}
+
+export async function deletePayrollRun(id) {
+  const { error } = await supabase.from('r7_payroll_runs').delete().eq('id', id)
+  return !error
+}
+
 // ─── SQUARE LABOR ─────────────────────────────────────────────────────────────
 export async function fetchLaborShifts(tenantId, { start, end } = {}) {
   let q = supabase.from('r7_labor_shifts').select('*').eq('tenant_id', tenantId).order('start_at', { ascending: false })

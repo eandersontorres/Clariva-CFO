@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -4391,6 +4391,396 @@ function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, trans
   );
 }
 
+// ─── PAYROLL ──────────────────────────────────────────────────────────────────
+// Payroll prep + export tool. CFO calculates the batch from Square Labor +
+// manual adjustments; Paychex (or whoever the operator uses) runs the actual
+// regulatory engine. We do NOT move money or compute authoritative tax
+// withholdings — the "estimated_*" fields are previews only, Paychex
+// authoritative numbers replace them at reconciliation time.
+//
+// FLSA: hours over 40 per workweek pay 1.5× the regular rate. Texas follows
+// federal — no state OT rule.
+
+const PAYROLL_EMPLOYER_BURDEN = 0.15;       // employer-side taxes/benefits ≈ FICA match + FUTA + SUTA TX + WC
+const PAYROLL_EMP_FICA = 0.0765;            // employee FICA withholding
+const PAYROLL_EMP_FED_WH_EST = 0.10;        // placeholder federal income tax withholding (rough)
+
+function round2(n) { return Math.round((parseFloat(n) || 0) * 100) / 100; }
+
+function isoWeekKey(d) {
+  const date = new Date(d);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
+  const week1 = new Date(date.getFullYear(), 0, 4);
+  const weekNo = 1 + Math.round(((date - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+  return date.getFullYear() + "-W" + String(weekNo).padStart(2, "0");
+}
+
+function buildPayrollLinesFromShifts(shifts, periodStart, periodEnd) {
+  const ps = new Date(periodStart);
+  const pe = new Date(periodEnd + "T23:59:59.999");
+  const inPeriod = (shifts || []).filter(s => {
+    const d = new Date(s.start_at);
+    return d >= ps && d <= pe;
+  });
+  const byEmp = {};
+  for (const s of inPeriod) {
+    const key = s.team_member_id || s.square_employee_id;
+    if (!key) continue;
+    if (!byEmp[key]) byEmp[key] = {
+      employee_key: key,
+      employee_name: s.employee_name || key.slice(0, 8),
+      shifts: [],
+      hourly_rate: parseFloat(s.wage_hourly) || 0,
+    };
+    byEmp[key].shifts.push(s);
+    const r = parseFloat(s.wage_hourly) || 0;
+    if (r > byEmp[key].hourly_rate) byEmp[key].hourly_rate = r;
+  }
+  return Object.values(byEmp).map(emp => {
+    const byWeek = {};
+    for (const s of emp.shifts) {
+      const wk = isoWeekKey(s.start_at);
+      byWeek[wk] = (byWeek[wk] || 0) + (parseFloat(s.hours) || 0);
+    }
+    let regular = 0, ot = 0;
+    for (const wh of Object.values(byWeek)) {
+      regular += Math.min(40, wh);
+      ot += Math.max(0, wh - 40);
+    }
+    return computePayrollLine({
+      employee_key: emp.employee_key,
+      employee_name: emp.employee_name,
+      hourly_rate: round2(emp.hourly_rate),
+      hours_regular: round2(regular),
+      hours_ot: round2(ot),
+      bonus: 0,
+      tips: 0,
+    });
+  }).sort((a, b) => b.gross - a.gross);
+}
+
+function computePayrollLine(line) {
+  const rate = parseFloat(line.hourly_rate) || 0;
+  const reg = parseFloat(line.hours_regular) || 0;
+  const ot = parseFloat(line.hours_ot) || 0;
+  const bonus = parseFloat(line.bonus) || 0;
+  const tips = parseFloat(line.tips) || 0;
+  const wage = reg * rate + ot * rate * 1.5;
+  const gross = wage + bonus + tips;
+  const empFica = gross * PAYROLL_EMP_FICA;
+  const empFedWh = gross * PAYROLL_EMP_FED_WH_EST;
+  const net = gross - empFica - empFedWh;
+  const employerTax = gross * PAYROLL_EMPLOYER_BURDEN;
+  return {
+    ...line,
+    hourly_rate: round2(rate),
+    hours_regular: round2(reg),
+    hours_ot: round2(ot),
+    bonus: round2(bonus),
+    tips: round2(tips),
+    gross: round2(gross),
+    estimated_emp_fica: round2(empFica),
+    estimated_emp_fed_wh: round2(empFedWh),
+    estimated_net: round2(net),
+    employer_tax: round2(employerTax),
+    total_cash_out: round2(gross + employerTax),
+  };
+}
+
+function computePayrollTotals(lines) {
+  const acc = { gross: 0, employer_tax: 0, total_cash_out: 0, estimated_net: 0, employee_count: 0, regular_hours: 0, ot_hours: 0 };
+  for (const l of (lines || [])) {
+    acc.gross += parseFloat(l.gross) || 0;
+    acc.employer_tax += parseFloat(l.employer_tax) || 0;
+    acc.total_cash_out += parseFloat(l.total_cash_out) || 0;
+    acc.estimated_net += parseFloat(l.estimated_net) || 0;
+    acc.regular_hours += parseFloat(l.hours_regular) || 0;
+    acc.ot_hours += parseFloat(l.hours_ot) || 0;
+    acc.employee_count += 1;
+  }
+  return {
+    gross: round2(acc.gross),
+    employer_tax: round2(acc.employer_tax),
+    total_cash_out: round2(acc.total_cash_out),
+    estimated_net: round2(acc.estimated_net),
+    employee_count: acc.employee_count,
+    regular_hours: round2(acc.regular_hours),
+    ot_hours: round2(acc.ot_hours),
+  };
+}
+
+function exportPayrollCSV(run) {
+  const rows = [
+    ["Employee", "Regular Hours", "OT Hours", "Hourly Rate", "Bonus", "Tips", "Gross"],
+    ...(run.lines || []).map(l => [
+      l.employee_name,
+      l.hours_regular,
+      l.hours_ot,
+      l.hourly_rate,
+      l.bonus || 0,
+      l.tips || 0,
+      l.gross,
+    ]),
+  ];
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `payroll_${run.period_start}_${run.period_end}.csv`;
+  a.click();
+}
+
+function Payroll({ runs, shifts, transactions, categories, setTransactions, saveTransactions, tenantId, onChange, showToast }) {
+  const [selectedId, setSelectedId] = useState(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    periodStart: (() => { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().slice(0, 10); })(),
+    periodEnd: new Date().toISOString().slice(0, 10),
+    payDate: (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })(),
+  });
+
+  const selected = runs.find(r => r.id === selectedId);
+
+  const persist = async (row) => {
+    const result = await upsertPayrollRun(row, tenantId);
+    if (!result.ok) {
+      showToast(`Save failed: ${result.error || "unknown"}`, "error");
+      return null;
+    }
+    if (onChange) onChange();
+    return result.data;
+  };
+
+  const createRun = async () => {
+    const lines = buildPayrollLinesFromShifts(shifts, createForm.periodStart, createForm.periodEnd);
+    const totals = computePayrollTotals(lines);
+    const tempId = "pr_" + Date.now();
+    const newRun = {
+      id: tempId,
+      period_start: createForm.periodStart,
+      period_end: createForm.periodEnd,
+      pay_date: createForm.payDate,
+      status: "draft",
+      lines,
+      totals,
+      notes: "",
+    };
+    const saved = await persist(newRun);
+    if (saved) {
+      setSelectedId(saved.id);
+      showToast(`Run created with ${lines.length} employees · ${fmt(totals.gross)} gross`, "success");
+    }
+    setCreateOpen(false);
+  };
+
+  const updateLine = async (lineIdx, patch) => {
+    if (!selected) return;
+    const newLines = selected.lines.map((l, i) => i === lineIdx ? computePayrollLine({ ...l, ...patch }) : l);
+    const totals = computePayrollTotals(newLines);
+    await persist({ ...selected, lines: newLines, totals });
+  };
+
+  const submitRun = async () => {
+    if (!selected) return;
+    if (!window.confirm("Submit this payroll run? This locks the numbers and creates a pending transaction in the ledger so the bank import can auto-reconcile when Paychex debits.")) return;
+    const total = parseFloat(selected.totals?.total_cash_out) || 0;
+    const payDate = selected.pay_date || new Date().toISOString().slice(0, 10);
+    const shadowId = "payroll_run_" + selected.id;
+    // Create a shadow transaction in the ledger
+    const payrollCat = categories.find(c => c.taxLine === "Wages" || c.name === "Payroll");
+    const shadow = {
+      id: shadowId,
+      date: payDate,
+      description: `PAYROLL BATCH ${selected.period_start} → ${selected.period_end}`,
+      amount: -Math.abs(total),
+      category: payrollCat?.id || null,
+      category_id: payrollCat?.id || null,
+      account: "Payroll · pending",
+      reconciled: false,
+      source: "payroll_run",
+      notes: `Pending payroll run · ${selected.totals?.employee_count || 0} employees · expected debit ${fmt(total)}`,
+      tags: ["payroll_pending"],
+    };
+    setTransactions(prev => {
+      const without = prev.filter(t => t.id !== shadowId);
+      return [shadow, ...without];
+    });
+    if (saveTransactions) await saveTransactions([shadow]);
+    await persist({ ...selected, status: "submitted", submitted_at: new Date().toISOString(), reconciled_txn_id: shadowId });
+    showToast(`Payroll submitted · shadow transaction ${fmt(total)} added to ledger`, "success");
+  };
+
+  const cancelRun = async () => {
+    if (!selected) return;
+    if (!window.confirm("Cancel this run?")) return;
+    await persist({ ...selected, status: "cancelled" });
+    showToast("Run cancelled", "info");
+  };
+
+  const removeRun = async () => {
+    if (!selected) return;
+    if (!window.confirm("Delete this run permanently?")) return;
+    await deletePayrollRun(selected.id);
+    setSelectedId(null);
+    if (onChange) onChange();
+    showToast("Run deleted", "info");
+  };
+
+  const statusColor = { draft: "var(--text2)", approved: "var(--blue)", submitted: "var(--yellow)", reconciled: "var(--accent)", cancelled: "var(--text3)" };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Payroll</div>
+          <div className="page-subtitle">Payroll prep + Paychex CSV export · {runs.length} run{runs.length === 1 ? "" : "s"} on record</div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={() => setCreateOpen(true)}><Icon name="plus" size={13} /> New payroll run</button>
+      </div>
+
+      <div className="card" style={{ background: "var(--yellowBg)", border: "1px solid var(--yellow)40", marginBottom: 20, padding: "10px 14px" }}>
+        <div style={{ fontSize: 11, color: "var(--text2)", fontFamily: "DM Mono", lineHeight: 1.5 }}>
+          ⚠ Estimates only. Paychex runs the regulatory engine — final tax withholding, deductions, and net pay come from Paychex, not this preview. CFO does not move money.
+        </div>
+      </div>
+
+      {!selected && (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Period</th><th>Pay date</th><th>Status</th><th style={{ textAlign: "right" }}>Employees</th><th style={{ textAlign: "right" }}>Hours</th><th style={{ textAlign: "right" }}>Gross</th><th style={{ textAlign: "right" }}>Total cash out</th></tr></thead>
+              <tbody>
+                {runs.length === 0 ? (
+                  <tr><td colSpan={7}><div className="empty"><div className="empty-icon">💵</div><div className="empty-title">No payroll runs yet</div><div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Click <strong>New payroll run</strong>, pick the period, and CFO pulls hours from Square automatically.</div></div></td></tr>
+                ) : runs.map(r => (
+                  <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => setSelectedId(r.id)}>
+                    <td className="mono" style={{ color: "var(--text2)" }}>{r.period_start} → {r.period_end}</td>
+                    <td className="mono" style={{ color: "var(--text2)" }}>{r.pay_date || "—"}</td>
+                    <td><span className="tag" style={{ background: statusColor[r.status] + "20", color: statusColor[r.status], border: `1px solid ${statusColor[r.status]}40`, fontSize: 10 }}>{r.status}</span></td>
+                    <td className="text-right mono">{r.totals?.employee_count || 0}</td>
+                    <td className="text-right mono">{(parseFloat(r.totals?.regular_hours) || 0) + (parseFloat(r.totals?.ot_hours) || 0)}h</td>
+                    <td className="text-right mono">{fmt(r.totals?.gross || 0)}</td>
+                    <td className="text-right mono" style={{ color: "var(--yellow)" }}>{fmt(r.totals?.total_cash_out || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {selected && (
+        <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+              <div>
+                <button className="btn btn-ghost btn-sm" style={{ padding: "4px 8px", marginRight: 8 }} onClick={() => setSelectedId(null)}>← Back</button>
+                <span style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 20 }}>{selected.period_start} → {selected.period_end}</span>
+                <span className="tag" style={{ marginLeft: 12, background: statusColor[selected.status] + "20", color: statusColor[selected.status], border: `1px solid ${statusColor[selected.status]}40`, fontSize: 10 }}>{selected.status}</span>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-outline btn-sm" onClick={() => exportPayrollCSV(selected)}><Icon name="download" size={13} /> Export Paychex CSV</button>
+                {selected.status === "draft" && (
+                  <button className="btn btn-primary btn-sm" onClick={submitRun}>Submit (creates shadow txn)</button>
+                )}
+                {selected.status === "draft" && (
+                  <button className="btn btn-outline btn-sm" style={{ color: "var(--text3)" }} onClick={cancelRun}>Cancel run</button>
+                )}
+                <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={removeRun}><Icon name="trash" size={13} /></button>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+              {[
+                { label: "Employees", value: selected.totals?.employee_count || 0 },
+                { label: "Total hours", value: `${(parseFloat(selected.totals?.regular_hours) || 0) + (parseFloat(selected.totals?.ot_hours) || 0)}h` },
+                { label: "OT hours", value: `${selected.totals?.ot_hours || 0}h`, color: parseFloat(selected.totals?.ot_hours) > 0 ? "var(--yellow)" : "var(--text)" },
+                { label: "Gross", value: fmt(selected.totals?.gross || 0) },
+                { label: "Total cash out", value: fmt(selected.totals?.total_cash_out || 0), color: "var(--yellow)" },
+              ].map(k => (
+                <div key={k.label} style={{ background: "var(--surface2)", padding: "10px 14px", borderRadius: "var(--radius2)" }}>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>{k.label}</div>
+                  <div className="mono" style={{ fontSize: 16, marginTop: 4, color: k.color || "var(--text)" }}>{k.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: 0 }}>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Employee</th><th style={{ textAlign: "right" }}>Reg hrs</th><th style={{ textAlign: "right" }}>OT hrs</th><th style={{ textAlign: "right" }}>$/h</th><th style={{ textAlign: "right" }}>Bonus</th><th style={{ textAlign: "right" }}>Tips</th><th style={{ textAlign: "right" }}>Gross</th><th style={{ textAlign: "right" }}>Est. net</th><th style={{ textAlign: "right" }}>Loaded</th></tr></thead>
+                <tbody>
+                  {(selected.lines || []).map((l, i) => {
+                    const editable = selected.status === "draft";
+                    return (
+                      <tr key={l.employee_key || i}>
+                        <td>{l.employee_name}{parseFloat(l.hours_ot) > 0 && <span style={{ marginLeft: 6, fontSize: 9, padding: "1px 5px", background: "var(--yellowBg)", color: "var(--yellow)", borderRadius: 3 }}>OT</span>}</td>
+                        <td className="text-right mono" style={{ fontSize: 11 }}>{l.hours_regular}</td>
+                        <td className="text-right mono" style={{ fontSize: 11, color: parseFloat(l.hours_ot) > 0 ? "var(--yellow)" : "var(--text2)" }}>{l.hours_ot}</td>
+                        <td className="text-right mono" style={{ fontSize: 11 }}>{fmt(l.hourly_rate)}</td>
+                        <td className="text-right">
+                          {editable ? (
+                            <input type="number" step="0.01" className="input" style={{ width: 80, textAlign: "right", fontSize: 11, padding: "3px 6px" }} value={l.bonus || ""} placeholder="0" onChange={e => updateLine(i, { bonus: e.target.value })} />
+                          ) : <span className="mono">{fmt(l.bonus || 0)}</span>}
+                        </td>
+                        <td className="text-right">
+                          {editable ? (
+                            <input type="number" step="0.01" className="input" style={{ width: 80, textAlign: "right", fontSize: 11, padding: "3px 6px" }} value={l.tips || ""} placeholder="0" onChange={e => updateLine(i, { tips: e.target.value })} />
+                          ) : <span className="mono">{fmt(l.tips || 0)}</span>}
+                        </td>
+                        <td className="text-right mono" style={{ fontWeight: 500 }}>{fmt(l.gross)}</td>
+                        <td className="text-right mono" style={{ color: "var(--text2)", fontSize: 11 }}>{fmt(l.estimated_net)}</td>
+                        <td className="text-right mono" style={{ color: "var(--yellow)", fontSize: 11 }}>{fmt(l.total_cash_out)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {createOpen && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setCreateOpen(false)}>
+          <div className="modal" style={{ maxWidth: 480 }}>
+            <div className="modal-header">
+              <div className="modal-title">New payroll run</div>
+              <button className="btn btn-ghost" style={{ padding: 4 }} onClick={() => setCreateOpen(false)}><Icon name="close" size={16} /></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-row form-row-2">
+                <div className="form-group">
+                  <label className="label">Period start</label>
+                  <input type="date" className="input" value={createForm.periodStart} onChange={e => setCreateForm(f => ({ ...f, periodStart: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="label">Period end</label>
+                  <input type="date" className="input" value={createForm.periodEnd} onChange={e => setCreateForm(f => ({ ...f, periodEnd: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="label">Pay date</label>
+                <input type="date" className="input" value={createForm.payDate} onChange={e => setCreateForm(f => ({ ...f, payDate: e.target.value }))} />
+                <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4 }}>Date the bank will be debited. CFO uses this for the shadow transaction.</div>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 12 }}>
+                Hours pull automatically from Square Labor for the chosen window. OT is computed as hours over 40 per ISO week × 1.5×.
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setCreateOpen(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={createRun}>Build draft</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── LABOR ────────────────────────────────────────────────────────────────────
 function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, showToast }) {
   const [loading, setLoading] = useState(false);
@@ -4808,6 +5198,7 @@ export default function App() {
   const [recurring, setRecurring] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [laborShifts, setLaborShifts] = useState([]);
+  const [payrollRuns, setPayrollRuns] = useState([]);
   const YEAR_NOW = new Date().getFullYear();
   const [projects, setProjects] = useState([
     { id:"p1", title:"Launch Catering Service", category:"Revenue Growth", month:5, year:YEAR_NOW, status:"Planning", impact:"High", investment:2500, projectedRevenue:8000, notes:"Target corporate clients in Round Rock tech corridor.", cashRequired:2500, roi:220 },
@@ -4826,7 +5217,7 @@ export default function App() {
     if (TENANT_ID === "demo") return;
     if (showSpinner) setSyncing(true);
     try {
-      const [txns, cats, bgts, bls, projs, recs, accs, shifts] = await Promise.all([
+      const [txns, cats, bgts, bls, projs, recs, accs, shifts, payrolls] = await Promise.all([
         fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
         fetchBudgets(TENANT_ID),
@@ -4835,6 +5226,7 @@ export default function App() {
         fetchRecurring(TENANT_ID),
         fetchBankAccounts(TENANT_ID),
         fetchLaborShifts(TENANT_ID, dateRange),
+        fetchPayrollRuns(TENANT_ID),
       ]);
       // Merge DB rows with whatever is in local state. A naive replace would
       // drop transactions that were just imported but haven't finished their
@@ -4855,6 +5247,7 @@ export default function App() {
       setRecurring(recs);
       setBankAccounts(accs);
       setLaborShifts(shifts);
+      setPayrollRuns(payrolls);
     } catch (err) {
       console.error("loadAll failed:", err);
     } finally {
@@ -4901,6 +5294,8 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_bank_accounts", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_labor_shifts", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_payroll_runs", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .subscribe((status) => {
         if (status === "SUBSCRIBED") { console.log("Clariva CFO: real-time active"); setRealtimeActive(true); }
@@ -5013,6 +5408,7 @@ export default function App() {
     { id: "insights", label: "CFO Insights", icon: "insights" },
     { id: "bookkeeper", label: "Bookkeeper", icon: "bookkeeper" },
     { id: "labor", label: "Labor", icon: "labor" },
+    { id: "payroll", label: "Payroll", icon: "bills" },
     { id: "projects", label: "Projects", icon: "projects" },
     { id: "transactions", label: "Transactions", icon: "transactions", badge: uncat > 0 ? uncat : null },
     { id: "categories", label: "Chart of Accounts", icon: "categories" },
@@ -5031,6 +5427,7 @@ export default function App() {
       case "insights":     return <Insights transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
       case "bookkeeper":   return <Bookkeeper transactions={filteredByAccrual} allTransactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} dateRange={dateRange} setScreen={setScreen} showToast={showToast} />;
       case "labor":        return <Labor shifts={laborShifts} transactions={filteredByDate} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(true)} showToast={showToast} />;
+      case "payroll":      return <Payroll runs={payrollRuns} shifts={laborShifts} transactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} onChange={() => loadAll(false)} showToast={showToast} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
