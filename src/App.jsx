@@ -414,6 +414,209 @@ function expandDateRangeIfNeeded(imported, dateRange, setDateRange) {
   }
 }
 
+// ─── BOOKKEEPER AGENT ─────────────────────────────────────────────────────────
+// Rules-based audit pass over transactions, surfaced on the Bookkeeper screen.
+// Each rule returns { items, severity, title, fixLabel, fixTag } where items is
+// the list of affected transactions and fixTag is the string to append/strip
+// from t.tags when the user clicks "Fix all".
+
+const PERSONAL_MIX_VENDORS = ["AMAZON", "WALMART", "COSTCO", "TARGET", "BEST BUY"];
+
+function normalizeVendorKey(desc) {
+  return (desc || "").toUpperCase().replace(/[^A-Z\s]/g, " ").split(/\s+/).filter(w => w.length >= 4).slice(0, 2).join(" ");
+}
+
+function hasTag(t, tag) { return Array.isArray(t.tags) && t.tags.includes(tag); }
+
+function detectMissing1099(transactions) {
+  const year = new Date().getFullYear();
+  const yearStart = year + "-01-01";
+  const expensesYear = transactions.filter(t => parseFloat(t.amount) < 0 && t.date >= yearStart && t.source !== "internal_transfer");
+  const byVendor = {};
+  for (const t of expensesYear) {
+    const key = normalizeVendorKey(t.description);
+    if (!key) continue;
+    if (!byVendor[key]) byVendor[key] = { vendor: key, total: 0, items: [], hasFlag: false };
+    byVendor[key].total += Math.abs(parseFloat(t.amount));
+    byVendor[key].items.push(t);
+    if (hasTag(t, "1099_flag") || hasTag(t, "1099_dismissed")) byVendor[key].hasFlag = true;
+  }
+  return Object.values(byVendor).filter(v => v.total >= 600 && !v.hasFlag).sort((a, b) => b.total - a.total);
+}
+
+function detectDuplicateCharges(transactions) {
+  const expenses = transactions.filter(t => parseFloat(t.amount) < 0 && t.source !== "internal_transfer");
+  const dayMs = 24 * 60 * 60 * 1000;
+  const seen = new Set();
+  const pairs = [];
+  for (let i = 0; i < expenses.length; i++) {
+    for (let j = i + 1; j < expenses.length; j++) {
+      const a = expenses[i], b = expenses[j];
+      if (Math.abs(parseFloat(a.amount) - parseFloat(b.amount)) > 5) continue;
+      if (Math.abs(new Date(a.date) - new Date(b.date)) > 3 * dayMs) continue;
+      const ak = normalizeVendorKey(a.description), bk = normalizeVendorKey(b.description);
+      if (!ak || ak !== bk) continue;
+      const pairKey = [a.id, b.id].sort().join("|");
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
+      pairs.push({ a, b, vendor: ak });
+    }
+  }
+  return pairs;
+}
+
+function detectSection179Missing(transactions) {
+  return transactions.filter(t => parseFloat(t.amount) < -2500 && !hasTag(t, "section_179") && !hasTag(t, "section_179_dismissed"));
+}
+
+function detectMealsNot50(transactions, categories) {
+  const mealsCats = categories.filter(c => c.taxLine === "Meals" || c.name === "Meals");
+  if (mealsCats.length === 0) return [];
+  const ids = new Set(mealsCats.map(c => c.id));
+  return transactions.filter(t => ids.has(t.category) && !hasTag(t, "meals_50pct") && !hasTag(t, "meals_50pct_dismissed"));
+}
+
+function detectUndocumentedExpense(transactions) {
+  return transactions.filter(t => parseFloat(t.amount) < -75 && (!t.notes || t.notes.trim() === "") && t.source !== "kitchen_purchase" && !hasTag(t, "doc_dismissed"));
+}
+
+function detectStaleUncategorized(transactions) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 14);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  return transactions.filter(t => (t.category === UNCATEGORIZED || !t.category) && t.date < cutoffStr);
+}
+
+function detectPersonalMix(transactions) {
+  return transactions.filter(t => {
+    if (parseFloat(t.amount) >= 0) return false;
+    const desc = (t.description || "").toUpperCase();
+    if (!PERSONAL_MIX_VENDORS.some(v => desc.includes(v))) return false;
+    return t.category === UNCATEGORIZED || !t.category;
+  });
+}
+
+function detectSalesTaxGap(transactions, categories) {
+  const yearStart = new Date().getFullYear() + "-01-01";
+  const revenue = transactions.filter(t => parseFloat(t.amount) > 0 && t.date >= yearStart && t.source !== "internal_transfer")
+    .reduce((s, t) => s + parseFloat(t.amount), 0);
+  if (revenue === 0) return null;
+  const taxCat = categories.find(c => c.taxLine === "Taxes & Licenses");
+  const collected = taxCat
+    ? transactions.filter(t => t.category === taxCat.id && t.date >= yearStart).reduce((s, t) => s + Math.abs(parseFloat(t.amount) || 0), 0)
+    : 0;
+  if (collected === 0) return { revenue, collected, hint: "No transactions filed under Taxes & Licenses this year" };
+  return null;
+}
+
+function runBookkeeperRules(transactions, categories) {
+  const issues = [];
+  const missing1099 = detectMissing1099(transactions);
+  if (missing1099.length > 0) {
+    issues.push({
+      id: "1099", severity: "critical",
+      title: missing1099.length + " vendor" + (missing1099.length === 1 ? "" : "s") + " owed a 1099-NEC (>$600/yr)",
+      description: "Form 1099-NEC must be issued to each non-employee paid $600+ in a calendar year. Common for musicians, freelancers, contractors.",
+      groups: missing1099,
+      fixTag: "1099_flag",
+      fixLabel: "Flag all as 1099 contractor",
+    });
+  }
+  const dups = detectDuplicateCharges(transactions);
+  if (dups.length > 0) {
+    issues.push({
+      id: "duplicates", severity: "critical",
+      title: dups.length + " possible duplicate charge" + (dups.length === 1 ? "" : "s"),
+      description: "Same vendor, near-identical amount, dates within 3 days. Could be double-charge from the vendor or accidental double-import.",
+      pairs: dups,
+    });
+  }
+  const taxGap = detectSalesTaxGap(transactions, categories);
+  if (taxGap) {
+    issues.push({
+      id: "sales_tax", severity: "critical",
+      title: "Sales tax not tracked for the current year",
+      description: "Revenue of " + fmt(taxGap.revenue) + " recorded but " + fmt(taxGap.collected) + " filed under Taxes & Licenses. Texas restaurants typically collect ~8.25%.",
+    });
+  }
+  const sec179 = detectSection179Missing(transactions);
+  if (sec179.length > 0) {
+    issues.push({
+      id: "section_179", severity: "medium",
+      title: sec179.length + " expense" + (sec179.length === 1 ? "" : "s") + " over $2,500 without Section 179 election",
+      description: "Equipment purchases above the de minimis threshold can be fully deducted in year of purchase under Section 179 — but only if elected on Form 4562.",
+      items: sec179,
+      fixTag: "section_179",
+      fixLabel: "Mark all for Section 179 election",
+    });
+  }
+  const meals = detectMealsNot50(transactions, categories);
+  if (meals.length > 0) {
+    issues.push({
+      id: "meals_50", severity: "medium",
+      title: meals.length + " Meals transaction" + (meals.length === 1 ? "" : "s") + " not flagged 50% deductible",
+      description: "IRS Section 274 — business meals are deductible at 50% only. Flag them so Tax Summary can compute the right deduction.",
+      items: meals,
+      fixTag: "meals_50pct",
+      fixLabel: "Flag all Meals as 50% deductible",
+    });
+  }
+  const undoc = detectUndocumentedExpense(transactions);
+  if (undoc.length > 0) {
+    issues.push({
+      id: "docs", severity: "medium",
+      title: undoc.length + " expense" + (undoc.length === 1 ? "" : "s") + " over $75 without notes",
+      description: "IRS Pub 463 — expenses above $75 should have contemporaneous documentation. Add a note (vendor/business purpose/receipt link).",
+      items: undoc,
+    });
+  }
+  const stale = detectStaleUncategorized(transactions);
+  if (stale.length > 0) {
+    issues.push({
+      id: "stale", severity: "hygiene",
+      title: stale.length + " uncategorized older than 14 days",
+      description: "Older uncategorized rows tend to lose context. Categorize them while you still remember what they were.",
+      items: stale,
+    });
+  }
+  const personal = detectPersonalMix(transactions);
+  if (personal.length > 0) {
+    issues.push({
+      id: "personal_mix", severity: "hygiene",
+      title: personal.length + " Amazon/Walmart/Costco charge" + (personal.length === 1 ? "" : "s") + " uncategorized",
+      description: "These vendors are common business+personal mix. Audit risk if categorized as broad expense without a specific business sub-category.",
+      items: personal,
+    });
+  }
+  return issues;
+}
+
+function computeComplianceScore(issues) {
+  const weights = { critical: 10, medium: 5, hygiene: 1 };
+  const itemCount = (issue) =>
+    issue.items?.length || issue.groups?.length || issue.pairs?.length || 1;
+  const penalty = issues.reduce((s, i) => s + (weights[i.severity] || 0) * Math.min(itemCount(i), 10) / 10, 0);
+  return Math.max(0, Math.min(100, Math.round(100 - penalty)));
+}
+
+function daysUntilNextDeadline(now = new Date()) {
+  const year = now.getFullYear();
+  const deadlines = [
+    { name: "1099-NEC filing", date: new Date(year, 0, 31) },
+    { name: "Q1 estimated tax", date: new Date(year, 3, 15) },
+    { name: "Q2 estimated tax", date: new Date(year, 5, 15) },
+    { name: "Q3 estimated tax", date: new Date(year, 8, 15) },
+    { name: "Q4 estimated tax", date: new Date(year + 1, 0, 15) },
+  ];
+  for (const d of deadlines) {
+    if (d.date > now) {
+      const days = Math.ceil((d.date - now) / (24 * 60 * 60 * 1000));
+      return { name: d.name, date: d.date.toISOString().slice(0, 10), days };
+    }
+  }
+  return null;
+}
+
 // ─── ACCRUAL DATE ─────────────────────────────────────────────────────────────
 // For transactions Anderson flags as "prior period" (e.g. payroll earned in Dec
 // but cleared in Jan), reports that track operational performance (P&L, Tax
@@ -873,6 +1076,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     bills: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,
     recurring: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>,
     wallet: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/></svg>,
+    bookkeeper: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
     sun: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>,
     moon: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
     bank: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>,
@@ -4088,6 +4292,198 @@ function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, trans
   );
 }
 
+// ─── BOOKKEEPER ───────────────────────────────────────────────────────────────
+function Bookkeeper({ transactions, allTransactions, categories, setTransactions, saveTransactions, dateRange, setScreen, showToast }) {
+  const txns = allTransactions || transactions;
+  const issues = runBookkeeperRules(txns, categories);
+  const score = computeComplianceScore(issues);
+  const deadline = daysUntilNextDeadline();
+  const sevColor = { critical: "var(--red)", medium: "var(--yellow)", hygiene: "var(--blue)" };
+  const sevLabel = { critical: "Critical", medium: "Review", hygiene: "Hygiene" };
+  const sevBg = { critical: "var(--redBg)", medium: "var(--yellowBg)", hygiene: "var(--blueBg)" };
+  const [expanded, setExpanded] = useState({});
+
+  const applyTagBulk = (ids, tag) => {
+    setTransactions(prev => {
+      const idSet = new Set(ids);
+      const updated = prev.map(t => {
+        if (!idSet.has(t.id)) return t;
+        const tags = Array.isArray(t.tags) ? t.tags.slice() : [];
+        if (!tags.includes(tag)) tags.push(tag);
+        return { ...t, tags };
+      });
+      if (saveTransactions) {
+        const changed = updated.filter(t => idSet.has(t.id));
+        saveTransactions(changed);
+      }
+      return updated;
+    });
+    showToast(ids.length + " transaction" + (ids.length === 1 ? "" : "s") + " tagged " + tag, "success");
+  };
+
+  // Period close checklist — derived live
+  const yearStart = new Date().getFullYear() + "-01-01";
+  const yearTxns = txns.filter(t => t.date >= yearStart);
+  const checklist = [
+    { label: "All transactions categorized", done: yearTxns.filter(t => t.category === UNCATEGORIZED || !t.category).length === 0, hint: `${yearTxns.filter(t => t.category === UNCATEGORIZED || !t.category).length} left` },
+    { label: "Bank accounts reconciled", done: yearTxns.filter(t => !t.reconciled && parseFloat(t.amount) !== 0).length === 0, hint: `${yearTxns.filter(t => !t.reconciled).length} unreconciled` },
+    { label: "1099 contractors identified", done: !issues.find(i => i.id === "1099"), hint: issues.find(i => i.id === "1099") ? `${issues.find(i => i.id === "1099").groups.length} pending` : "all flagged" },
+    { label: "Meals flagged 50%", done: !issues.find(i => i.id === "meals_50"), hint: issues.find(i => i.id === "meals_50") ? `${issues.find(i => i.id === "meals_50").items.length} pending` : "all flagged" },
+    { label: "Receipts/notes attached > $75", done: !issues.find(i => i.id === "docs"), hint: issues.find(i => i.id === "docs") ? `${issues.find(i => i.id === "docs").items.length} pending` : "all documented" },
+    { label: "Sales tax tracked", done: !issues.find(i => i.id === "sales_tax"), hint: issues.find(i => i.id === "sales_tax") ? "no Taxes & Licenses entries" : "ok" },
+  ];
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Bookkeeper</div>
+          <div className="page-subtitle">Rules-based audit · IRS Schedule C compliance · TorresBee</div>
+        </div>
+      </div>
+
+      <div className="grid-2" style={{ marginBottom: 20 }}>
+        <div className="card" style={{ borderLeft: `3px solid ${score >= 80 ? "var(--accent)" : score >= 60 ? "var(--yellow)" : "var(--red)"}` }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", letterSpacing: "0.08em", textTransform: "uppercase" }}>IRS compliance score</span>
+            <span style={{ fontSize: 11, color: "var(--text3)" }}>{issues.length} issue{issues.length === 1 ? "" : "s"} open</span>
+          </div>
+          <div className="mono" style={{ fontSize: 48, lineHeight: 1, color: score >= 80 ? "var(--accent)" : score >= 60 ? "var(--yellow)" : "var(--red)" }}>{score}<span style={{ fontSize: 18, color: "var(--text3)" }}> / 100</span></div>
+          <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 8 }}>
+            {score >= 80 ? "On track" : score >= 60 ? "Needs attention" : "Critical issues — review before quarter close"}
+          </div>
+        </div>
+        {deadline && (
+          <div className="card" style={{ borderLeft: `3px solid ${deadline.days <= 15 ? "var(--red)" : "var(--blue)"}` }}>
+            <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Next IRS deadline</div>
+            <div className="mono" style={{ fontSize: 22, color: "var(--text)" }}>{deadline.name}</div>
+            <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 6 }}>
+              <span className="mono" style={{ color: deadline.days <= 15 ? "var(--red)" : "var(--text)" }}>{deadline.days} day{deadline.days === 1 ? "" : "s"}</span> · {deadline.date}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Period close checklist */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 14 }}>Period close checklist</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+          {checklist.map((c, i) => (
+            <div key={i} className="flex items-center gap-12" style={{ padding: "8px 12px", background: c.done ? "var(--accentBg)" : "var(--surface2)", borderRadius: "var(--radius2)", border: `1px solid ${c.done ? "var(--accentBorder)" : "var(--border)"}` }}>
+              <div style={{ width: 18, height: 18, borderRadius: 4, border: `1.5px solid ${c.done ? "var(--accent)" : "var(--border2)"}`, background: c.done ? "var(--accentBg)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                {c.done && <Icon name="check" size={11} color="var(--accent)" />}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: c.done ? "var(--text)" : "var(--text2)" }}>{c.label}</div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{c.hint}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Issues */}
+      {issues.length === 0 ? (
+        <div className="card" style={{ background: "var(--accentBg)", border: "1px solid var(--accentBorder)", textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>
+          <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 18, color: "var(--accent)" }}>No issues detected — books are clean</div>
+        </div>
+      ) : (
+        <div>
+          {["critical", "medium", "hygiene"].map(sev => {
+            const sevIssues = issues.filter(i => i.severity === sev);
+            if (sevIssues.length === 0) return null;
+            return (
+              <div key={sev} style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: sevColor[sev], fontFamily: "DM Mono", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                  {sevLabel[sev]} ({sevIssues.length})
+                </div>
+                {sevIssues.map(issue => {
+                  const exp = expanded[issue.id];
+                  return (
+                    <div key={issue.id} className="card" style={{ marginBottom: 8, borderLeft: `3px solid ${sevColor[sev]}`, padding: "12px 16px" }}>
+                      <div className="flex items-center justify-between">
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>{issue.title}</div>
+                          <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4, lineHeight: 1.5 }}>{issue.description}</div>
+                        </div>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 12 }}>
+                          {issue.fixTag && issue.items && (
+                            <button
+                              className="btn btn-sm"
+                              style={{ background: sevBg[sev], color: sevColor[sev], border: `1px solid ${sevColor[sev]}40`, fontSize: 11 }}
+                              onClick={() => applyTagBulk(issue.items.map(t => t.id), issue.fixTag)}
+                            >
+                              {issue.fixLabel}
+                            </button>
+                          )}
+                          {issue.fixTag && issue.groups && (
+                            <button
+                              className="btn btn-sm"
+                              style={{ background: sevBg[sev], color: sevColor[sev], border: `1px solid ${sevColor[sev]}40`, fontSize: 11 }}
+                              onClick={() => applyTagBulk(issue.groups.flatMap(g => g.items.map(t => t.id)), issue.fixTag)}
+                            >
+                              {issue.fixLabel}
+                            </button>
+                          )}
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: 11 }}
+                            onClick={() => setExpanded(e => ({ ...e, [issue.id]: !exp }))}
+                          >
+                            {exp ? "Hide" : "Details"}
+                          </button>
+                        </div>
+                      </div>
+                      {exp && (
+                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                          {issue.groups && (
+                            <div style={{ display: "grid", gap: 6 }}>
+                              {issue.groups.slice(0, 10).map((g, i) => (
+                                <div key={i} className="flex items-center justify-between" style={{ fontSize: 12, padding: "6px 10px", background: "var(--surface2)", borderRadius: "var(--radius2)" }}>
+                                  <span className="mono" style={{ color: "var(--text)" }}>{g.vendor}</span>
+                                  <span className="mono" style={{ color: "var(--red)" }}>{fmt(g.total)} · {g.items.length} txn{g.items.length === 1 ? "" : "s"}</span>
+                                </div>
+                              ))}
+                              {issue.groups.length > 10 && <div style={{ fontSize: 11, color: "var(--text3)", textAlign: "center" }}>+{issue.groups.length - 10} more</div>}
+                            </div>
+                          )}
+                          {issue.pairs && (
+                            <div style={{ display: "grid", gap: 8 }}>
+                              {issue.pairs.slice(0, 10).map((p, i) => (
+                                <div key={i} style={{ fontSize: 12, padding: "8px 12px", background: "var(--surface2)", borderRadius: "var(--radius2)" }}>
+                                  <div className="flex items-center justify-between"><span>{fmtDate(p.a.date)} · {p.a.description}</span><span className="mono" style={{ color: "var(--red)" }}>{fmt(p.a.amount)}</span></div>
+                                  <div className="flex items-center justify-between" style={{ marginTop: 4 }}><span>{fmtDate(p.b.date)} · {p.b.description}</span><span className="mono" style={{ color: "var(--red)" }}>{fmt(p.b.amount)}</span></div>
+                                </div>
+                              ))}
+                              {issue.pairs.length > 10 && <div style={{ fontSize: 11, color: "var(--text3)", textAlign: "center" }}>+{issue.pairs.length - 10} more</div>}
+                            </div>
+                          )}
+                          {issue.items && (
+                            <div style={{ display: "grid", gap: 4 }}>
+                              {issue.items.slice(0, 10).map(t => (
+                                <div key={t.id} className="flex items-center justify-between" style={{ fontSize: 12, padding: "6px 10px", background: "var(--surface2)", borderRadius: "var(--radius2)" }}>
+                                  <span>{fmtDate(t.date)} · {t.description.slice(0, 50)}</span>
+                                  <span className="mono" style={{ color: parseFloat(t.amount) < 0 ? "var(--red)" : "var(--accent)" }}>{fmt(t.amount)}</span>
+                                </div>
+                              ))}
+                              {issue.items.length > 10 && <div style={{ fontSize: 11, color: "var(--text3)", textAlign: "center", marginTop: 6 }}>+{issue.items.length - 10} more — open Transactions to review</div>}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -4136,7 +4532,7 @@ export default function App() {
       // async upsertTransactions round-trip yet — exactly what happens when
       // categorising one row triggers a realtime push that fires loadAll
       // before the bulk save settles.
-      const mappedTxns = txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null, account_id: t.account_id || null, prior_period: t.prior_period || false }));
+      const mappedTxns = txns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED, recurring_id: t.recurring_id || null, account_id: t.account_id || null, prior_period: t.prior_period || false, tags: Array.isArray(t.tags) ? t.tags : [] }));
       setTransactions(prev => {
         if (mappedTxns.length === 0) return prev;
         const dbIds = new Set(mappedTxns.map(t => t.id));
@@ -4303,6 +4699,7 @@ export default function App() {
   const NAV = [
     { id: "dashboard", label: "Overview", icon: "dashboard" },
     { id: "insights", label: "CFO Insights", icon: "insights" },
+    { id: "bookkeeper", label: "Bookkeeper", icon: "bookkeeper" },
     { id: "projects", label: "Projects", icon: "projects" },
     { id: "transactions", label: "Transactions", icon: "transactions", badge: uncat > 0 ? uncat : null },
     { id: "categories", label: "Chart of Accounts", icon: "categories" },
@@ -4319,6 +4716,7 @@ export default function App() {
   const renderScreen = () => {
     switch (screen) {
       case "insights":     return <Insights transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
+      case "bookkeeper":   return <Bookkeeper transactions={filteredByAccrual} allTransactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} dateRange={dateRange} setScreen={setScreen} showToast={showToast} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;

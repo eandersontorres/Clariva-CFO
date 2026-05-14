@@ -33,6 +33,7 @@ export async function upsertTransactions(rows, tenantId) {
     account: t.account || 'Imported',
     reconciled: t.reconciled || false,
     prior_period: t.prior_period || t.priorPeriod || false,
+    tags: Array.isArray(t.tags) ? t.tags : [],
     source: t.source || 'manual',
     notes: t.notes || '',
   }))
