@@ -1,10 +1,17 @@
-// Pulls card tips per employee per day from Square Payments and upserts into
-// r7_labor_tips_daily. Re-runs overwrite card_tips and employee_name only —
-// any pool_share / pool_method already set by the operator stays intact.
+// Pulls card tips per employee per day from Square Orders (not Payments) so
+// the attribution lines up with Square's Reports > Sales > Team Sales view.
 //
-// Cash tips are NOT trackeable from Square. Anderson's choice to skip them
-// (per the spec) means the system stays clean instead of pretending it knows
-// dollars it can't see.
+// Why Orders, not Payments?
+// - Payment.team_member_id = whoever processed the card swipe. Even when the
+//   server closes their own ticket, edge cases (split bills, tableside vs
+//   counter handoff, refund flows) can route a tip to someone other than the
+//   server who earned it.
+// - Order.tenders[].tip_money lets each tender carry its own tip + its own
+//   team_member_id, which is exactly how the Team Sales report rolls up.
+//   Multi-tender orders (split bills) distribute correctly.
+//
+// Cash tips are still NOT tracked (Anderson's call). Re-runs overwrite
+// card_tips and employee_name but preserve any pool_* the operator set.
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -37,50 +44,74 @@ export default async function handler(req, res) {
     const beginTime = (start ? new Date(start) : lookbackStart).toISOString();
     const endTime = (end ? new Date(end + "T23:59:59.999Z") : new Date()).toISOString();
 
-    // Page through payments
-    const allPayments = [];
+    // Page through orders (closed in the window, completed state)
+    const allOrders = [];
     let cursor;
     let pages = 0;
     do {
       pages++;
-      if (pages > 30) break;
-      const qs = new URLSearchParams({
-        location_id: locationId,
-        begin_time: beginTime,
-        end_time: endTime,
-        sort_order: "ASC",
-        limit: "100",
-      });
-      if (cursor) qs.set("cursor", cursor);
-      const sqRes = await fetch(`${base}/v2/payments?${qs}`, {
+      if (pages > 40) break;
+      const body = {
+        location_ids: [locationId],
+        query: {
+          filter: {
+            date_time_filter: {
+              closed_at: { start_at: beginTime, end_at: endTime },
+            },
+            state_filter: { states: ["COMPLETED"] },
+          },
+          sort: { sort_field: "CLOSED_AT", sort_order: "ASC" },
+        },
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      };
+      const sqRes = await fetch(`${base}/v2/orders/search`, {
+        method: "POST",
         headers: {
           "Authorization": "Bearer " + token,
           "Square-Version": SQUARE_VERSION,
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify(body),
       });
       if (!sqRes.ok) {
         const err = await sqRes.text();
-        return res.status(502).json({ error: "Square API " + sqRes.status, detail: err.slice(0, 500) });
+        return res.status(502).json({ error: "Square Orders API " + sqRes.status, detail: err.slice(0, 500) });
       }
       const data = await sqRes.json();
-      if (Array.isArray(data.payments)) allPayments.push(...data.payments);
+      if (Array.isArray(data.orders)) allOrders.push(...data.orders);
       cursor = data.cursor;
     } while (cursor);
 
-    // Group: (date, team_member_id) -> sum tip_money in cents
+    // Walk each order's tenders. Each tender carries its own tip_money and
+    // team_member_id (the team member that processed that specific tender).
+    // For a split bill this correctly distributes tips by server.
     const byKey = {};
-    for (const p of allPayments) {
-      const memberId = p.team_member_id;
-      const tipCents = p.tip_money?.amount || 0;
-      const createdAt = p.created_at || p.updated_at;
-      if (!memberId || !createdAt || tipCents <= 0) continue;
-      const date = createdAt.slice(0, 10);
-      const k = `${date}__${memberId}`;
-      if (!byKey[k]) byKey[k] = { date, team_member_id: memberId, cents: 0 };
-      byKey[k].cents += tipCents;
+    let ordersWithTips = 0;
+    let tipCentsFromTenderless = 0;
+    for (const o of allOrders) {
+      const closedAt = o.closed_at || o.created_at;
+      if (!closedAt) continue;
+      const date = closedAt.slice(0, 10);
+      const tenders = Array.isArray(o.tenders) ? o.tenders : [];
+      let orderHadTip = false;
+      for (const t of tenders) {
+        const tipCents = t.tip_money?.amount || 0;
+        if (tipCents <= 0) continue;
+        const memberId = t.tipped_team_member_id || t.team_member_id || o.team_member_id;
+        if (!memberId) {
+          tipCentsFromTenderless += tipCents;
+          continue;
+        }
+        orderHadTip = true;
+        const k = `${date}__${memberId}`;
+        if (!byKey[k]) byKey[k] = { date, team_member_id: memberId, cents: 0 };
+        byKey[k].cents += tipCents;
+      }
+      if (orderHadTip) ordersWithTips++;
     }
 
-    // Resolve team member names once
+    // Resolve team member names
     const memberIds = [...new Set(Object.values(byKey).map(v => v.team_member_id))];
     const memberMap = {};
     if (memberIds.length > 0) {
@@ -103,18 +134,33 @@ export default async function handler(req, res) {
       } catch { /* non-fatal */ }
     }
 
-    // Upsert preserving any existing pool_* fields (don't blow them away)
-    const groups = Object.values(byKey);
-    let written = 0;
-    for (const g of groups) {
-      const card = Math.round(g.cents) / 100;
+    // Clear current card_tips for affected (date, member) pairs we computed,
+    // then write fresh values. Anything not in our new dataset stays where it
+    // was — including pool_share/pool_method, which we never touch.
+    // First load existing rows in the window so we can preserve pool_* fields.
+    const dates = [...new Set(Object.values(byKey).map(v => v.date))];
+    const existingMap = new Map();
+    if (dates.length > 0) {
       const { data: existing } = await supabase
         .from("r7_labor_tips_daily")
-        .select("id, pool_method, pool_share, pool_participant_count, pool_total")
+        .select("id, date, team_member_id, employee_name, pool_method, pool_share, pool_participant_count, pool_total")
         .eq("tenant_id", tenant_id)
-        .eq("date", g.date)
-        .eq("team_member_id", g.team_member_id)
-        .maybeSingle();
+        .in("date", dates);
+      for (const row of (existing || [])) {
+        existingMap.set(`${row.date}__${row.team_member_id}`, row);
+      }
+    }
+
+    // Zero out card_tips for existing rows in the affected dates that we are
+    // about to NOT touch (they had no tips in the new pull). This prevents
+    // stale tips from a previous sync sticking around if Square refunded them.
+    const toWrite = [];
+    const seenKeys = new Set();
+    for (const g of Object.values(byKey)) {
+      const k = `${g.date}__${g.team_member_id}`;
+      seenKeys.add(k);
+      const card = Math.round(g.cents) / 100;
+      const existing = existingMap.get(k);
       const row = {
         tenant_id,
         date: g.date,
@@ -129,16 +175,44 @@ export default async function handler(req, res) {
         updated_at: new Date().toISOString(),
       };
       if (existing?.id) row.id = existing.id;
-      const { error } = await supabase
+      toWrite.push(row);
+    }
+    // Reset card_tips=0 on existing rows in the window we didn't see in this pull
+    for (const [k, existing] of existingMap.entries()) {
+      if (seenKeys.has(k)) continue;
+      if (parseFloat(existing.card_tips || 0) === 0) continue;
+      toWrite.push({
+        id: existing.id,
+        tenant_id,
+        date: existing.date,
+        team_member_id: existing.team_member_id,
+        employee_name: existing.employee_name,
+        card_tips: 0,
+        pool_method: existing.pool_method || "none",
+        pool_share: existing.pool_share || 0,
+        pool_participant_count: existing.pool_participant_count || 0,
+        pool_total: existing.pool_total || 0,
+        synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    let written = 0;
+    if (toWrite.length > 0) {
+      const { error: upErr } = await supabase
         .from("r7_labor_tips_daily")
-        .upsert(row, { onConflict: "tenant_id,date,team_member_id" });
-      if (!error) written++;
+        .upsert(toWrite, { onConflict: "tenant_id,date,team_member_id" });
+      if (upErr) return res.status(500).json({ error: "upsert tips: " + upErr.message });
+      written = toWrite.length;
     }
 
     return res.status(200).json({
-      payments_scanned: allPayments.length,
-      tipped_payments: groups.length,
+      source: "orders_api",
+      orders_scanned: allOrders.length,
+      orders_with_tips: ordersWithTips,
+      tipped_tender_pairs: Object.keys(byKey).length,
       employees_with_tips: memberIds.length,
+      unassigned_tip_cents: tipCentsFromTenderless,
       rows_written: written,
       window: { start: beginTime.slice(0, 10), end: endTime.slice(0, 10) },
     });
