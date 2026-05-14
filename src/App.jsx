@@ -5706,8 +5706,8 @@ export default function App() {
     { id: "insights", label: "CFO Insights", icon: "insights" },
     { id: "bookkeeper", label: "Bookkeeper", icon: "bookkeeper" },
     { id: "labor", label: "Labor", icon: "labor" },
-    { id: "tips", label: "Tips", icon: "bills" },
-    { id: "payroll", label: "Payroll", icon: "bills" },
+    { id: "payroll", label: "Payroll", icon: "bills", indent: 1 },
+    { id: "tips", label: "Tips", icon: "bills", indent: 2 },
     { id: "projects", label: "Projects", icon: "projects" },
     { id: "transactions", label: "Transactions", icon: "transactions", badge: uncat > 0 ? uncat : null },
     { id: "categories", label: "Chart of Accounts", icon: "categories" },
@@ -5763,13 +5763,32 @@ export default function App() {
 
           <div className="sidebar-section">
             <div className="sidebar-section-label">Finance</div>
-            {NAV.map(item => (
-              <div key={item.id} className={`nav-item ${screen === item.id ? "active" : ""}`} onClick={() => setScreen(item.id)}>
-                <span className="nav-icon"><Icon name={item.icon} size={15} /></span>
-                <span>{item.label}</span>
-                {item.badge && <span className="nav-badge">{item.badge}</span>}
-              </div>
-            ))}
+            {NAV.map(item => {
+              const indent = item.indent || 0;
+              return (
+                <div
+                  key={item.id}
+                  className={`nav-item ${screen === item.id ? "active" : ""}`}
+                  onClick={() => setScreen(item.id)}
+                  style={indent > 0 ? { paddingLeft: 10 + indent * 18, position: "relative" } : undefined}
+                >
+                  {indent > 0 && (
+                    <span style={{
+                      position: "absolute",
+                      left: 10 + (indent - 1) * 18 + 4,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      width: 8,
+                      height: 1,
+                      background: "var(--border2)",
+                    }} />
+                  )}
+                  <span className="nav-icon"><Icon name={item.icon} size={15} /></span>
+                  <span>{item.label}</span>
+                  {item.badge && <span className="nav-badge">{item.badge}</span>}
+                </div>
+              );
+            })}
           </div>
 
           <div className="sidebar-footer">
