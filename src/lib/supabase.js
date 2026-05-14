@@ -283,6 +283,45 @@ export async function fetchTenant(tenantId) {
   return data
 }
 
+// ─── LABOR TIPS ───────────────────────────────────────────────────────────────
+export async function fetchTipsDaily(tenantId, { start, end } = {}) {
+  let q = supabase.from('r7_labor_tips_daily').select('*').eq('tenant_id', tenantId).order('date', { ascending: false })
+  if (start) q = q.gte('date', start)
+  if (end)   q = q.lte('date', end)
+  const { data, error } = await q.limit(5000)
+  if (error) { console.error('fetchTipsDaily', error); return [] }
+  return data
+}
+
+export async function syncSquareTips(tenantId, range = {}) {
+  const res = await fetch('/api/sync-square-tips', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId, start: range.start, end: range.end }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
+export async function applyTipPool(rowsByEmployee, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return { ok: true, demo: true }
+  // rowsByEmployee = [{ date, team_member_id, employee_name, card_tips, pool_share, pool_method, pool_participant_count, pool_total }]
+  const stamped = rowsByEmployee.map(r => ({
+    ...r,
+    tenant_id: tid,
+    updated_at: new Date().toISOString(),
+  }))
+  const { error } = await supabase
+    .from('r7_labor_tips_daily')
+    .upsert(stamped, { onConflict: 'tenant_id,date,team_member_id' })
+  if (error) { console.error('applyTipPool', error); return { ok: false, error: error.message } }
+  return { ok: true }
+}
+
 // ─── PAYROLL RUNS ─────────────────────────────────────────────────────────────
 export async function fetchPayrollRuns(tenantId) {
   const { data, error } = await supabase.from('r7_payroll_runs').select('*').eq('tenant_id', tenantId).order('period_end', { ascending: false })

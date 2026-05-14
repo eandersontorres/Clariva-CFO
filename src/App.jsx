@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun } from "./lib/supabase.js";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -4391,6 +4391,286 @@ function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, trans
   );
 }
 
+// ─── TIPS ─────────────────────────────────────────────────────────────────────
+// Card tips pull straight from Square Payments per (date, team_member_id).
+// Cash is intentionally not tracked (Anderson's call). Pool is opt-in per day,
+// equal split among the employees the operator chooses to include — typical for
+// counter-service shifts where everyone deserves a cut on a busy night.
+
+function finalTip(row) {
+  if (!row) return 0;
+  return row.pool_method === "equal_split"
+    ? parseFloat(row.pool_share || 0)
+    : parseFloat(row.card_tips || 0);
+}
+
+function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const [poolModal, setPoolModal] = useState(null); // { date, eligible: [{id, name, card_tips, hours}], selected: Set }
+
+  const sync = async () => {
+    setLoading(true);
+    showToast("Pulling card tips from Square...", "info");
+    try {
+      const result = await syncSquareTips(tenantId, dateRange);
+      setLastSync(new Date().toLocaleTimeString());
+      showToast(`${result.rows_written} day-employee tip rows · ${result.employees_with_tips} employees`, "success");
+      if (onSync) onSync();
+    } catch (err) {
+      showToast("Square Tips sync failed: " + err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Filter to dateRange window for the table view (DB store keeps everything).
+  const rows = tipsDaily.filter(r => r.date >= (dateRange.start || "1900-01-01") && r.date <= (dateRange.end || "2999-12-31"));
+
+  // Group by date
+  const byDate = {};
+  for (const r of rows) {
+    if (!byDate[r.date]) byDate[r.date] = [];
+    byDate[r.date].push(r);
+  }
+  const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+
+  // KPIs over the visible window
+  const totalCard = rows.reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+  const totalFinal = rows.reduce((s, r) => s + finalTip(r), 0);
+  const poolDays = new Set(rows.filter(r => r.pool_method === "equal_split").map(r => r.date)).size;
+  const totalDays = dates.length;
+
+  const openPool = (date) => {
+    const tipsOnDate = byDate[date] || [];
+    // Eligible = anyone who had tips OR a shift that day
+    const tipMembers = new Map(tipsOnDate.map(r => [r.team_member_id, { id: r.team_member_id, name: r.employee_name || r.team_member_id.slice(0, 8), card_tips: parseFloat(r.card_tips || 0), hours: 0 }]));
+    const shiftsOnDate = (shifts || []).filter(s => s.start_at && s.start_at.slice(0, 10) === date);
+    for (const s of shiftsOnDate) {
+      const key = s.team_member_id || s.square_employee_id;
+      if (!key) continue;
+      if (!tipMembers.has(key)) tipMembers.set(key, { id: key, name: s.employee_name || key.slice(0, 8), card_tips: 0, hours: 0 });
+      const entry = tipMembers.get(key);
+      entry.hours += parseFloat(s.hours || 0);
+    }
+    const list = [...tipMembers.values()].sort((a, b) => b.card_tips - a.card_tips);
+    // Default selection: everyone who already has tips OR worked that day
+    const selected = new Set(list.map(m => m.id));
+    const existingPool = tipsOnDate.find(r => r.pool_method === "equal_split");
+    if (existingPool && existingPool.pool_participant_count) {
+      // Preserve previous selection if pool already exists
+      const existingIds = new Set(tipsOnDate.filter(r => r.pool_method === "equal_split").map(r => r.team_member_id));
+      selected.clear();
+      existingIds.forEach(id => selected.add(id));
+    }
+    setPoolModal({ date, list, selected, existingPool: !!existingPool });
+  };
+
+  const togglePoolMember = (id) => {
+    setPoolModal(p => {
+      const s = new Set(p.selected);
+      if (s.has(id)) s.delete(id); else s.add(id);
+      return { ...p, selected: s };
+    });
+  };
+
+  const applyPool = async (clear = false) => {
+    if (!poolModal) return;
+    const tipsOnDate = byDate[poolModal.date] || [];
+    const total = tipsOnDate.reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+    const count = poolModal.selected.size;
+    const share = clear || count === 0 ? 0 : round2(total / count);
+    const ids = clear ? new Set() : poolModal.selected;
+    // Build rows: for each member touched on this date (current tips OR newly added to pool)
+    const allMemberIds = new Set([
+      ...tipsOnDate.map(r => r.team_member_id),
+      ...(ids || []),
+    ]);
+    const rowsToWrite = [...allMemberIds].map(memberId => {
+      const existing = tipsOnDate.find(r => r.team_member_id === memberId);
+      const listEntry = poolModal.list.find(m => m.id === memberId);
+      return {
+        date: poolModal.date,
+        team_member_id: memberId,
+        employee_name: existing?.employee_name || listEntry?.name || null,
+        card_tips: existing?.card_tips || 0,
+        pool_method: clear ? "none" : (ids.has(memberId) ? "equal_split" : "none"),
+        pool_share: clear ? 0 : (ids.has(memberId) ? share : 0),
+        pool_participant_count: clear ? 0 : count,
+        pool_total: clear ? 0 : round2(total),
+      };
+    });
+    const result = await applyTipPool(rowsToWrite, tenantId);
+    if (!result.ok) {
+      showToast("Pool save failed: " + (result.error || "unknown"), "error");
+      return;
+    }
+    showToast(clear ? `Pool cleared for ${poolModal.date}` : `Pool applied · ${fmt(total)} split among ${count} → ${fmt(share)} each`, "success");
+    setPoolModal(null);
+    if (onSync) onSync();
+  };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Tips</div>
+          <div className="page-subtitle">{dateRange.start} → {dateRange.end} · Card tips from Square Payments · cash not tracked</div>
+        </div>
+        <button
+          className="btn btn-outline btn-sm"
+          onClick={sync}
+          disabled={loading}
+          style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          {loading ? "Syncing..." : "Sync Tips"}
+          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+        </button>
+      </div>
+
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+        <div className="kpi-card">
+          <div className="kpi-label">Card tips total</div>
+          <div className="kpi-value">{fmt(totalCard)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>across {totalDays} day{totalDays === 1 ? "" : "s"}</div>
+        </div>
+        <div className="kpi-card kpi-yellow">
+          <div className="kpi-label">Pool days</div>
+          <div className="kpi-value">{poolDays}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>of {totalDays} day{totalDays === 1 ? "" : "s"} with tips</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Final tips (after pool)</div>
+          <div className="kpi-value">{fmt(totalFinal)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>used by Payroll</div>
+        </div>
+      </div>
+
+      {dates.length === 0 ? (
+        <div className="card" style={{ textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>💵</div>
+          <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 18 }}>No tips synced for this window</div>
+          <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 8 }}>Click <strong>Sync Tips</strong> to pull from Square Payments. Each server's PIN-attributed transactions land here automatically.</div>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee</th>
+                  <th style={{ textAlign: "right" }}>Card tips</th>
+                  <th style={{ textAlign: "right" }}>Pool share</th>
+                  <th style={{ textAlign: "right" }}>Final</th>
+                  <th>Pool</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dates.map(date => {
+                  const dayRows = byDate[date].sort((a, b) => finalTip(b) - finalTip(a));
+                  const dayTotal = dayRows.reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+                  const isPool = dayRows.some(r => r.pool_method === "equal_split");
+                  return (
+                    <Fragment key={date}>
+                      <tr style={{ background: "var(--surface2)" }}>
+                        <td colSpan={5} className="mono" style={{ fontWeight: 500 }}>
+                          {fmtDate(date)} · <span style={{ color: "var(--text3)" }}>{fmt(dayTotal)} across {dayRows.length} employee{dayRows.length === 1 ? "" : "s"}</span>
+                        </td>
+                        <td>
+                          <button
+                            className="btn btn-sm"
+                            style={{
+                              background: isPool ? "var(--yellowBg)" : "var(--accentBg)",
+                              color: isPool ? "var(--yellow)" : "var(--accent)",
+                              border: `1px solid ${isPool ? "var(--yellow)" : "var(--accentBorder)"}40`,
+                              fontSize: 10,
+                            }}
+                            onClick={() => openPool(date)}
+                          >
+                            {isPool ? "Edit pool" : "Activate pool"}
+                          </button>
+                        </td>
+                      </tr>
+                      {dayRows.map(r => (
+                        <tr key={`${date}_${r.team_member_id}`}>
+                          <td className="mono" style={{ color: "var(--text3)", fontSize: 11 }}></td>
+                          <td>{r.employee_name || r.team_member_id.slice(0, 8)}</td>
+                          <td className="text-right mono" style={{ color: "var(--text2)" }}>{fmt(r.card_tips || 0)}</td>
+                          <td className="text-right mono" style={{ color: r.pool_method === "equal_split" ? "var(--yellow)" : "var(--text3)" }}>
+                            {r.pool_method === "equal_split" ? fmt(r.pool_share || 0) : "—"}
+                          </td>
+                          <td className="text-right mono" style={{ fontWeight: 500 }}>{fmt(finalTip(r))}</td>
+                          <td>
+                            {r.pool_method === "equal_split" && (
+                              <span className="tag" style={{ fontSize: 9, background: "var(--yellowBg)", color: "var(--yellow)", border: "1px solid var(--yellow)40" }}>pool</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {poolModal && (() => {
+        const total = (byDate[poolModal.date] || []).reduce((s, r) => s + parseFloat(r.card_tips || 0), 0);
+        const count = poolModal.selected.size;
+        const share = count > 0 ? total / count : 0;
+        return (
+          <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setPoolModal(null)}>
+            <div className="modal" style={{ maxWidth: 540 }}>
+              <div className="modal-header">
+                <div className="modal-title">Tip pool · {fmtDate(poolModal.date)}</div>
+                <button className="btn btn-ghost" style={{ padding: 4 }} onClick={() => setPoolModal(null)}><Icon name="close" size={16} /></button>
+              </div>
+              <div className="modal-body">
+                <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 12 }}>
+                  Pick everyone who shares this day's tips. Equal split — total <strong style={{ color: "var(--accent)" }}>{fmt(total)}</strong> ÷ {count || "?"} = <strong style={{ color: "var(--yellow)" }}>{fmt(share)}</strong> each.
+                </div>
+                <div style={{ maxHeight: 380, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius2)" }}>
+                  {poolModal.list.map(m => {
+                    const checked = poolModal.selected.has(m.id);
+                    return (
+                      <div key={m.id} className="flex items-center justify-between" style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)", background: checked ? "var(--accentBg)" : "transparent", cursor: "pointer" }} onClick={() => togglePoolMember(m.id)}>
+                        <div className="flex items-center gap-12">
+                          <div style={{ width: 16, height: 16, borderRadius: 3, border: `1.5px solid ${checked ? "var(--accent)" : "var(--border2)"}`, background: checked ? "var(--accentBg)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            {checked && <Icon name="check" size={10} color="var(--accent)" />}
+                          </div>
+                          <span style={{ fontSize: 13 }}>{m.name}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono" }}>
+                          {m.card_tips > 0 && <span style={{ marginRight: 10 }}>card {fmt(m.card_tips)}</span>}
+                          {m.hours > 0 && <span>{m.hours.toFixed(1)}h</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="modal-footer">
+                {poolModal.existingPool && (
+                  <button className="btn btn-outline" style={{ color: "var(--text3)" }} onClick={() => applyPool(true)}>Clear pool</button>
+                )}
+                <button className="btn btn-outline" onClick={() => setPoolModal(null)}>Cancel</button>
+                <button className="btn btn-primary" onClick={() => applyPool(false)} disabled={count === 0}>Apply pool</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 // ─── PAYROLL ──────────────────────────────────────────────────────────────────
 // Payroll prep + export tool. CFO calculates the batch from Square Labor +
 // manual adjustments; Paychex (or whoever the operator uses) runs the actual
@@ -4416,7 +4696,19 @@ function isoWeekKey(d) {
   return date.getFullYear() + "-W" + String(weekNo).padStart(2, "0");
 }
 
-function buildPayrollLinesFromShifts(shifts, periodStart, periodEnd) {
+function tipsTotalsForPeriod(tipsDaily, periodStart, periodEnd) {
+  const byMember = {};
+  for (const t of (tipsDaily || [])) {
+    if (t.date < periodStart || t.date > periodEnd) continue;
+    const k = t.team_member_id;
+    if (!k) continue;
+    if (!byMember[k]) byMember[k] = 0;
+    byMember[k] += finalTip(t);
+  }
+  return byMember;
+}
+
+function buildPayrollLinesFromShifts(shifts, periodStart, periodEnd, tipsDaily) {
   const ps = new Date(periodStart);
   const pe = new Date(periodEnd + "T23:59:59.999");
   const inPeriod = (shifts || []).filter(s => {
@@ -4437,6 +4729,7 @@ function buildPayrollLinesFromShifts(shifts, periodStart, periodEnd) {
     const r = parseFloat(s.wage_hourly) || 0;
     if (r > byEmp[key].hourly_rate) byEmp[key].hourly_rate = r;
   }
+  const tipsByMember = tipsTotalsForPeriod(tipsDaily, periodStart, periodEnd);
   return Object.values(byEmp).map(emp => {
     const byWeek = {};
     for (const s of emp.shifts) {
@@ -4455,7 +4748,7 @@ function buildPayrollLinesFromShifts(shifts, periodStart, periodEnd) {
       hours_regular: round2(regular),
       hours_ot: round2(ot),
       bonus: 0,
-      tips: 0,
+      tips: round2(tipsByMember[emp.employee_key] || 0),
     });
   }).sort((a, b) => b.gross - a.gross);
 }
@@ -4532,7 +4825,7 @@ function exportPayrollCSV(run) {
   a.click();
 }
 
-function Payroll({ runs, shifts, transactions, categories, setTransactions, saveTransactions, tenantId, onChange, showToast }) {
+function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransactions, saveTransactions, tenantId, onChange, showToast }) {
   const [selectedId, setSelectedId] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState({
@@ -4554,7 +4847,7 @@ function Payroll({ runs, shifts, transactions, categories, setTransactions, save
   };
 
   const createRun = async () => {
-    const lines = buildPayrollLinesFromShifts(shifts, createForm.periodStart, createForm.periodEnd);
+    const lines = buildPayrollLinesFromShifts(shifts, createForm.periodStart, createForm.periodEnd, tipsDaily);
     const totals = computePayrollTotals(lines);
     const tempId = "pr_" + Date.now();
     const newRun = {
@@ -5199,6 +5492,7 @@ export default function App() {
   const [bankAccounts, setBankAccounts] = useState([]);
   const [laborShifts, setLaborShifts] = useState([]);
   const [payrollRuns, setPayrollRuns] = useState([]);
+  const [tipsDaily, setTipsDaily] = useState([]);
   const YEAR_NOW = new Date().getFullYear();
   const [projects, setProjects] = useState([
     { id:"p1", title:"Launch Catering Service", category:"Revenue Growth", month:5, year:YEAR_NOW, status:"Planning", impact:"High", investment:2500, projectedRevenue:8000, notes:"Target corporate clients in Round Rock tech corridor.", cashRequired:2500, roi:220 },
@@ -5217,7 +5511,7 @@ export default function App() {
     if (TENANT_ID === "demo") return;
     if (showSpinner) setSyncing(true);
     try {
-      const [txns, cats, bgts, bls, projs, recs, accs, shifts, payrolls] = await Promise.all([
+      const [txns, cats, bgts, bls, projs, recs, accs, shifts, payrolls, tips] = await Promise.all([
         fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
         fetchBudgets(TENANT_ID),
@@ -5227,6 +5521,7 @@ export default function App() {
         fetchBankAccounts(TENANT_ID),
         fetchLaborShifts(TENANT_ID, dateRange),
         fetchPayrollRuns(TENANT_ID),
+        fetchTipsDaily(TENANT_ID, dateRange),
       ]);
       // Merge DB rows with whatever is in local state. A naive replace would
       // drop transactions that were just imported but haven't finished their
@@ -5248,6 +5543,7 @@ export default function App() {
       setBankAccounts(accs);
       setLaborShifts(shifts);
       setPayrollRuns(payrolls);
+      setTipsDaily(tips);
     } catch (err) {
       console.error("loadAll failed:", err);
     } finally {
@@ -5296,6 +5592,8 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_labor_shifts", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_payroll_runs", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_labor_tips_daily", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .subscribe((status) => {
         if (status === "SUBSCRIBED") { console.log("Clariva CFO: real-time active"); setRealtimeActive(true); }
@@ -5408,6 +5706,7 @@ export default function App() {
     { id: "insights", label: "CFO Insights", icon: "insights" },
     { id: "bookkeeper", label: "Bookkeeper", icon: "bookkeeper" },
     { id: "labor", label: "Labor", icon: "labor" },
+    { id: "tips", label: "Tips", icon: "bills" },
     { id: "payroll", label: "Payroll", icon: "bills" },
     { id: "projects", label: "Projects", icon: "projects" },
     { id: "transactions", label: "Transactions", icon: "transactions", badge: uncat > 0 ? uncat : null },
@@ -5427,7 +5726,8 @@ export default function App() {
       case "insights":     return <Insights transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
       case "bookkeeper":   return <Bookkeeper transactions={filteredByAccrual} allTransactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} dateRange={dateRange} setScreen={setScreen} showToast={showToast} />;
       case "labor":        return <Labor shifts={laborShifts} transactions={filteredByDate} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(true)} showToast={showToast} />;
-      case "payroll":      return <Payroll runs={payrollRuns} shifts={laborShifts} transactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} onChange={() => loadAll(false)} showToast={showToast} />;
+      case "tips":         return <Tips tipsDaily={tipsDaily} shifts={laborShifts} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(false)} showToast={showToast} />;
+      case "payroll":      return <Payroll runs={payrollRuns} shifts={laborShifts} tipsDaily={tipsDaily} transactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} onChange={() => loadAll(false)} showToast={showToast} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
