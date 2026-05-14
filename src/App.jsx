@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -1093,6 +1093,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     recurring: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>,
     wallet: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/></svg>,
     bookkeeper: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
+    labor: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/></svg>,
     sun: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>,
     moon: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
     bank: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>,
@@ -4390,6 +4391,189 @@ function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, trans
   );
 }
 
+// ─── LABOR ────────────────────────────────────────────────────────────────────
+function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+
+  const sync = async () => {
+    setLoading(true);
+    showToast("Pulling shifts from Square...", "info");
+    try {
+      const result = await syncSquareLabor(tenantId, dateRange);
+      setLastSync(new Date().toLocaleTimeString());
+      if (result.shifts === 0) {
+        showToast("No shifts in this date range.", "info");
+      } else {
+        showToast(`${result.shifts} shifts · ${result.hours}h · loaded cost ${fmt(result.fully_loaded_cost)}`, "success");
+      }
+      if (onSync) onSync();
+    } catch (err) {
+      showToast("Square Labor sync failed: " + err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Shifts already arrive filtered by date range (loadAll passes it through).
+  const totalHours = shifts.reduce((s, r) => s + parseFloat(r.hours || 0), 0);
+  const totalWage = shifts.reduce((s, r) => s + parseFloat(r.wage_total || 0), 0);
+  const totalLoaded = shifts.reduce((s, r) => s + parseFloat(r.fully_loaded_cost || 0), 0);
+  const taxBurden = shifts.length > 0 ? parseFloat(shifts[0].tax_burden_rate || 0.15) : 0.15;
+
+  // Group by employee
+  const byEmployee = {};
+  for (const s of shifts) {
+    const key = s.team_member_id || s.square_employee_id || s.employee_name || "unknown";
+    if (!byEmployee[key]) byEmployee[key] = {
+      name: s.employee_name || key.slice(0, 8),
+      shifts: 0, hours: 0, wage: 0, loaded: 0, hourlyAvg: 0,
+    };
+    byEmployee[key].shifts += 1;
+    byEmployee[key].hours += parseFloat(s.hours || 0);
+    byEmployee[key].wage += parseFloat(s.wage_total || 0);
+    byEmployee[key].loaded += parseFloat(s.fully_loaded_cost || 0);
+  }
+  const employees = Object.values(byEmployee).map(e => ({
+    ...e,
+    hourlyAvg: e.hours > 0 ? e.wage / e.hours : 0,
+  })).sort((a, b) => b.loaded - a.loaded);
+
+  // Actual payroll from ledger — match by Wages tax line or Payroll category name
+  const payrollCat = categories.find(c => c.taxLine === "Wages" || c.name === "Payroll");
+  const actualPayroll = payrollCat
+    ? Math.abs(transactions.filter(t => t.category === payrollCat.id && parseFloat(t.amount) < 0)
+        .reduce((s, t) => s + parseFloat(t.amount || 0), 0))
+    : 0;
+
+  // Revenue for labor % calc
+  const revenue = transactions.filter(t => parseFloat(t.amount) > 0 && t.source !== "internal_transfer")
+    .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
+  const laborPct = revenue > 0 ? (totalLoaded / revenue) * 100 : 0;
+
+  // Variance: actual payroll vs fully loaded projected
+  const variance = actualPayroll - totalLoaded;
+  const variancePct = totalLoaded > 0 ? (variance / totalLoaded) * 100 : 0;
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Labor</div>
+          <div className="page-subtitle">
+            {dateRange.start} → {dateRange.end} · From Square Labor · loaded cost = wage × (1 + {(taxBurden * 100).toFixed(1)}% employer tax burden)
+          </div>
+        </div>
+        <button
+          className="btn btn-outline btn-sm"
+          onClick={sync}
+          disabled={loading}
+          style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          {loading ? "Syncing..." : "Sync Labor"}
+          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+        </button>
+      </div>
+
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-label">Hours worked</div>
+          <div className="kpi-value">{totalHours.toFixed(1)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>{shifts.length} shift{shifts.length === 1 ? "" : "s"} · {employees.length} employee{employees.length === 1 ? "" : "s"}</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Wage cost</div>
+          <div className="kpi-value">{fmt(totalWage)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>hours × hourly</div>
+        </div>
+        <div className="kpi-card kpi-yellow">
+          <div className="kpi-label">Fully loaded cost</div>
+          <div className="kpi-value">{fmt(totalLoaded)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>+{(taxBurden * 100).toFixed(1)}% employer tax</div>
+        </div>
+        <div className="kpi-card" style={{ borderTop: `2px solid ${laborPct > 35 ? "var(--red)" : laborPct > 30 ? "var(--yellow)" : "var(--accent)"}` }}>
+          <div className="kpi-label">Labor % of revenue</div>
+          <div className="kpi-value" style={{ color: laborPct > 35 ? "var(--red)" : laborPct > 30 ? "var(--yellow)" : "var(--accent)" }}>
+            {laborPct.toFixed(1)}%
+          </div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>target ≤ 30% casual dining</div>
+        </div>
+      </div>
+
+      {/* Payroll variance card */}
+      {(actualPayroll > 0 || totalLoaded > 0) && (
+        <div className="card" style={{ marginBottom: 20, borderLeft: `3px solid ${Math.abs(variancePct) > 10 ? "var(--yellow)" : "var(--accent)"}` }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+            <div>
+              <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Payroll variance</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>Actual Payroll charges (ledger) vs projected fully-loaded labor (Square × tax burden)</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Variance</div>
+              <div className="mono" style={{ fontSize: 18, color: Math.abs(variancePct) > 10 ? "var(--yellow)" : "var(--accent)" }}>
+                {variance >= 0 ? "+" : ""}{fmt(variance)} ({variancePct >= 0 ? "+" : ""}{variancePct.toFixed(1)}%)
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+            <div style={{ background: "var(--surface2)", padding: "10px 14px", borderRadius: "var(--radius2)" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Projected (Square × {(taxBurden * 100).toFixed(1)}%)</div>
+              <div className="mono" style={{ fontSize: 16, marginTop: 4 }}>{fmt(totalLoaded)}</div>
+            </div>
+            <div style={{ background: "var(--surface2)", padding: "10px 14px", borderRadius: "var(--radius2)" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Actual payroll (ledger)</div>
+              <div className="mono" style={{ fontSize: 16, marginTop: 4 }}>{fmt(actualPayroll)}</div>
+            </div>
+          </div>
+          {Math.abs(variancePct) > 10 && (
+            <div style={{ marginTop: 12, fontSize: 12, color: "var(--text2)" }}>
+              ⚠ Variance over 10%.
+              {variance > 0 ? " Payroll charges exceed projected — investigate OT, bonuses, or off-system hours." : " Payroll charges below projected — possibly hours not yet paid, or Square shifts missing the actual headcount."}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* By employee */}
+      <div className="card" style={{ padding: 0 }}>
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>By employee</div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th style={{ textAlign: "right" }}>Shifts</th>
+                <th style={{ textAlign: "right" }}>Hours</th>
+                <th style={{ textAlign: "right" }}>Avg $/h</th>
+                <th style={{ textAlign: "right" }}>Wage</th>
+                <th style={{ textAlign: "right" }}>Loaded cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {employees.length === 0 ? (
+                <tr><td colSpan={6}><div className="empty"><div className="empty-icon">⏱</div><div className="empty-title">No shifts yet</div><div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Click <strong>Sync Labor</strong> to pull from Square. Ensure your team is clocking in/out on the Square Terminal.</div></div></td></tr>
+              ) : employees.map(e => (
+                <tr key={e.name}>
+                  <td style={{ fontWeight: 500 }}>{e.name}</td>
+                  <td className="text-right mono">{e.shifts}</td>
+                  <td className="text-right mono">{e.hours.toFixed(1)}h</td>
+                  <td className="text-right mono" style={{ color: "var(--text2)" }}>{fmt(e.hourlyAvg)}</td>
+                  <td className="text-right mono">{fmt(e.wage)}</td>
+                  <td className="text-right mono" style={{ color: "var(--yellow)" }}>{fmt(e.loaded)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── BOOKKEEPER ───────────────────────────────────────────────────────────────
 function Bookkeeper({ transactions, allTransactions, categories, setTransactions, saveTransactions, tenantId, dateRange, setScreen, showToast }) {
   const txns = allTransactions || transactions;
@@ -4623,6 +4807,7 @@ export default function App() {
   const [bills, setBills] = useState([]);
   const [recurring, setRecurring] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [laborShifts, setLaborShifts] = useState([]);
   const YEAR_NOW = new Date().getFullYear();
   const [projects, setProjects] = useState([
     { id:"p1", title:"Launch Catering Service", category:"Revenue Growth", month:5, year:YEAR_NOW, status:"Planning", impact:"High", investment:2500, projectedRevenue:8000, notes:"Target corporate clients in Round Rock tech corridor.", cashRequired:2500, roi:220 },
@@ -4641,7 +4826,7 @@ export default function App() {
     if (TENANT_ID === "demo") return;
     if (showSpinner) setSyncing(true);
     try {
-      const [txns, cats, bgts, bls, projs, recs, accs] = await Promise.all([
+      const [txns, cats, bgts, bls, projs, recs, accs, shifts] = await Promise.all([
         fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
         fetchBudgets(TENANT_ID),
@@ -4649,6 +4834,7 @@ export default function App() {
         fetchProjects(TENANT_ID),
         fetchRecurring(TENANT_ID),
         fetchBankAccounts(TENANT_ID),
+        fetchLaborShifts(TENANT_ID, dateRange),
       ]);
       // Merge DB rows with whatever is in local state. A naive replace would
       // drop transactions that were just imported but haven't finished their
@@ -4668,6 +4854,7 @@ export default function App() {
       if (projs.length > 0) setProjects(projs.map(p => ({ ...p, projectedRevenue: p.projected_revenue })));
       setRecurring(recs);
       setBankAccounts(accs);
+      setLaborShifts(shifts);
     } catch (err) {
       console.error("loadAll failed:", err);
     } finally {
@@ -4712,6 +4899,8 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_recurring", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_bank_accounts", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_labor_shifts", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .subscribe((status) => {
         if (status === "SUBSCRIBED") { console.log("Clariva CFO: real-time active"); setRealtimeActive(true); }
@@ -4823,6 +5012,7 @@ export default function App() {
     { id: "dashboard", label: "Overview", icon: "dashboard" },
     { id: "insights", label: "CFO Insights", icon: "insights" },
     { id: "bookkeeper", label: "Bookkeeper", icon: "bookkeeper" },
+    { id: "labor", label: "Labor", icon: "labor" },
     { id: "projects", label: "Projects", icon: "projects" },
     { id: "transactions", label: "Transactions", icon: "transactions", badge: uncat > 0 ? uncat : null },
     { id: "categories", label: "Chart of Accounts", icon: "categories" },
@@ -4840,6 +5030,7 @@ export default function App() {
     switch (screen) {
       case "insights":     return <Insights transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
       case "bookkeeper":   return <Bookkeeper transactions={filteredByAccrual} allTransactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} dateRange={dateRange} setScreen={setScreen} showToast={showToast} />;
+      case "labor":        return <Labor shifts={laborShifts} transactions={filteredByDate} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(true)} showToast={showToast} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;

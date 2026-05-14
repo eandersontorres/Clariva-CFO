@@ -283,6 +283,34 @@ export async function fetchTenant(tenantId) {
   return data
 }
 
+// ─── SQUARE LABOR ─────────────────────────────────────────────────────────────
+export async function fetchLaborShifts(tenantId, { start, end } = {}) {
+  let q = supabase.from('r7_labor_shifts').select('*').eq('tenant_id', tenantId).order('start_at', { ascending: false })
+  if (start) q = q.gte('start_at', start)
+  if (end)   q = q.lte('start_at', end + 'T23:59:59.999Z')
+  const { data, error } = await q.limit(2000)
+  if (error) { console.error('fetchLaborShifts', error); return [] }
+  return data
+}
+
+export async function syncSquareLabor(tenantId, range = {}) {
+  try {
+    const res = await fetch('/api/sync-square-labor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenant_id: tenantId, start: range.start, end: range.end }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+      throw new Error(err.error || 'Server error ' + res.status)
+    }
+    return await res.json()
+  } catch (err) {
+    console.error('syncSquareLabor', err)
+    throw err
+  }
+}
+
 // ─── BOOKINGS FORECAST ────────────────────────────────────────────────────────
 // Goes through /api/forecast-bookings because r7_reservations has RLS that
 // blocks the anon key. Returns upcoming demand + no-show rate + avg ticket
