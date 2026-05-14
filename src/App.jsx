@@ -38,31 +38,36 @@ const STYLES = `
   }
 
   :root.theme-light {
-    --bg: #faf7ef;
+    --bg: #fafafa;
     --surface: #ffffff;
-    --surface2: #f3eee0;
-    --surface3: #e8e1cd;
-    --border: rgba(78,62,22,0.12);
-    --border2: rgba(78,62,22,0.28);
-    --text: #2a2317;
-    --text2: #5a5040;
-    --text3: #8a7e68;
+    --surface2: #f9fafb;
+    --surface3: #f3f4f6;
+    --border: rgba(17,24,39,0.08);
+    --border2: rgba(17,24,39,0.18);
+    --text: #111827;
+    --text2: #4b5563;
+    --text3: #9ca3af;
     --accent: #8a6f1e;
     --accent2: #6e5818;
     --accentBg: rgba(138,111,30,0.1);
-    --accentBorder: rgba(138,111,30,0.35);
-    --red: #a23f25;
-    --redBg: rgba(162,63,37,0.08);
-    --yellow: #a37008;
-    --yellowBg: rgba(163,112,8,0.08);
-    --blue: #2f6b97;
-    --blueBg: rgba(47,107,151,0.08);
-    --purple: #6e5d80;
-    --purpleBg: rgba(110,93,128,0.08);
+    --accentBorder: rgba(138,111,30,0.3);
+    --red: #dc2626;
+    --redBg: rgba(220,38,38,0.06);
+    --yellow: #ca8a04;
+    --yellowBg: rgba(202,138,4,0.08);
+    --blue: #2563eb;
+    --blueBg: rgba(37,99,235,0.06);
+    --purple: #7c3aed;
+    --purpleBg: rgba(124,58,237,0.06);
   }
-  :root.theme-light .sidebar { background: #f3eee0; }
+  :root.theme-light .sidebar { background: #ffffff; border-right: 1px solid var(--border); }
   :root.theme-light .logo-icon { background: var(--accentBg); }
-  :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(78,62,22,0.25); }
+  :root.theme-light .nav-item:hover { background: var(--surface3); }
+  :root.theme-light .nav-item.active { background: var(--accentBg); }
+  :root.theme-light .card { box-shadow: 0 1px 2px rgba(17,24,39,0.04); }
+  :root.theme-light .kpi-card { box-shadow: 0 1px 2px rgba(17,24,39,0.04); }
+  :root.theme-light .modal { box-shadow: 0 20px 50px rgba(17,24,39,0.15); }
+  :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(17,24,39,0.15); }
 
   html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; letter-spacing: 0.01em; }
   #root { height: 100%; }
