@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -431,7 +431,7 @@ function hasTag(t, tag) { return Array.isArray(t.tags) && t.tags.includes(tag); 
 function detectMissing1099(transactions) {
   const year = new Date().getFullYear();
   const yearStart = year + "-01-01";
-  const expensesYear = transactions.filter(t => parseFloat(t.amount) < 0 && t.date >= yearStart && t.source !== "internal_transfer");
+  const expensesYear = transactions.filter(t => parseFloat(t.amount) < 0 && t.date >= yearStart && isRevenueRelevant(t));
   const byVendor = {};
   for (const t of expensesYear) {
     const key = normalizeVendorKey(t.description);
@@ -445,7 +445,7 @@ function detectMissing1099(transactions) {
 }
 
 function detectDuplicateCharges(transactions) {
-  const expenses = transactions.filter(t => parseFloat(t.amount) < 0 && t.source !== "internal_transfer");
+  const expenses = transactions.filter(t => parseFloat(t.amount) < 0 && isRevenueRelevant(t));
   const dayMs = 24 * 60 * 60 * 1000;
   const seen = new Set();
   const pairs = [];
@@ -498,7 +498,7 @@ function detectPersonalMix(transactions) {
 
 function detectSalesTaxGap(transactions, categories) {
   const yearStart = new Date().getFullYear() + "-01-01";
-  const revenue = transactions.filter(t => parseFloat(t.amount) > 0 && t.date >= yearStart && t.source !== "internal_transfer")
+  const revenue = transactions.filter(t => parseFloat(t.amount) > 0 && t.date >= yearStart && isRevenueRelevant(t))
     .reduce((s, t) => s + parseFloat(t.amount), 0);
   if (revenue === 0) return null;
   const taxCat = categories.find(c => c.taxLine === "Taxes & Licenses");
@@ -648,6 +648,15 @@ function accrualDate(t) {
   // the previous month because month is 0-indexed and day=0 rolls back one.
   const lastDay = new Date(y, m - 1, 0);
   return lastDay.toISOString().slice(0, 10);
+}
+
+// Transactions whose source is in this set are bank-side movements that
+// mirror something already counted elsewhere (internal transfers, Square
+// deposits whose gross is already booked via square_sale_gross). They must
+// be excluded from income/expense roll-ups to avoid double-counting.
+const NON_REVENUE_SOURCES = new Set(["internal_transfer", "square_settlement"]);
+function isRevenueRelevant(t) {
+  return t && !NON_REVENUE_SOURCES.has(t.source);
 }
 
 // ─── INTERNAL TRANSFER DETECTION ──────────────────────────────────────────────
@@ -1021,6 +1030,46 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
   );
 }
 
+function SalesSyncButton({ tenantId, dateRange, onSync, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+
+  const sync = async () => {
+    setLoading(true);
+    showToast("Pulling Square sales + processing fees...", "info");
+    try {
+      const result = await syncSquareSales(tenantId, dateRange);
+      setLastSync(new Date().toLocaleTimeString());
+      const summary = `${result.days_with_sales} days · gross ${fmt(result.totals.gross_sales)} · fees ${fmt(result.totals.processing_fees)}`;
+      const settlementNote = result.settlements_retagged > 0
+        ? ` · ${result.settlements_retagged} bank deposit${result.settlements_retagged === 1 ? "" : "s"} marked as settlement`
+        : "";
+      showToast(summary + settlementNote, "success");
+      if (onSync) onSync();
+    } catch (err) {
+      showToast("Square Sales sync failed: " + err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      className="btn btn-outline btn-sm"
+      onClick={sync}
+      disabled={loading}
+      style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
+      title="Pull daily gross sales + processing fees from Square — bank-side Square deposits get re-tagged as settlement so they don't double-count"
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
+        <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+      </svg>
+      {loading ? "Syncing..." : "Sync Sales"}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+    </button>
+  );
+}
+
 function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
   const [loading, setLoading] = useState(false);
   const [lastSync, setLastSync] = useState(null);
@@ -1118,7 +1167,7 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
   // Detect internal transfers across ALL transactions (not just the date window)
   // so a transfer that straddles a date boundary still pairs correctly.
   const transferPairs = detectTransferPairs(allTransactions || transactions);
-  const realTxns = transactions.filter(t => !transferPairs.has(t.id));
+  const realTxns = transactions.filter(t => !transferPairs.has(t.id) && isRevenueRelevant(t));
   const transferCount = transactions.filter(t => transferPairs.has(t.id)).length;
   const totalIncome = realTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalExpense = Math.abs(realTxns.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
@@ -2366,7 +2415,7 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
   const contractors = (() => {
     const txns = (allTransactions || transactions).filter(t =>
       t.date >= `${fiscalYear}-01-01` && t.date <= `${fiscalYear}-12-31` &&
-      parseFloat(t.amount) < 0 && t.source !== "internal_transfer"
+      parseFloat(t.amount) < 0 && isRevenueRelevant(t)
     );
     const byVendor = {};
     for (const t of txns) {
@@ -5146,7 +5195,7 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
     : 0;
 
   // Revenue for labor % calc
-  const revenue = transactions.filter(t => parseFloat(t.amount) > 0 && t.source !== "internal_transfer")
+  const revenue = transactions.filter(t => parseFloat(t.amount) > 0 && isRevenueRelevant(t))
     .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
   const laborPct = revenue > 0 ? (totalLoaded / revenue) * 100 : 0;
 
@@ -5847,6 +5896,12 @@ export default function App() {
               categories={categories}
               dateRange={dateRange}
               onSync={handleKitchenSync}
+              showToast={showToast}
+            />
+            <SalesSyncButton
+              tenantId={TENANT_ID}
+              dateRange={dateRange}
+              onSync={() => loadAll(false)}
               showToast={showToast}
             />
             <MarketingSyncButton

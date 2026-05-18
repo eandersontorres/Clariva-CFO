@@ -293,6 +293,19 @@ export async function fetchTipsDaily(tenantId, { start, end } = {}) {
   return data
 }
 
+export async function syncSquareSales(tenantId, range = {}) {
+  const res = await fetch('/api/sync-square-sales', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId, start: range.start, end: range.end }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
 export async function syncSquareTips(tenantId, range = {}) {
   const res = await fetch('/api/sync-square-tips', {
     method: 'POST',
