@@ -6,11 +6,11 @@ const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 
 // ─── STYLES ────────────────────────────────────────────────────────────────
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600;700&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=DM+Sans:wght@300;400;500;600&family=Syne:wght@700;800&display=swap');
-
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     --bg: #0a0a0a;
     --surface: #111111;
     --surface2: #181818;
@@ -71,7 +71,7 @@ const STYLES = `
   :root.theme-light .modal { box-shadow: 0 20px 50px rgba(15,23,42,0.18); }
   :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(15,23,42,0.15); }
 
-  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; letter-spacing: 0.01em; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-sans); letter-spacing: 0.01em; }
   #root { height: 100%; }
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -103,10 +103,10 @@ const STYLES = `
     display: flex; align-items: center; justify-content: center;
   }
   .logo-text { display: flex; flex-direction: column; }
-  .logo-mark { font-family: 'Cormorant Garamond', serif; font-weight: 600; font-size: 15px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); line-height: 1; }
-  .logo-sub { font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; color: var(--accent); letter-spacing: 0.14em; text-transform: uppercase; margin-top: 4px; line-height: 1; }
+  .logo-mark { font-family: var(--font-sans); font-weight: 600; font-size: 15px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); line-height: 1; }
+  .logo-sub { font-family: var(--font-mono); font-size: 10px; font-weight: 500; color: var(--accent); letter-spacing: 0.14em; text-transform: uppercase; margin-top: 4px; line-height: 1; }
   .sidebar-section { padding: 16px 10px 8px; }
-  .sidebar-section-label { font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); opacity: 0.6; padding: 0 8px 8px; font-family: 'DM Mono', monospace; }
+  .sidebar-section-label { font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); opacity: 0.6; padding: 0 8px 8px; font-family: var(--font-mono); }
   .nav-item {
     display: flex; align-items: center; gap: 10px;
     padding: 9px 10px; border-radius: var(--radius2);
@@ -119,21 +119,21 @@ const STYLES = `
   .nav-item.active .nav-icon { color: var(--accent); }
   .nav-icon { width: 16px; height: 16px; flex-shrink: 0; opacity: 0.7; }
   .nav-item.active .nav-icon { opacity: 1; }
-  .nav-badge { margin-left: auto; background: var(--red); color: #fff; font-size: 10px; border-radius: 99px; padding: 1px 6px; font-family: 'DM Mono', monospace; }
+  .nav-badge { margin-left: auto; background: var(--red); color: #fff; font-size: 10px; border-radius: 99px; padding: 1px 6px; font-family: var(--font-mono); }
   .sidebar-footer { margin-top: auto; padding: 14px 12px; border-top: 1px solid var(--border); }
   .entity-pill { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius2); padding: 8px 10px; font-size: 11px; color: var(--text2); }
-  .entity-pill strong { display: block; color: var(--accent); font-size: 12px; font-family: 'Cormorant Garamond', serif; letter-spacing: 0.06em; }
+  .entity-pill strong { display: block; color: var(--accent); font-size: 12px; font-family: var(--font-sans); letter-spacing: 0.06em; }
 
   /* MAIN */
   .main { flex: 1; overflow-y: auto; background: var(--bg); }
   .page { padding: 28px 32px; max-width: 1300px; }
   .page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
-  .page-title { font-family: 'Cormorant Garamond', serif; font-size: 26px; font-weight: 600; color: var(--text); letter-spacing: 0.02em; }
-  .page-subtitle { font-size: 12px; color: var(--text3); margin-top: 3px; font-family: 'DM Mono', monospace; }
+  .page-title { font-family: var(--font-sans); font-size: 26px; font-weight: 600; color: var(--text); letter-spacing: 0.02em; }
+  .page-subtitle { font-size: 12px; color: var(--text3); margin-top: 3px; font-family: var(--font-mono); }
 
   /* BUTTONS */
-  .btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 16px; border-radius: var(--radius2); font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.15s; font-family: 'DM Sans', sans-serif; }
-  .btn-primary { background: var(--accent); color: #0a0a0a; font-family: 'DM Mono', monospace; letter-spacing: 0.06em; font-size: 12px; }
+  .btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 16px; border-radius: var(--radius2); font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.15s; font-family: var(--font-sans); }
+  .btn-primary { background: var(--accent); color: #0a0a0a; font-family: var(--font-mono); letter-spacing: 0.06em; font-size: 12px; }
   .btn-primary:hover { background: var(--accent2); }
   .btn-outline { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
   .btn-outline:hover { background: var(--surface2); color: var(--text); }
@@ -149,9 +149,9 @@ const STYLES = `
   /* KPI GRID */
   .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px; }
   .kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
-  .kpi-label { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase; }
-  .kpi-value { font-family: 'DM Mono', monospace; font-size: 24px; font-weight: 400; color: var(--text); margin: 6px 0 4px; letter-spacing: -0.01em; }
-  .kpi-delta { font-size: 11px; font-family: 'DM Mono', monospace; }
+  .kpi-label { font-size: 11px; color: var(--text3); font-family: var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; }
+  .kpi-value { font-family: var(--font-mono); font-size: 24px; font-weight: 400; color: var(--text); margin: 6px 0 4px; letter-spacing: -0.01em; }
+  .kpi-delta { font-size: 11px; font-family: var(--font-mono); }
   .kpi-delta.pos { color: var(--accent); }
   .kpi-delta.neg { color: var(--red); }
   .kpi-accent { border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
@@ -162,17 +162,17 @@ const STYLES = `
   /* TABLES */
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; padding: 8px 12px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text3); font-family: 'DM Mono', monospace; font-weight: 400; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { text-align: left; padding: 8px 12px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text3); font-family: var(--font-mono); font-weight: 400; border-bottom: 1px solid var(--border); white-space: nowrap; }
   td { padding: 11px 12px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   tr:last-child td { border-bottom: none; }
   tr:hover td { background: var(--surface2); }
-  .mono { font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: -0.01em; }
-  .amount-pos { color: var(--accent); font-family: 'DM Mono', monospace; font-size: 13px; }
-  .amount-neg { color: var(--red); font-family: 'DM Mono', monospace; font-size: 13px; }
-  .amount-neutral { color: var(--text); font-family: 'DM Mono', monospace; font-size: 13px; }
+  .mono { font-family: var(--font-mono); font-size: 12px; letter-spacing: -0.01em; }
+  .amount-pos { color: var(--accent); font-family: var(--font-mono); font-size: 13px; }
+  .amount-neg { color: var(--red); font-family: var(--font-mono); font-size: 13px; }
+  .amount-neutral { color: var(--text); font-family: var(--font-mono); font-size: 13px; }
 
   /* TAGS / BADGES */
-  .tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 99px; font-size: 10px; font-family: 'DM Mono', monospace; font-weight: 400; border: 1px solid transparent; white-space: nowrap; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 99px; font-size: 10px; font-family: var(--font-mono); font-weight: 400; border: 1px solid transparent; white-space: nowrap; }
   .tag-green { background: var(--accentBg); color: var(--accent); border-color: var(--accentBorder); }
   .tag-red { background: var(--redBg); color: var(--red); border-color: rgba(240,94,94,0.2); }
   .tag-yellow { background: var(--yellowBg); color: var(--yellow); border-color: rgba(240,200,74,0.2); }
@@ -181,11 +181,11 @@ const STYLES = `
   .tag-gray { background: var(--surface2); color: var(--text2); border-color: var(--border2); }
 
   /* FORMS */
-  .input { background: var(--surface2); border: 1px solid var(--border2); border-radius: var(--radius2); padding: 8px 12px; color: var(--text); font-size: 13px; font-family: 'DM Sans', sans-serif; outline: none; transition: border 0.15s; width: 100%; }
+  .input { background: var(--surface2); border: 1px solid var(--border2); border-radius: var(--radius2); padding: 8px 12px; color: var(--text); font-size: 13px; font-family: var(--font-sans); outline: none; transition: border 0.15s; width: 100%; }
   .input:focus { border-color: var(--accent); }
   .input::placeholder { color: var(--text3); }
   select.input { cursor: pointer; }
-  .label { font-size: 11px; color: var(--text2); margin-bottom: 5px; display: block; font-family: 'DM Mono', monospace; letter-spacing: 0.05em; }
+  .label { font-size: 11px; color: var(--text2); margin-bottom: 5px; display: block; font-family: var(--font-mono); letter-spacing: 0.05em; }
   .form-group { margin-bottom: 14px; }
   .form-row { display: grid; gap: 12px; }
   .form-row-2 { grid-template-columns: 1fr 1fr; }
@@ -195,7 +195,7 @@ const STYLES = `
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; backdrop-filter: blur(4px); }
   .modal { background: var(--surface); border: 1px solid var(--border2); border-radius: var(--radius); width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; }
   .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--border); }
-  .modal-title { font-family: 'Cormorant Garamond', serif; font-size: 18px; font-weight: 600; letter-spacing: 0.04em; }
+  .modal-title { font-family: var(--font-sans); font-size: 18px; font-weight: 600; letter-spacing: 0.04em; }
   .modal-body { padding: 20px; }
   .modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
 
@@ -203,8 +203,8 @@ const STYLES = `
   .upload-zone { border: 2px dashed var(--border2); border-radius: var(--radius); padding: 40px; text-align: center; cursor: pointer; transition: all 0.2s; }
   .upload-zone:hover, .upload-zone.drag { border-color: var(--accent); background: var(--accentBg); }
   .upload-icon { font-size: 32px; margin-bottom: 12px; }
-  .upload-title { font-family: 'Cormorant Garamond', serif; font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
-  .upload-sub { font-size: 12px; color: var(--text3); font-family: 'DM Mono', monospace; }
+  .upload-title { font-family: var(--font-sans); font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .upload-sub { font-size: 12px; color: var(--text3); font-family: var(--font-mono); }
 
   /* PROGRESS BAR */
   .progress-bar { height: 4px; background: var(--surface3); border-radius: 99px; overflow: hidden; }
@@ -215,7 +215,7 @@ const STYLES = `
   .bar-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
   .bar { width: 100%; border-radius: 4px 4px 0 0; min-height: 4px; transition: height 0.3s; position: relative; cursor: pointer; }
   .bar:hover { filter: brightness(1.2); }
-  .bar-label { font-size: 9px; color: var(--text3); font-family: 'DM Mono', monospace; white-space: nowrap; }
+  .bar-label { font-size: 9px; color: var(--text3); font-family: var(--font-mono); white-space: nowrap; }
   .bar-income { background: var(--accent); }
   .bar-expense { background: var(--red); }
   .bar-net { background: var(--blue); }
@@ -255,37 +255,37 @@ const STYLES = `
   .recon-arrow { color: var(--accent); text-align: center; font-size: 14px; }
   .recon-card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius2); padding: 10px 12px; font-size: 12px; }
   .recon-card .desc { color: var(--text); margin-bottom: 3px; }
-  .recon-card .meta { color: var(--text3); font-family: 'DM Mono', monospace; font-size: 11px; }
+  .recon-card .meta { color: var(--text3); font-family: var(--font-mono); font-size: 11px; }
 
   /* EMPTY STATE */
   .empty { text-align: center; padding: 60px 20px; color: var(--text3); }
   .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.5; }
-  .empty-title { font-family: 'Syne', sans-serif; font-size: 15px; color: var(--text2); margin-bottom: 6px; }
-  .empty-sub { font-size: 12px; font-family: 'DM Mono', monospace; }
+  .empty-title { font-family: var(--font-sans); font-size: 15px; color: var(--text2); margin-bottom: 6px; }
+  .empty-sub { font-size: 12px; font-family: var(--font-mono); }
 
   /* COLOR DOTS */
   .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
   /* SELECT CAT */
-  .cat-select { background: var(--surface3); border: 1px solid var(--border); border-radius: var(--radius2); padding: 4px 8px; color: var(--text2); font-size: 11px; font-family: 'DM Mono', monospace; cursor: pointer; outline: none; }
+  .cat-select { background: var(--surface3); border: 1px solid var(--border); border-radius: var(--radius2); padding: 4px 8px; color: var(--text2); font-size: 11px; font-family: var(--font-mono); cursor: pointer; outline: none; }
   .cat-select:focus { border-color: var(--accent); }
   .cat-select.auto-cat { border-color: var(--accentBorder); background: var(--accentBg); color: var(--text); }
   .auto-cat-badge { font-size: 11px; cursor: help; opacity: 0.85; line-height: 1; }
 
   /* P&L REPORT */
   .pl-section { margin-bottom: 8px; }
-  .pl-header { background: var(--surface2); padding: 10px 14px; border-radius: var(--radius2); font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  .pl-header { background: var(--surface2); padding: 10px 14px; border-radius: var(--radius2); font-family: var(--font-sans); font-size: 12px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
   .pl-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px 8px 24px; border-bottom: 1px solid var(--border); }
   .pl-row:hover { background: var(--surface2); }
   .pl-row-name { font-size: 13px; color: var(--text2); }
   .pl-total { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--surface3); border-radius: var(--radius2); margin: 4px 0; }
-  .pl-total-label { font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 600; }
+  .pl-total-label { font-family: var(--font-sans); font-size: 13px; font-weight: 600; }
   .pl-net { background: var(--accentBg); border: 1px solid var(--accentBorder); padding: 14px 18px; border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
-  .pl-net-label { font-family: 'Cormorant Garamond', serif; font-size: 18px; font-weight: 600; color: var(--text); letter-spacing: 0.04em; }
+  .pl-net-label { font-family: var(--font-sans); font-size: 18px; font-weight: 600; color: var(--text); letter-spacing: 0.04em; }
 
   /* BUDGET */
   .budget-row { display: grid; grid-template-columns: 1fr 130px 130px 130px 100px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
-  .budget-header { font-size: 10px; color: var(--text3); font-family: 'DM Mono', monospace; text-transform: uppercase; letter-spacing: 0.1em; padding: 0 0 8px; }
+  .budget-header { font-size: 10px; color: var(--text3); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; padding: 0 0 8px; }
   .budget-progress { }
 
   /* CATEGORY COLOR SWATCH */
@@ -923,7 +923,7 @@ function DateRangePicker({ dateRange, setDateRange }) {
     <div ref={ref} style={{ position: "relative" }}>
       <button
         className="btn btn-outline btn-sm"
-        style={{ gap: 8, fontFamily: "DM Mono, monospace", fontSize: 12, minWidth: 220 }}
+        style={{ gap: 8, fontFamily: "var(--font-mono)", fontSize: 12, minWidth: 220 }}
         onClick={() => setOpen(o => !o)}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
@@ -956,7 +956,7 @@ function DateRangePicker({ dateRange, setDateRange }) {
             </div>
           ))}
           <div style={{ borderTop: "1px solid var(--border)", margin: "6px 0", padding: "8px 12px 4px" }}>
-            <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.1em" }}>Custom Range</div>
+            <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.1em" }}>Custom Range</div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input type="date" className="input" style={{ fontSize: 12, padding: "5px 8px", flex: 1 }}
                 value={dateRange.start} onChange={e => setDateRange(r => ({ ...r, start: e.target.value }))} />
@@ -1027,7 +1027,7 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
         <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
       </svg>
       {loading ? "Syncing..." : "Sync Kitchen"}
-      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
     </button>
   );
 }
@@ -1067,7 +1067,7 @@ function SalesSyncButton({ tenantId, dateRange, onSync, showToast }) {
         <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
       </svg>
       {loading ? "Syncing..." : "Sync Sales"}
-      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
     </button>
   );
 }
@@ -1113,7 +1113,7 @@ function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
         <path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>
       </svg>
       {loading ? "Syncing..." : "Sync Marketing"}
-      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
     </button>
   );
 }
@@ -1246,22 +1246,22 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
             <div>
-              <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Cash Position</div>
-              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Cash Position</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
                 {activeAccounts.length} active account{activeAccounts.length === 1 ? "" : "s"} · point-in-time across all dates
               </div>
             </div>
             <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Liquid</div>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Liquid</div>
                 <div className="mono" style={{ fontSize: 14, color: "var(--accent)" }}>{fmt(liquid)}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Debt</div>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Debt</div>
                 <div className="mono" style={{ fontSize: 14, color: debt < 0 ? "var(--red)" : "var(--text)" }}>{fmt(debt)}</div>
               </div>
               <div style={{ textAlign: "right", paddingLeft: 18, borderLeft: "1px solid var(--border2)" }}>
-                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Net</div>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Net</div>
                 <div className="mono" style={{ fontSize: 18, color: cashPosition >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(cashPosition)}</div>
               </div>
             </div>
@@ -1276,7 +1276,7 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
                 <div key={acc.id} style={{ background: "var(--surface2)", borderLeft: `3px solid ${meta.color}`, borderRadius: "var(--radius2)", padding: "10px 14px" }}>
                   <div style={{ fontSize: 12, fontWeight: 500 }}>{acc.name}</div>
                   <div className="mono" style={{ fontSize: 16, marginTop: 4, color: balance >= 0 ? "var(--text)" : "var(--red)" }}>{fmt(balance)}</div>
-                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
                     {meta.label}
                     {utilization != null && <span style={{ color: utilization > 70 ? "var(--red)" : utilization > 40 ? "var(--yellow)" : "var(--text3)", marginLeft: 6 }}>· {utilization.toFixed(0)}% used</span>}
                   </div>
@@ -1290,7 +1290,7 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
       <div className="grid-2 mt-4" style={{ marginBottom: 20 }}>
         <div className="card">
           <div className="flex items-center justify-between mb-16">
-            <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Weekly Cash Flow</div>
+            <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Weekly Cash Flow</div>
           </div>
           <div className="bar-chart">
             {weeks.map((w, i) => (
@@ -1304,13 +1304,13 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
             ))}
           </div>
           <div className="flex gap-16 mt-12" style={{ justifyContent: "center" }}>
-            <div className="flex items-center gap-8"><div className="dot" style={{ background: "var(--accent)" }} /><span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono" }}>Income</span></div>
-            <div className="flex items-center gap-8"><div className="dot" style={{ background: "var(--red)" }} /><span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono" }}>Expense</span></div>
+            <div className="flex items-center gap-8"><div className="dot" style={{ background: "var(--accent)" }} /><span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>Income</span></div>
+            <div className="flex items-center gap-8"><div className="dot" style={{ background: "var(--red)" }} /><span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>Expense</span></div>
           </div>
         </div>
 
         <div className="card">
-          <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Expenses by Category</div>
+          <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Expenses by Category</div>
           {catItems.map(({ cat, amt }) => (
             <div key={cat.id} className="flex items-center gap-12" style={{ marginBottom: 12 }}>
               <div className="swatch" style={{ background: cat.color }} />
@@ -1330,8 +1330,8 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
 
       <div className="card">
         <div className="flex items-center justify-between mb-16">
-          <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Recent Transactions</div>
-          <span style={{ fontSize: 12, color: "var(--text3)", fontFamily: "DM Mono" }}>{transactions.length} total</span>
+          <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Recent Transactions</div>
+          <span style={{ fontSize: 12, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{transactions.length} total</span>
         </div>
         <div className="table-wrap">
           <table>
@@ -1705,14 +1705,14 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
       >
         <div style={{ fontSize: 24 }}><Icon name="bank" size={28} color="var(--accent)" /></div>
         <div>
-          <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 600, fontSize: 14 }}>
+          <div style={{ fontFamily: "var(--font-sans)", fontWeight: 600, fontSize: 14 }}>
             {parsing ? "🤖 AI extracting transactions from PDF..." : "Drop your Bank of America statement here"}
           </div>
-          <div style={{ fontSize: 12, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 3 }}>
+          <div style={{ fontSize: 12, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 3 }}>
             {parsing ? "This usually takes 10–20 seconds" : "PDF · CSV · OFX/QFX · Drag & drop or click to browse"}
           </div>
         </div>
-        <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textAlign: "right" }}>
+        <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textAlign: "right" }}>
           BoA Online → Statements → Download<br /><span style={{color:"var(--accent)"}}>PDF recommended</span> · CSV or OFX also work
         </div>
       </div>
@@ -1767,7 +1767,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                           onClick={() => matchInvoice(t.id, inv)}
                           title={`Apply "${foodCat?.name || "expense"}" category and reconcile with this invoice`}
                           style={{
-                            marginTop: 4, padding: "2px 8px", fontSize: 10, fontFamily: "DM Mono",
+                            marginTop: 4, padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)",
                             background: "var(--accentBg)", color: "var(--accent)",
                             border: "1px solid var(--accentBorder)", borderRadius: 4, cursor: "pointer",
                           }}
@@ -1786,7 +1786,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                           ? `P&L counts this in ${accrualDate(t).slice(0, 7)} (prior-period flag on) — click to clear`
                           : "Flag as prior-period: P&L/Tax shift this row to the last day of the previous month. Cash Flow stays on the actual date."}
                         style={{
-                          fontSize: 11, fontFamily: "DM Mono", padding: "2px 6px",
+                          fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 6px",
                           borderRadius: 4, cursor: "pointer", lineHeight: 1,
                           background: t.prior_period ? "var(--yellowBg)" : "transparent",
                           color: t.prior_period ? "var(--yellow)" : "var(--text3)",
@@ -1794,7 +1794,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                           opacity: t.prior_period ? 1 : 0.45,
                         }}
                       >↩</button>
-                      {transferPairs.has(t.id) && <span title="Internal transfer between your own accounts — excluded from income/expense totals" style={{ fontSize: 10, fontFamily: "DM Mono", padding: "2px 6px", borderRadius: 4, background: "var(--blueBg)", color: "var(--blue)", border: "1px solid var(--blue)40" }}>↔ Internal</span>}
+                      {transferPairs.has(t.id) && <span title="Internal transfer between your own accounts — excluded from income/expense totals" style={{ fontSize: 10, fontFamily: "var(--font-mono)", padding: "2px 6px", borderRadius: 4, background: "var(--blueBg)", color: "var(--blue)", border: "1px solid var(--blue)40" }}>↔ Internal</span>}
                       {t.autoCategorized && <span className="auto-cat-badge" title="Auto-categorized from history — change to confirm">✨</span>}
                       <select className={`cat-select${t.autoCategorized ? " auto-cat" : ""}`} value={t.category} onChange={e => updateCategory(t.id, e.target.value)}>
                         {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -1922,7 +1922,7 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
       <div className="grid-2">
         {["income", "expense"].map(type => (
           <div key={type}>
-            <div style={{ fontFamily: "Syne, sans-serif", fontSize: 12, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>
+            <div style={{ fontFamily: "var(--font-sans)", fontSize: 12, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>
               {type === "income" ? "💰 Income" : "💸 Expenses"}
             </div>
             {categories.filter(c => c.type === type).map(c => (
@@ -1930,7 +1930,7 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
                 <div className="swatch" style={{ background: c.color, width: 14, height: 14, borderRadius: 4 }} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div>
-                  <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>
+                  <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
                     {txnCount(c.id)} txns · {c.taxLine || "no tax line"} · {fmt(Math.abs(txnTotal(c.id)))}
                   </div>
                 </div>
@@ -2081,7 +2081,7 @@ function PLReport({ transactions, categories, dateRange = {} }) {
             <span className="pl-total-label">Gross Profit</span>
             <span className="mono" style={{ color: grossProfit >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(grossProfit)}</span>
           </div>
-          <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textAlign: "right", marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textAlign: "right", marginTop: 4 }}>
             Gross Margin: {totalIncome > 0 ? ((grossProfit / totalIncome) * 100).toFixed(1) : 0}%
           </div>
         </div>
@@ -2117,11 +2117,11 @@ function PLReport({ transactions, categories, dateRange = {} }) {
           <div className="pl-net mt-16">
             <div>
               <div className="pl-net-label">Net Income</div>
-              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
                 Net Margin: {totalIncome > 0 ? ((netIncome / totalIncome) * 100).toFixed(1) : 0}%
               </div>
             </div>
-            <div style={{ fontFamily: "DM Mono", fontSize: 28, fontWeight: 500, color: netIncome >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(netIncome)}</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 28, fontWeight: 500, color: netIncome >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(netIncome)}</div>
           </div>
 
           {/* Quick stats */}
@@ -2133,8 +2133,8 @@ function PLReport({ transactions, categories, dateRange = {} }) {
               { label: "Prime Cost %", value: totalIncome > 0 ? (((totalCOGS + Math.abs(getAmount("2"))) / totalIncome) * 100).toFixed(1) + "%" : "—", ok: totalIncome > 0 && (totalCOGS + Math.abs(getAmount("2"))) / totalIncome < 0.60 },
             ].map(s => (
               <div key={s.label} className="card card-sm" style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginBottom: 4 }}>{s.label}</div>
-                <div style={{ fontFamily: "DM Mono", fontSize: 18, fontWeight: 500, color: s.ok ? "var(--accent)" : "var(--yellow)" }}>{s.value}</div>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginBottom: 4 }}>{s.label}</div>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 500, color: s.ok ? "var(--accent)" : "var(--yellow)" }}>{s.value}</div>
               </div>
             ))}
           </div>
@@ -2186,7 +2186,7 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
         <div>
           {sections.map(s => (
             <div key={s.label} className="card" style={{ marginBottom: 14 }}>
-              <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 14, color: s.color }}>{s.label}</div>
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 14, color: s.color }}>{s.label}</div>
               {s.items.map(item => (
                 <div key={item.name} className="flex items-center justify-between" style={{ padding: "7px 0", borderBottom: "1px solid var(--border)" }}>
                   <span style={{ fontSize: 13, color: "var(--text2)" }}>{item.name}</span>
@@ -2194,7 +2194,7 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
                 </div>
               ))}
               <div className="flex items-center justify-between" style={{ marginTop: 10, paddingTop: 10 }}>
-                <span style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Net {s.label.split(" ")[0]}</span>
+                <span style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Net {s.label.split(" ")[0]}</span>
                 <span className="mono" style={{ color: s.net >= 0 ? "var(--accent)" : "var(--red)", fontWeight: 600, fontSize: 14 }}>{fmt(s.net)}</span>
               </div>
             </div>
@@ -2203,7 +2203,7 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
 
         <div>
           <div className="card" style={{ marginBottom: 14 }}>
-            <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Cash Summary</div>
+            <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Cash Summary</div>
             {[
               { label: "Beginning Cash Balance", value: beginBalance, color: "var(--text)" },
               { label: "Net Operating Cash", value: netOperating, color: netOperating >= 0 ? "var(--accent)" : "var(--red)" },
@@ -2217,13 +2217,13 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
               </div>
             ))}
             <div className="pl-net" style={{ marginTop: 12 }}>
-              <span style={{ fontFamily: "Syne, sans-serif", fontWeight: 800, fontSize: 14 }}>Ending Cash Balance</span>
+              <span style={{ fontFamily: "var(--font-sans)", fontWeight: 800, fontSize: 14 }}>Ending Cash Balance</span>
               <span className="mono" style={{ fontSize: 22, color: "var(--accent)" }}>{fmt(endBalance)}</span>
             </div>
           </div>
 
           <div className="card">
-            <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Cash Flow Health</div>
+            <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Cash Flow Health</div>
             {[
               { label: "Operating Cash Ratio", value: netOperating >= 0 ? "Positive ✓" : "Negative ⚠", ok: netOperating >= 0 },
               { label: "Cash Burn Rate", value: fmt(opOutflow / 30) + "/day", ok: true },
@@ -2232,7 +2232,7 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
             ].map(r => (
               <div key={r.label} className="flex items-center justify-between" style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
                 <span style={{ fontSize: 12, color: "var(--text2)" }}>{r.label}</span>
-                <span style={{ fontSize: 12, fontFamily: "DM Mono", color: r.ok ? "var(--accent)" : "var(--yellow)" }}>{r.value}</span>
+                <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: r.ok ? "var(--accent)" : "var(--yellow)" }}>{r.value}</span>
               </div>
             ))}
           </div>
@@ -2248,13 +2248,13 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
           <div className="card" style={{ marginTop: 18 }}>
             <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
               <div>
-                <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Recurring Forecast — Next 3 Months</div>
-                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+                <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Recurring Forecast — Next 3 Months</div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
                   Projected from {recurring.filter(r => r.status === "active").length} active rules · normalized to monthly
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>3-Month Net</div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>3-Month Net</div>
                 <div className="mono" style={{ fontSize: 18, color: forecastNet >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(forecastNet)}</div>
               </div>
             </div>
@@ -2381,7 +2381,7 @@ function Budget({ transactions, categories, budgets, setBudgets, saveBudget, sho
               <div style={{ textAlign: "right" }}>
                 <input
                   className="input"
-                  style={{ textAlign: "right", fontFamily: "DM Mono", fontSize: 12, padding: "5px 8px" }}
+                  style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12, padding: "5px 8px" }}
                   value={budget || ""}
                   placeholder="0.00"
                   onChange={e => updateBudget(c.id, e.target.value)}
@@ -2498,7 +2498,7 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Deductions by Schedule C Line</div>
+        <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Deductions by Schedule C Line</div>
         <div className="table-wrap">
           <table>
             <thead><tr><th>Schedule C Line</th><th style={{ textAlign: "right" }}>Income</th><th style={{ textAlign: "right" }}>Deductible Expense</th><th style={{ textAlign: "right" }}>Net</th></tr></thead>
@@ -2520,8 +2520,8 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
             <div>
-              <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>1099-NEC Contractors · FY {fiscalYear}</div>
-              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>1099-NEC Contractors · FY {fiscalYear}</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
                 Vendors paid $600+ this year · {contractors.filter(c => c.flagged).length} flagged · {contractors.filter(c => !c.flagged).length} pending
               </div>
             </div>
@@ -2556,7 +2556,7 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
         <div className="flex items-center gap-10">
           <Icon name="info" size={18} color="var(--yellow)" />
           <div>
-            <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, color: "var(--yellow)" }}>Tax Disclaimer</div>
+            <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, color: "var(--yellow)" }}>Tax Disclaimer</div>
             <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 4 }}>This summary is for bookkeeping purposes only and does not constitute tax advice. The estimated tax liability uses a simplified 25% flat rate. Always consult a licensed CPA for accurate tax filing.</div>
           </div>
         </div>
@@ -2668,7 +2668,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Invoice ↔ Bank Match</div>
+        <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Invoice ↔ Bank Match</div>
         {kitchenInvoices.length === 0 ? (
           <div className="empty" style={{ padding: 30 }}>
             <div className="empty-icon">📭</div>
@@ -2694,7 +2694,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                     </button>
                   </>
                 ) : (
-                  <div style={{ color: "var(--text3)", fontSize: 12, fontFamily: "DM Mono" }}>No match found — review manually</div>
+                  <div style={{ color: "var(--text3)", fontSize: 12, fontFamily: "var(--font-mono)" }}>No match found — review manually</div>
                 )}
               </div>
             </div>
@@ -2703,7 +2703,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
       </div>
 
       <div className="card">
-        <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Unreconciled Transactions</div>
+        <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Unreconciled Transactions</div>
         <div className="table-wrap">
           <table>
             <thead><tr><th>Date</th><th>Description</th><th>Category</th><th style={{ textAlign: "right" }}>Amount</th><th></th></tr></thead>
@@ -2939,7 +2939,7 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
                   <tr key={bill.id} style={{ opacity: bill.status === "paid" ? 0.6 : 1 }}>
                     <td>
                       <div style={{ fontWeight: 500 }}>{bill.vendor}</div>
-                      {bill.paidMethod && <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>via {bill.paidMethod}</div>}
+                      {bill.paidMethod && <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>via {bill.paidMethod}</div>}
                     </td>
                     <td>
                       <span className={"tag " + (bill.source === "kitchen" ? "tag-blue" : "tag-gray")}>
@@ -2972,7 +2972,7 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
                           <Icon name="check" size={12} /> Pay Bill
                         </button>
                       ) : (
-                        <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono" }}>Paid {fmtShort(bill.paidDate)}</span>
+                        <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>Paid {fmtShort(bill.paidDate)}</span>
                       )}
                     </td>
                   </tr>
@@ -2994,7 +2994,7 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
             <div className="modal-body">
               {/* Bill summary */}
               <div className="card card-sm" style={{ background: "var(--surface2)", marginBottom: 20 }}>
-                <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{selected.vendor}</div>
+                <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{selected.vendor}</div>
                 <div className="flex items-center justify-between mt-4">
                   <span style={{ fontSize: 12, color: "var(--text3)" }}>Amount Due</span>
                   <span className="mono" style={{ fontSize: 20, color: "var(--red)" }}>{fmt(selected.amount)}</span>
@@ -3188,7 +3188,7 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
 
       {/* Scorecard */}
       <div className="card" style={{marginBottom:20}}>
-        <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:16,fontWeight:600,marginBottom:16,letterSpacing:"0.04em"}}>Restaurant Health Scorecard</div>
+        <div style={{fontFamily:"var(--font-sans)",fontSize:16,fontWeight:600,marginBottom:16,letterSpacing:"0.04em"}}>Restaurant Health Scorecard</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
           {benchmarks.map(b => {
             const status = b.good?"good":b.warn?"warn":"bad";
@@ -3197,12 +3197,12 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
             return (
               <div key={b.name} style={{background:"var(--surface2)",borderRadius:"var(--radius2)",padding:"14px 16px",borderLeft:"3px solid "+color}}>
                 <div className="flex items-center justify-between" style={{marginBottom:8}}>
-                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"DM Mono",textTransform:"uppercase",letterSpacing:"0.08em"}}>{b.name}</span>
-                  <span style={{fontSize:10,color,fontFamily:"DM Mono",fontWeight:500}}>{status==="good"?"✓ ON TARGET":status==="warn"?"⚠ WATCH":"✗ ACTION"}</span>
+                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"var(--font-mono)",textTransform:"uppercase",letterSpacing:"0.08em"}}>{b.name}</span>
+                  <span style={{fontSize:10,color,fontFamily:"var(--font-mono)",fontWeight:500}}>{status==="good"?"✓ ON TARGET":status==="warn"?"⚠ WATCH":"✗ ACTION"}</span>
                 </div>
                 <div className="flex items-center justify-between" style={{marginBottom:8}}>
-                  <span style={{fontFamily:"DM Mono",fontSize:22,fontWeight:400,color}}>{b.value.toFixed(1)}{b.unit}</span>
-                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"DM Mono"}}>target: {b.target}{b.unit}</span>
+                  <span style={{fontFamily:"var(--font-mono)",fontSize:22,fontWeight:400,color}}>{b.value.toFixed(1)}{b.unit}</span>
+                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"var(--font-mono)"}}>target: {b.target}{b.unit}</span>
                 </div>
                 <div className="progress-bar"><div className="progress-fill" style={{width:pct+"%",background:color}}/></div>
               </div>
@@ -3216,48 +3216,48 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
             <div>
-              <div style={{ fontFamily: "Cormorant Garamond,serif", fontSize: 16, fontWeight: 600, letterSpacing: "0.04em" }}>📅 Bookings Forecast</div>
-              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>
+              <div style={{ fontFamily: "var(--font-sans)", fontSize: 16, fontWeight: 600, letterSpacing: "0.04em" }}>📅 Bookings Forecast</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
                 From Clariva Book · next {bookForecast.window.horizon_days} days
               </div>
             </div>
             {bookForecast.projected_revenue_7d > 0 && (
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Projected revenue (7d)</div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Projected revenue (7d)</div>
                 <div className="mono" style={{ fontSize: 22, color: "var(--accent)" }}>{fmt(bookForecast.projected_revenue_7d)}</div>
               </div>
             )}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: bookForecast.avg_ticket && bookForecast.avg_ticket.value > 0 ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12 }}>
             <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Reservations</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Reservations</div>
               <div className="mono" style={{ fontSize: 18 }}>{bookForecast.upcoming.reservations}</div>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{bookForecast.upcoming.by_day.length} day{bookForecast.upcoming.by_day.length === 1 ? "" : "s"} on the books</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{bookForecast.upcoming.by_day.length} day{bookForecast.upcoming.by_day.length === 1 ? "" : "s"} on the books</div>
             </div>
             <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Covers (7d)</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Covers (7d)</div>
               <div className="mono" style={{ fontSize: 18 }}>{bookForecast.upcoming.covers_next_7d}</div>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{bookForecast.upcoming.covers} across {bookForecast.window.horizon_days}d</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{bookForecast.upcoming.covers} across {bookForecast.window.horizon_days}d</div>
             </div>
             {bookForecast.avg_ticket && bookForecast.avg_ticket.value > 0 && (
               <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
-                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Avg ticket (30d)</div>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Avg ticket (30d)</div>
                 <div className="mono" style={{ fontSize: 18 }}>{fmt(bookForecast.avg_ticket.value)}</div>
-                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>over {bookForecast.avg_ticket.based_on_orders} orders</div>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>over {bookForecast.avg_ticket.based_on_orders} orders</div>
               </div>
             )}
             <div style={{ background: "var(--surface2)", borderRadius: "var(--radius2)", padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>No-show rate</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>No-show rate</div>
               <div className="mono" style={{ fontSize: 18, color: bookForecast.no_show.rate > 0.15 ? "var(--yellow)" : "var(--text)" }}>{(bookForecast.no_show.rate * 100).toFixed(1)}%</div>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{bookForecast.no_show.sample_size} reservation{bookForecast.no_show.sample_size === 1 ? "" : "s"} (60d)</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{bookForecast.no_show.sample_size} reservation{bookForecast.no_show.sample_size === 1 ? "" : "s"} (60d)</div>
             </div>
           </div>
           {bookForecast.upcoming.by_day.length > 0 && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Daily breakdown</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Daily breakdown</div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {bookForecast.upcoming.by_day.slice(0, 14).map(d => (
-                  <div key={d.date} style={{ background: "var(--surface3)", borderRadius: "var(--radius2)", padding: "6px 10px", fontSize: 11, fontFamily: "DM Mono" }} title={`${d.reservations} reservation${d.reservations === 1 ? "" : "s"}`}>
+                  <div key={d.date} style={{ background: "var(--surface3)", borderRadius: "var(--radius2)", padding: "6px 10px", fontSize: 11, fontFamily: "var(--font-mono)" }} title={`${d.reservations} reservation${d.reservations === 1 ? "" : "s"}`}>
                     <span style={{ color: "var(--text3)" }}>{d.date.slice(5)}</span>
                     <span style={{ color: "var(--accent)", marginLeft: 6 }}>{d.covers}c</span>
                   </div>
@@ -3276,10 +3276,10 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
         if (drifted.length === 0 && missing.length === 0) return null;
         return (
           <div className="card" style={{ marginBottom: 20 }}>
-            <div style={{ fontFamily: "Cormorant Garamond,serif", fontSize: 16, fontWeight: 600, marginBottom: 14, letterSpacing: "0.04em" }}>🔁 Recurring Health</div>
+            <div style={{ fontFamily: "var(--font-sans)", fontSize: 16, fontWeight: 600, marginBottom: 14, letterSpacing: "0.04em" }}>🔁 Recurring Health</div>
             {drifted.length > 0 && (
               <div style={{ marginBottom: missing.length > 0 ? 14 : 0 }}>
-                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Drift beyond tolerance ({drifted.length})</div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Drift beyond tolerance ({drifted.length})</div>
                 {drifted.slice(0, 5).map(v => {
                   const sev = Math.abs(v.drift) > 25 ? "critical" : "warn";
                   const color = sev === "critical" ? "var(--red)" : "var(--yellow)";
@@ -3289,7 +3289,7 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
                         <div style={{ fontSize: 13, fontWeight: 500 }}>{v.rule.name}</div>
                         <div className="mono" style={{ fontSize: 12, color }}>{v.drift > 0 ? "+" : ""}{v.drift.toFixed(1)}%</div>
                       </div>
-                      <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 3 }}>
+                      <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 3 }}>
                         Expected {fmt(v.expected)} · avg actual {fmt(v.avg)} · {v.count} match{v.count === 1 ? "" : "es"} (90d)
                       </div>
                     </div>
@@ -3299,14 +3299,14 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
             )}
             {missing.length > 0 && (
               <div>
-                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Expected but not seen ({missing.length})</div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Expected but not seen ({missing.length})</div>
                 {missing.slice(0, 5).map(m => (
                   <div key={m.rule.id} style={{ background: "var(--yellowBg)", borderLeft: "3px solid var(--yellow)", borderRadius: "var(--radius2)", padding: "10px 14px", marginBottom: 6 }}>
                     <div className="flex items-center justify-between">
                       <div style={{ fontSize: 13, fontWeight: 500 }}>{m.rule.name}</div>
                       <div className="mono" style={{ fontSize: 12, color: "var(--yellow)" }}>{m.daysLate}d late</div>
                     </div>
-                    <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 3 }}>
+                    <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 3 }}>
                       Expected on {m.expectedDate} · {fmt(parseFloat(m.rule.amount))} · check bank or pause the rule
                     </div>
                   </div>
@@ -3320,26 +3320,26 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
       {/* Alerts */}
       {alerts.length > 0 ? (
         <div style={{marginBottom:20}}>
-          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:16,fontWeight:600,marginBottom:12,letterSpacing:"0.04em"}}>🔔 Active Alerts ({alerts.length})</div>
+          <div style={{fontFamily:"var(--font-sans)",fontSize:16,fontWeight:600,marginBottom:12,letterSpacing:"0.04em"}}>🔔 Active Alerts ({alerts.length})</div>
           {alerts.map((a,i) => (
             <div key={i} style={{background:alertBg[a.level],border:"1px solid "+alertColor[a.level]+"40",borderRadius:"var(--radius2)",padding:"14px 16px",marginBottom:10,borderLeft:"4px solid "+alertColor[a.level]}}>
-              <div className="flex items-center gap-8" style={{marginBottom:6}}><span style={{fontSize:16}}>{a.icon}</span><span style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:13,color:alertColor[a.level]}}>{a.title}</span></div>
+              <div className="flex items-center gap-8" style={{marginBottom:6}}><span style={{fontSize:16}}>{a.icon}</span><span style={{fontFamily:"var(--font-sans)",fontWeight:700,fontSize:13,color:alertColor[a.level]}}>{a.title}</span></div>
               <div style={{fontSize:13,color:"var(--text2)",marginBottom:6}}>{a.msg}</div>
-              <div style={{fontSize:12,color:"var(--text3)",fontFamily:"DM Mono"}}>→ {a.action}</div>
+              <div style={{fontSize:12,color:"var(--text3)",fontFamily:"var(--font-mono)"}}>→ {a.action}</div>
             </div>
           ))}
         </div>
       ) : (
         <div style={{background:"var(--accentBg)",border:"1px solid var(--accentBorder)",borderRadius:"var(--radius2)",padding:"14px 18px",marginBottom:20,display:"flex",gap:12,alignItems:"center"}}>
           <span style={{fontSize:20}}>✅</span>
-          <div><div style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:13,color:"var(--accent)"}}>All KPIs Within Target</div><div style={{fontSize:12,color:"var(--text2)",marginTop:2}}>No critical alerts. Keep monitoring.</div></div>
+          <div><div style={{fontFamily:"var(--font-sans)",fontWeight:700,fontSize:13,color:"var(--accent)"}}>All KPIs Within Target</div><div style={{fontSize:12,color:"var(--text2)",marginTop:2}}>No critical alerts. Keep monitoring.</div></div>
         </div>
       )}
 
       {/* Cash + Levers */}
       <div className="grid-2" style={{marginBottom:20}}>
         <div className="card">
-          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Cash Flow Forecast</div>
+          <div style={{fontFamily:"var(--font-sans)",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Cash Flow Forecast</div>
           {[
             {label:"Daily Burn Rate",value:fmt(burnRate),note:"expenses/day"},
             {label:"Estimated Cash",value:fmt(estimatedCash),note:"current position"},
@@ -3349,12 +3349,12 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
           ].map(r => (
             <div key={r.label} className="flex items-center justify-between" style={{padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
               <span style={{fontSize:12,color:"var(--text2)"}}>{r.label}</span>
-              <div style={{textAlign:"right"}}><span style={{fontFamily:"DM Mono",fontSize:13,color:r.warn?"var(--yellow)":"var(--accent)"}}>{r.value}</span><span style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",marginLeft:6}}>{r.note}</span></div>
+              <div style={{textAlign:"right"}}><span style={{fontFamily:"var(--font-mono)",fontSize:13,color:r.warn?"var(--yellow)":"var(--accent)"}}>{r.value}</span><span style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--font-mono)",marginLeft:6}}>{r.note}</span></div>
             </div>
           ))}
         </div>
         <div className="card">
-          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Revenue Growth Levers</div>
+          <div style={{fontFamily:"var(--font-sans)",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Revenue Growth Levers</div>
           {[
             {lever:"Price increase 3%",impact:fmt(totalIncome*0.03),diff:"Low",note:"minimal customer impact"},
             {lever:"Reduce food waste 20%",impact:fmt(foodCost*0.20),diff:"Medium",note:"training + systems"},
@@ -3363,9 +3363,9 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
             {lever:"Optimize labor schedule",impact:fmt(labor*0.08),diff:"Low",note:"8% labor reduction"},
           ].map(r => (
             <div key={r.lever} className="flex items-center justify-between" style={{padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
-              <div><div style={{fontSize:12,color:"var(--text2)"}}>{r.lever}</div><div style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",marginTop:2}}>{r.note}</div></div>
+              <div><div style={{fontSize:12,color:"var(--text2)"}}>{r.lever}</div><div style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--font-mono)",marginTop:2}}>{r.note}</div></div>
               <div style={{textAlign:"right",flexShrink:0,marginLeft:12}}>
-                <div style={{fontFamily:"DM Mono",fontSize:13,color:"var(--accent)"}}>+{r.impact}</div>
+                <div style={{fontFamily:"var(--font-mono)",fontSize:13,color:"var(--accent)"}}>+{r.impact}</div>
                 <span className={"tag "+(r.diff==="Low"?"tag-green":r.diff==="Medium"?"tag-yellow":"tag-blue")} style={{marginTop:3}}>{r.diff}</span>
               </div>
             </div>
@@ -3376,7 +3376,7 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
       {/* Action checklist */}
       <div className="card" style={{marginBottom:16}}>
         <div className="flex items-center justify-between" style={{marginBottom:16}}>
-          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,letterSpacing:"0.04em"}}>CFO Action Checklist</div>
+          <div style={{fontFamily:"var(--font-sans)",fontSize:15,fontWeight:600,letterSpacing:"0.04em"}}>CFO Action Checklist</div>
           <div className="tabs" style={{marginBottom:0}}>
             {PERIODS.map(p => <div key={p.id} className={"tab"+(period===p.id?" active":"")} onClick={()=>setPeriod(p.id)} style={{fontSize:12}}>{p.label}</div>)}
           </div>
@@ -3384,14 +3384,14 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
         {(actionItems[period]||[]).map((item,i) => (
           <div key={i} style={{display:"flex",gap:14,padding:"12px 0",borderBottom:"1px solid var(--border)"}}>
             <div style={{fontSize:22,flexShrink:0,width:32,textAlign:"center"}}>{item.icon}</div>
-            <div style={{flex:1}}><div style={{fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:13,marginBottom:4}}>{item.title}</div><div style={{fontSize:12,color:"var(--text2)",lineHeight:1.5}}>{item.detail}</div></div>
+            <div style={{flex:1}}><div style={{fontFamily:"var(--font-sans)",fontWeight:600,fontSize:13,marginBottom:4}}>{item.title}</div><div style={{fontSize:12,color:"var(--text2)",lineHeight:1.5}}>{item.detail}</div></div>
           </div>
         ))}
       </div>
 
       {/* Benchmarks */}
       <div className="card">
-        <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Industry Benchmarks — Full Service Restaurant (US)</div>
+        <div style={{fontFamily:"var(--font-sans)",fontSize:15,fontWeight:600,marginBottom:14,letterSpacing:"0.04em"}}>Industry Benchmarks — Full Service Restaurant (US)</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
           {[
             {label:"Food Cost",range:"28–35%",yours:foodCostPct.toFixed(1)+"%",ok:foodCostPct<=35},
@@ -3404,9 +3404,9 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
             {label:"Insurance",range:"1–3%",yours:totalIncome>0?((insurance/totalIncome)*100).toFixed(1)+"%":"—",ok:true},
           ].map(b => (
             <div key={b.label} style={{background:"var(--surface2)",borderRadius:"var(--radius2)",padding:"12px 14px"}}>
-              <div style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>{b.label}</div>
-              <div style={{fontFamily:"DM Mono",fontSize:16,color:b.ok?"var(--accent)":"var(--red)"}}>{b.yours}</div>
-              <div style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",marginTop:3}}>Target: {b.range}</div>
+              <div style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--font-mono)",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>{b.label}</div>
+              <div style={{fontFamily:"var(--font-mono)",fontSize:16,color:b.ok?"var(--accent)":"var(--red)"}}>{b.yours}</div>
+              <div style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--font-mono)",marginTop:3}}>Target: {b.range}</div>
             </div>
           ))}
         </div>
@@ -3526,7 +3526,7 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
       {/* ── TIMELINE VIEW ── */}
       {viewMode==="timeline" && (
         <div className="card" style={{padding:"20px 24px"}}>
-          <div style={{fontFamily:"Cormorant Garamond,serif",fontSize:15,fontWeight:600,marginBottom:20,letterSpacing:"0.04em"}}>{YEAR} Investment Roadmap</div>
+          <div style={{fontFamily:"var(--font-sans)",fontSize:15,fontWeight:600,marginBottom:20,letterSpacing:"0.04em"}}>{YEAR} Investment Roadmap</div>
 
           {/* Mini bar chart */}
           <div style={{display:"flex",gap:4,alignItems:"flex-end",height:60,marginBottom:24}}>
@@ -3537,7 +3537,7 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
               return (
                 <div key={m} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
                   <div style={{width:"100%",height:h+"%",background:mInvest>0?"var(--accent)":"var(--surface3)",borderRadius:"3px 3px 0 0",minHeight:mInvest>0?4:2,transition:"height 0.3s"}} title={mInvest>0?fmt(mInvest):""}/>
-                  <div style={{fontSize:9,color:"var(--text3)",fontFamily:"DM Mono"}}>{m}</div>
+                  <div style={{fontSize:9,color:"var(--text3)",fontFamily:"var(--font-mono)"}}>{m}</div>
                 </div>
               );
             })}
@@ -3551,27 +3551,27 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
               <div key={m} style={{marginBottom:20}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:40,height:40,borderRadius:"50%",background:"var(--accentBg)",border:"1px solid var(--accentBorder)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                    <span style={{fontFamily:"DM Mono",fontSize:11,color:"var(--accent)",fontWeight:500}}>{m}</span>
+                    <span style={{fontFamily:"var(--font-mono)",fontSize:11,color:"var(--accent)",fontWeight:500}}>{m}</span>
                   </div>
                   <div style={{flex:1,height:1,background:"var(--border)"}}/>
-                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"DM Mono"}}>{mProjects.length} project{mProjects.length>1?"s":""} · {fmt(mProjects.reduce((s,p)=>s+(parseFloat(p.investment)||0),0))}</span>
+                  <span style={{fontSize:11,color:"var(--text3)",fontFamily:"var(--font-mono)"}}>{mProjects.length} project{mProjects.length>1?"s":""} · {fmt(mProjects.reduce((s,p)=>s+(parseFloat(p.investment)||0),0))}</span>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10,paddingLeft:50}}>
                   {mProjects.map(p => (
                     <div key={p.id} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius2)",padding:"14px 16px",borderLeft:"3px solid "+impactColors[p.impact]}}>
                       <div className="flex items-center justify-between" style={{marginBottom:8}}>
-                        <div style={{fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:13}}>{p.title}</div>
+                        <div style={{fontFamily:"var(--font-sans)",fontWeight:600,fontSize:13}}>{p.title}</div>
                         <span className={"tag "+statusColors[p.status]} style={{fontSize:9}}>{p.status}</span>
                       </div>
-                      <div style={{fontSize:11,color:"var(--text3)",fontFamily:"DM Mono",marginBottom:10}}>{p.category}</div>
+                      <div style={{fontSize:11,color:"var(--text3)",fontFamily:"var(--font-mono)",marginBottom:10}}>{p.category}</div>
                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                         <div style={{background:"var(--surface3)",borderRadius:4,padding:"6px 8px"}}>
-                          <div style={{fontSize:9,color:"var(--text3)",fontFamily:"DM Mono",marginBottom:2}}>INVEST</div>
-                          <div style={{fontFamily:"DM Mono",fontSize:13,color:"var(--red)"}}>{fmt(p.investment)}</div>
+                          <div style={{fontSize:9,color:"var(--text3)",fontFamily:"var(--font-mono)",marginBottom:2}}>INVEST</div>
+                          <div style={{fontFamily:"var(--font-mono)",fontSize:13,color:"var(--red)"}}>{fmt(p.investment)}</div>
                         </div>
                         <div style={{background:"var(--surface3)",borderRadius:4,padding:"6px 8px"}}>
-                          <div style={{fontSize:9,color:"var(--text3)",fontFamily:"DM Mono",marginBottom:2}}>PROJ REV</div>
-                          <div style={{fontFamily:"DM Mono",fontSize:13,color:"var(--accent)"}}>{p.projectedRevenue>0?fmt(p.projectedRevenue):"—"}</div>
+                          <div style={{fontSize:9,color:"var(--text3)",fontFamily:"var(--font-mono)",marginBottom:2}}>PROJ REV</div>
+                          <div style={{fontFamily:"var(--font-mono)",fontSize:13,color:"var(--accent)"}}>{p.projectedRevenue>0?fmt(p.projectedRevenue):"—"}</div>
                         </div>
                       </div>
                       {p.notes && <div style={{fontSize:11,color:"var(--text3)",marginTop:10,lineHeight:1.5}}>{p.notes}</div>}
@@ -3606,7 +3606,7 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
                     <td><span className="tag tag-gray" style={{fontSize:10}}>{p.category}</span></td>
                     <td className="mono" style={{color:"var(--text3)",fontSize:12}}>{MONTHS[p.month-1]} {p.year}</td>
                     <td><span className={"tag "+statusColors[p.status]}>{p.status}</span></td>
-                    <td><span style={{fontFamily:"DM Mono",fontSize:12,color:impactColors[p.impact],fontWeight:500}}>{p.impact}</span></td>
+                    <td><span style={{fontFamily:"var(--font-mono)",fontSize:12,color:impactColors[p.impact],fontWeight:500}}>{p.impact}</span></td>
                     <td className="text-right"><span className="mono" style={{color:"var(--red)"}}>{fmt(p.investment)}</span></td>
                     <td className="text-right"><span className="mono" style={{color:"var(--accent)"}}>{p.projectedRevenue>0?fmt(p.projectedRevenue):"—"}</span></td>
                     <td className="text-right"><span className="mono" style={{color:p.roi>0?"var(--accent)":"var(--text3)"}}>{p.roi>0?p.roi+"%":"—"}</span></td>
@@ -3631,18 +3631,18 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
             const statusProjects = projects.filter(p => p.status===status);
             return (
               <div key={status}>
-                <div style={{fontFamily:"DM Mono",fontSize:10,textTransform:"uppercase",letterSpacing:"0.12em",color:"var(--text3)",marginBottom:10,padding:"0 4px"}}>{status} · {statusProjects.length}</div>
+                <div style={{fontFamily:"var(--font-mono)",fontSize:10,textTransform:"uppercase",letterSpacing:"0.12em",color:"var(--text3)",marginBottom:10,padding:"0 4px"}}>{status} · {statusProjects.length}</div>
                 {statusProjects.map(p => (
                   <div key={p.id} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius2)",padding:"12px 14px",marginBottom:8,cursor:"pointer",borderLeft:"3px solid "+impactColors[p.impact]}} onClick={()=>openEdit(p)}>
-                    <div style={{fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:12,marginBottom:6}}>{p.title}</div>
-                    <div style={{fontSize:10,color:"var(--text3)",fontFamily:"DM Mono",marginBottom:8}}>{MONTHS[p.month-1]} · {p.category}</div>
+                    <div style={{fontFamily:"var(--font-sans)",fontWeight:600,fontSize:12,marginBottom:6}}>{p.title}</div>
+                    <div style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--font-mono)",marginBottom:8}}>{MONTHS[p.month-1]} · {p.category}</div>
                     <div className="flex items-center justify-between">
-                      <span style={{fontFamily:"DM Mono",fontSize:12,color:"var(--red)"}}>{fmt(p.investment)}</span>
-                      {p.projectedRevenue>0&&<span style={{fontFamily:"DM Mono",fontSize:11,color:"var(--accent)"}}>+{fmt(p.projectedRevenue)}</span>}
+                      <span style={{fontFamily:"var(--font-mono)",fontSize:12,color:"var(--red)"}}>{fmt(p.investment)}</span>
+                      {p.projectedRevenue>0&&<span style={{fontFamily:"var(--font-mono)",fontSize:11,color:"var(--accent)"}}>+{fmt(p.projectedRevenue)}</span>}
                     </div>
                   </div>
                 ))}
-                {statusProjects.length===0&&<div style={{border:"1px dashed var(--border)",borderRadius:"var(--radius2)",padding:"20px",textAlign:"center",fontSize:11,color:"var(--text3)",fontFamily:"DM Mono"}}>empty</div>}
+                {statusProjects.length===0&&<div style={{border:"1px dashed var(--border)",borderRadius:"var(--radius2)",padding:"20px",textAlign:"center",fontSize:11,color:"var(--text3)",fontFamily:"var(--font-mono)"}}>empty</div>}
               </div>
             );
           })}
@@ -3654,7 +3654,7 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
         <div className="flex items-center gap-12">
           <Icon name="info" size={18} color="var(--accent)"/>
           <div>
-            <div style={{fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:13,color:"var(--accent)"}}>Cash Availability Analysis</div>
+            <div style={{fontFamily:"var(--font-sans)",fontWeight:600,fontSize:13,color:"var(--accent)"}}>Cash Availability Analysis</div>
             <div style={{fontSize:12,color:"var(--text2)",marginTop:4}}>
               Based on current net income of <strong style={{color:"var(--accent)"}}>{fmt(net)}</strong>, you have approximately <strong style={{color:"var(--accent)"}}>{fmt(monthlyFree)}/month</strong> available for investments (30% of net).
               Total planned investment of <strong style={{color:totalInvestment>monthlyFree*12?"var(--red)":"var(--accent)"}}>{fmt(totalInvestment)}</strong> {totalInvestment>monthlyFree*12?"exceeds":"is within"} your 12-month capacity of <strong style={{color:"var(--accent)"}}>{fmt(monthlyFree*12)}</strong>.
@@ -4029,7 +4029,7 @@ function Recurring({ recurring, setRecurring, saveRecurring, deleteR, categories
                     </td>
                     <td className={parseFloat(r.amount) >= 0 ? "amount-pos text-right" : "amount-neg text-right"}>
                       {fmt(parseFloat(r.amount))}
-                      <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>±{r.variance_pct}%</div>
+                      <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>±{r.variance_pct}%</div>
                     </td>
                     <td className="mono" style={{ fontSize: 11, color: "var(--text2)" }}>
                       {stats.lastSeen ? fmtDate(stats.lastSeen) : "—"}
@@ -4344,7 +4344,7 @@ function BankAccounts({ accounts, setAccounts, saveBankAccount, deleteAcc, trans
                     <td className="mono" style={{ fontSize: 11, color: "var(--text2)" }}>{a.institution || "—"}</td>
                     <td className={balance >= 0 ? "amount-pos text-right" : "amount-neg text-right"}>
                       {fmt(balance)}
-                      <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>opened {fmtDate(a.opening_date)}</div>
+                      <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>opened {fmtDate(a.opening_date)}</div>
                     </td>
                     <td className="mono text-right" style={{ fontSize: 11, color: "var(--text2)" }}>
                       {activity} txn{activity === 1 ? "" : "s"}
@@ -4584,7 +4584,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
           {loading ? "Syncing..." : "Sync Tips"}
-          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
         </button>
       </div>
 
@@ -4614,7 +4614,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
       {dates.length === 0 ? (
         <div className="card" style={{ textAlign: "center", padding: 40 }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>💵</div>
-          <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 18 }}>No tips synced for this window</div>
+          <div style={{ fontFamily: "var(--font-sans)", fontSize: 18 }}>No tips synced for this window</div>
           <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 8 }}>Click <strong>Sync Tips</strong> to pull from Square Payments. Each server's PIN-attributed transactions land here automatically.</div>
         </div>
       ) : (
@@ -4714,7 +4714,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
                           </div>
                           <span style={{ fontSize: 13 }}>{m.name}</span>
                         </div>
-                        <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono" }}>
+                        <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>
                           {m.card_tips > 0 && <span style={{ marginRight: 10 }}>card {fmt(m.card_tips)}</span>}
                           {m.hours > 0 && <span>{m.hours.toFixed(1)}h</span>}
                         </div>
@@ -5001,7 +5001,7 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
       </div>
 
       <div className="card" style={{ background: "var(--yellowBg)", border: "1px solid var(--yellow)40", marginBottom: 20, padding: "10px 14px" }}>
-        <div style={{ fontSize: 11, color: "var(--text2)", fontFamily: "DM Mono", lineHeight: 1.5 }}>
+        <div style={{ fontSize: 11, color: "var(--text2)", fontFamily: "var(--font-mono)", lineHeight: 1.5 }}>
           ⚠ Estimates only. Paychex runs the regulatory engine — final tax withholding, deductions, and net pay come from Paychex, not this preview. CFO does not move money.
         </div>
       </div>
@@ -5037,7 +5037,7 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
             <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
               <div>
                 <button className="btn btn-ghost btn-sm" style={{ padding: "4px 8px", marginRight: 8 }} onClick={() => setSelectedId(null)}>← Back</button>
-                <span style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 20 }}>{selected.period_start} → {selected.period_end}</span>
+                <span style={{ fontFamily: "var(--font-sans)", fontSize: 20 }}>{selected.period_start} → {selected.period_end}</span>
                 <span className="tag" style={{ marginLeft: 12, background: statusColor[selected.status] + "20", color: statusColor[selected.status], border: `1px solid ${statusColor[selected.status]}40`, fontSize: 10 }}>{selected.status}</span>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -5060,7 +5060,7 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
                 { label: "Total cash out", value: fmt(selected.totals?.total_cash_out || 0), color: "var(--yellow)" },
               ].map(k => (
                 <div key={k.label} style={{ background: "var(--surface2)", padding: "10px 14px", borderRadius: "var(--radius2)" }}>
-                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>{k.label}</div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{k.label}</div>
                   <div className="mono" style={{ fontSize: 16, marginTop: 4, color: k.color || "var(--text)" }}>{k.value}</div>
                 </div>
               ))}
@@ -5225,7 +5225,7 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
           {loading ? "Syncing..." : "Sync Labor"}
-          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono" }}>{lastSync}</span>}
+          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
         </button>
       </div>
 
@@ -5259,11 +5259,11 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
         <div className="card" style={{ marginBottom: 20, borderLeft: `3px solid ${Math.abs(variancePct) > 10 ? "var(--yellow)" : "var(--accent)"}` }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
             <div>
-              <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>Payroll variance</div>
-              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 4 }}>Actual Payroll charges (ledger) vs projected fully-loaded labor (Square × tax burden)</div>
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Payroll variance</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>Actual Payroll charges (ledger) vs projected fully-loaded labor (Square × tax burden)</div>
             </div>
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Variance</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Variance</div>
               <div className="mono" style={{ fontSize: 18, color: Math.abs(variancePct) > 10 ? "var(--yellow)" : "var(--accent)" }}>
                 {variance >= 0 ? "+" : ""}{fmt(variance)} ({variancePct >= 0 ? "+" : ""}{variancePct.toFixed(1)}%)
               </div>
@@ -5271,11 +5271,11 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
             <div style={{ background: "var(--surface2)", padding: "10px 14px", borderRadius: "var(--radius2)" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Projected (Square × {(taxBurden * 100).toFixed(1)}%)</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Projected (Square × {(taxBurden * 100).toFixed(1)}%)</div>
               <div className="mono" style={{ fontSize: 16, marginTop: 4 }}>{fmt(totalLoaded)}</div>
             </div>
             <div style={{ background: "var(--surface2)", padding: "10px 14px", borderRadius: "var(--radius2)" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", textTransform: "uppercase", letterSpacing: "0.06em" }}>Actual payroll (ledger)</div>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Actual payroll (ledger)</div>
               <div className="mono" style={{ fontSize: 16, marginTop: 4 }}>{fmt(actualPayroll)}</div>
             </div>
           </div>
@@ -5290,7 +5290,7 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
 
       {/* By employee */}
       <div className="card" style={{ padding: 0 }}>
-        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13 }}>By employee</div>
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>By employee</div>
         <div className="table-wrap">
           <table>
             <thead>
@@ -5394,17 +5394,17 @@ function Bookkeeper({ transactions, allTransactions, categories, setTransactions
       <div className="grid-2" style={{ marginBottom: 20 }}>
         <div className="card" style={{ borderLeft: `3px solid ${score >= 80 ? "var(--accent)" : score >= 60 ? "var(--yellow)" : "var(--red)"}` }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", letterSpacing: "0.08em", textTransform: "uppercase" }}>IRS compliance score</span>
+            <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", letterSpacing: "0.08em", textTransform: "uppercase" }}>IRS compliance score</span>
             <span style={{ fontSize: 11, color: "var(--text3)" }}>{issues.length} issue{issues.length === 1 ? "" : "s"} open</span>
           </div>
           <div className="mono" style={{ fontSize: 48, lineHeight: 1, color: score >= 80 ? "var(--accent)" : score >= 60 ? "var(--yellow)" : "var(--red)" }}>{score}<span style={{ fontSize: 18, color: "var(--text3)" }}> / 100</span></div>
-          <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 8 }}>
             {score >= 80 ? "On track" : score >= 60 ? "Needs attention" : "Critical issues — review before quarter close"}
           </div>
         </div>
         {deadline && (
           <div className="card" style={{ borderLeft: `3px solid ${deadline.days <= 15 ? "var(--red)" : "var(--blue)"}` }}>
-            <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Next IRS deadline</div>
+            <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Next IRS deadline</div>
             <div className="mono" style={{ fontSize: 22, color: "var(--text)" }}>{deadline.name}</div>
             <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 6 }}>
               <span className="mono" style={{ color: deadline.days <= 15 ? "var(--red)" : "var(--text)" }}>{deadline.days} day{deadline.days === 1 ? "" : "s"}</span> · {deadline.date}
@@ -5415,7 +5415,7 @@ function Bookkeeper({ transactions, allTransactions, categories, setTransactions
 
       {/* Period close checklist */}
       <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 13, marginBottom: 14 }}>Period close checklist</div>
+        <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 14 }}>Period close checklist</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
           {checklist.map((c, i) => (
             <div key={i} className="flex items-center gap-12" style={{ padding: "8px 12px", background: c.done ? "var(--accentBg)" : "var(--surface2)", borderRadius: "var(--radius2)", border: `1px solid ${c.done ? "var(--accentBorder)" : "var(--border)"}` }}>
@@ -5424,7 +5424,7 @@ function Bookkeeper({ transactions, allTransactions, categories, setTransactions
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, color: c.done ? "var(--text)" : "var(--text2)" }}>{c.label}</div>
-                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "DM Mono", marginTop: 2 }}>{c.hint}</div>
+                <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{c.hint}</div>
               </div>
             </div>
           ))}
@@ -5435,7 +5435,7 @@ function Bookkeeper({ transactions, allTransactions, categories, setTransactions
       {issues.length === 0 ? (
         <div className="card" style={{ background: "var(--accentBg)", border: "1px solid var(--accentBorder)", textAlign: "center", padding: 40 }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>
-          <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: 18, color: "var(--accent)" }}>No issues detected — books are clean</div>
+          <div style={{ fontFamily: "var(--font-sans)", fontSize: 18, color: "var(--accent)" }}>No issues detected — books are clean</div>
         </div>
       ) : (
         <div>
@@ -5444,7 +5444,7 @@ function Bookkeeper({ transactions, allTransactions, categories, setTransactions
             if (sevIssues.length === 0) return null;
             return (
               <div key={sev} style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, color: sevColor[sev], fontFamily: "DM Mono", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                <div style={{ fontSize: 11, color: sevColor[sev], fontFamily: "var(--font-mono)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
                   {sevLabel[sev]} ({sevIssues.length})
                 </div>
                 {sevIssues.map(issue => {
@@ -5878,12 +5878,12 @@ export default function App() {
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginRight: "auto" }}>
               {syncing ? (
-                <span style={{ fontSize: 11, color: "var(--accent)", fontFamily: "DM Mono", display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ fontSize: 11, color: "var(--accent)", fontFamily: "var(--font-mono)", display: "flex", alignItems: "center", gap: 5 }}>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 1s linear infinite" }}><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                   Syncing...
                 </span>
               ) : (
-                <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "DM Mono", display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ width: 6, height: 6, borderRadius: "50%", background: realtimeActive ? "var(--accent)" : "var(--text3)", display: "inline-block" }} title={realtimeActive ? "Real-time connected" : "Polling mode"} />
                   {lastSync ? "Updated " + lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
                   {realtimeActive && <span style={{ color: "var(--accent)" }}>· Live</span>}
