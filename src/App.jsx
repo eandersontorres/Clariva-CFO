@@ -38,19 +38,20 @@ const STYLES = `
   }
 
   :root.theme-light {
-    --bg: #fafafa;
-    --surface: #ffffff;
-    --surface2: #f9fafb;
-    --surface3: #f3f4f6;
-    --border: rgba(17,24,39,0.08);
-    --border2: rgba(17,24,39,0.18);
-    --text: #111827;
-    --text2: #4b5563;
-    --text3: #9ca3af;
-    --accent: #8a6f1e;
-    --accent2: #6e5818;
-    --accentBg: rgba(138,111,30,0.1);
-    --accentBorder: rgba(138,111,30,0.3);
+    /* Mirrors Clariva Purchase: slate surfaces + indigo accent (#6366F1) */
+    --bg: #F8FAFC;
+    --surface: #FFFFFF;
+    --surface2: #F1F5F9;
+    --surface3: #E2E8F0;
+    --border: #E2E8F0;
+    --border2: #CBD5E1;
+    --text: #0F172A;
+    --text2: #475569;
+    --text3: #94A3B8;
+    --accent: #6366F1;
+    --accent2: #4F46E5;
+    --accentBg: rgba(99,102,241,0.1);
+    --accentBorder: rgba(99,102,241,0.3);
     --red: #dc2626;
     --redBg: rgba(220,38,38,0.06);
     --yellow: #ca8a04;
@@ -60,14 +61,15 @@ const STYLES = `
     --purple: #7c3aed;
     --purpleBg: rgba(124,58,237,0.06);
   }
-  :root.theme-light .sidebar { background: #ffffff; border-right: 1px solid var(--border); }
+  :root.theme-light .sidebar { background: #FFFFFF; border-right: 1px solid var(--border); }
   :root.theme-light .logo-icon { background: var(--accentBg); }
-  :root.theme-light .nav-item:hover { background: var(--surface3); }
-  :root.theme-light .nav-item.active { background: var(--accentBg); }
-  :root.theme-light .card { box-shadow: 0 1px 2px rgba(17,24,39,0.04); }
-  :root.theme-light .kpi-card { box-shadow: 0 1px 2px rgba(17,24,39,0.04); }
-  :root.theme-light .modal { box-shadow: 0 20px 50px rgba(17,24,39,0.15); }
-  :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(17,24,39,0.15); }
+  :root.theme-light .nav-item:hover { background: var(--surface2); }
+  :root.theme-light .nav-item.active { background: var(--accentBg); color: var(--accent); }
+  :root.theme-light .btn-primary { color: #FFFFFF; }
+  :root.theme-light .card { box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
+  :root.theme-light .kpi-card { box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
+  :root.theme-light .modal { box-shadow: 0 20px 50px rgba(15,23,42,0.18); }
+  :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(15,23,42,0.15); }
 
   html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; letter-spacing: 0.01em; }
   #root { height: 100%; }
