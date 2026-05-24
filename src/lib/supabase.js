@@ -256,24 +256,15 @@ export async function fetchKitchenPurchases(tenantId, { start, end } = {}) {
   return data
 }
 
-export async function fetchKitchenSnapshots(tenantId, { start, end } = {}) {
-  let q = supabase.from('r7_snapshots').select('id, date, gross_sales, net_sales, tips, orders, avg_ticket').eq('tenant_id', tenantId).order('date', { ascending: false })
-  if (start) q = q.gte('date', start)
-  if (end)   q = q.lte('date', end)
-  const { data, error } = await q
-  if (error) { console.error('fetchKitchenSnapshots', error); return [] }
-  return data
-}
+// NOTE: r7_snapshots is the Kitchen *inventory* snapshot table (label + counts),
+// not Square POS revenue. The old fetchKitchenSnapshots / snapshotsToTransactions
+// pair selected non-existent columns and was removed. Revenue now comes from
+// "Sync Sales" (api/sync-square-sales). fetchKitchenStaff was also removed —
+// r7_staff has no hourly_rate column, and labor rates come from Square Labor.
 
 export async function fetchKitchenVendors(tenantId) {
   const { data, error } = await supabase.from('r7_vendors').select('id, name, email, phone').eq('tenant_id', tenantId).order('name')
   if (error) { console.error('fetchKitchenVendors', error); return [] }
-  return data
-}
-
-export async function fetchKitchenStaff(tenantId) {
-  const { data, error } = await supabase.from('r7_staff').select('id, name, role, hourly_rate').eq('tenant_id', tenantId).order('name')
-  if (error) { console.error('fetchKitchenStaff', error); return [] }
   return data
 }
 
@@ -463,17 +454,3 @@ export function purchasesToTransactions(purchases, vendorMap = {}, foodBevCatego
   })
 }
 
-export function snapshotsToTransactions(snapshots, diningCategoryId) {
-  return snapshots.map(s => ({
-    id: 'kitchen_snapshot_' + s.id,
-    date: s.date,
-    description: 'SQUARE SALES — ' + (s.orders || 0) + ' ORDERS',
-    amount: parseFloat(s.net_sales) || 0,
-    category_id: diningCategoryId || null,
-    category: diningCategoryId || UNCATEGORIZED,
-    account: 'Square POS',
-    reconciled: true,
-    source: 'square_snapshot',
-    notes: 'Gross: $' + s.gross_sales + ' | Tips: $' + s.tips + ' | Avg: $' + s.avg_ticket,
-  }))
-}

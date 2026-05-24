@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenSnapshots, fetchKitchenVendors, fetchKitchenStaff, purchasesToTransactions, snapshotsToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
@@ -981,9 +981,12 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
     setLoading(true);
     showToast("Syncing from Clariva Kitchen...", "info");
     try {
-      const [purchases, snapshots, vendors] = await Promise.all([
+      // Revenue used to come from r7_snapshots here, but that table is the
+      // Kitchen inventory snapshot (label/counts), not Square POS sales — the
+      // select silently 404'd. Revenue now flows through "Sync Sales" (Square
+      // Orders). Kitchen sync is purchases (vendor invoices) only.
+      const [purchases, vendors] = await Promise.all([
         fetchKitchenPurchases(tenantId, dateRange),
-        fetchKitchenSnapshots(tenantId, dateRange),
         fetchKitchenVendors(tenantId),
       ]);
 
@@ -993,19 +996,16 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
 
       // Find category IDs
       const foodBevCat = categories.find(c => c.name === "Food & Beverage" || c.tax_line === "COGS");
-      const diningCat  = categories.find(c => c.name === "Revenue - Dining" || c.tax_line === "Gross Receipts");
 
       const expTxns = purchasesToTransactions(purchases, vendorMap, foodBevCat?.id);
-      const incTxns = snapshotsToTransactions(snapshots, diningCat?.id);
-
-      const all = [...expTxns, ...incTxns].map(t => ({ ...t, category: t.category_id || UNCATEGORIZED }));
+      const all = expTxns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED }));
 
       if (all.length === 0) {
-        showToast("No new data from Kitchen in this date range.", "info");
+        showToast("No new vendor invoices from Kitchen in this date range.", "info");
       } else {
         onSync(all);
         setLastSync(new Date().toLocaleTimeString());
-        showToast(all.length + " records synced from Kitchen! (" + expTxns.length + " expenses · " + incTxns.length + " income)", "success");
+        showToast(all.length + " vendor invoice(s) synced from Kitchen", "success");
       }
     } catch (err) {
       showToast("Sync failed: " + err.message, "error");
