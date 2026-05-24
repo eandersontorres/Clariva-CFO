@@ -119,6 +119,15 @@ This is a follow-up, not a blocker for the read-path fix.
 
 ## Implementation plan (phased)
 
+### Phase 0 — Anon stopgap · DONE (2026-05-24)
+
+Applied `supabase_anon_stopgap.sql`: anon read/write restored for the TorresBee
+tenant only (`anon_torresbee_stopgap` policy on all 11 ledger/labor/payroll
+tables). Verified anon now sees 173 txns / 124 shifts / 1 payroll run. Buys
+time to build Phase A without the live app sitting dark. **Must be reverted**
+(DROP block at the bottom of that file) once login ships, or the per-tenant
+isolation the hardening migration added is undone for TorresBee.
+
 ### Phase A — Unblock reads (urgent) · `S`
 
 The minimum to make the app functional again.
