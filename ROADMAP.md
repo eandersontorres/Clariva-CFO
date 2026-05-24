@@ -2,7 +2,7 @@
 
 Live: [cfo.clariva.cloud](https://cfo.clariva.cloud) · Pilot tenant: TorresBee (Round Rock, TX)
 
-This file is the source of truth for what's next. It groups work into **Recently Shipped / Now / Next / Later / Horizon** so we always know what unblocks SaaS, what unblocks a CFO decision, and what is aspirational.
+Source of truth for what's next. Grouped **Recently Shipped / Now / Next / Later / Horizon**.
 
 Effort tags: `XS` < 2h · `S` half-day · `M` 1-2 days · `L` 3-5 days · `XL` 1+ week.
 
@@ -10,82 +10,65 @@ Effort tags: `XS` < 2h · `S` half-day · `M` 1-2 days · `L` 3-5 days · `XL` 1
 
 ## RECENTLY SHIPPED
 
-What landed in the last few sessions, kept here as institutional memory until it ages off.
+### 2026-05-23/24 · Square labor stack + theme parity
 
-### 2026-05-12 · Multi-account Phase 2
+- **Square Labor sync** (`r7_labor_shifts`) — hours, wage, fully-loaded cost (+15% employer tax burden, configurable per tenant). Labor screen with hours / wage / loaded cost / labor% KPIs + payroll variance card (projected vs ledger Wages) + by-employee table.
+- **Tips** (`r7_labor_tips_daily`) — card tips per employee from Square **Orders** API (not Payments — fixes attribution to the server, not the card processor). Plus **auto-gratuity** captured from `order.service_charges[]`. Opt-in pool day with equal split (card + auto-grat base).
+- **Payroll** (`r7_payroll_runs`) — prep + Paychex CSV export. Pulls hours from Square, computes FLSA overtime per ISO week, tips pre-populated from the Tips screen, bonus/tips editable inline. Submit creates a shadow ledger transaction for bank reconciliation. Does NOT move money — Paychex stays the regulated processor.
+- **Sync Sales** (`api/sync-square-sales`) — daily gross sales + processing fees from Square Orders as the canonical revenue source. Re-tags bank-side Square deposits to `source='square_settlement'` so they don't double-count. Centralized `NON_REVENUE_SOURCES` / `isRevenueRelevant()` controls every income rollup.
+- **Sidebar hierarchy** — Payroll + Tips nested under Labor.
+- **Theme + font parity with Clariva Purchase** — Day theme uses Purchase's slate surfaces + indigo `#6366F1`; all typography switched to native system fonts (dropped 4 Google web fonts). Dark mode keeps Clariva gold.
 
-Working capital management for real, in four small commits:
-- **2.1** auto-link `account_id` on every import (PDF/CSV/OFX/Kitchen/Marketing) via name match with last-4-digit fallback
-- **2.2** account filter dropdown on the Transactions screen (only renders when ≥1 account is registered)
-- **2.3** Cash Position card on the Dashboard — Liquid / Debt / Net + per-account mini cards with credit utilization
-- **2.4** internal transfer detection — pairs debit/credit between your own accounts (opposite signs, matching amount, ±2 days, different `account_id`) and excludes them from income/expense totals; "↔ Internal" badge in the Transactions table
+### 2026-05-13 · Bookkeeper agent + ecosystem bridges hardening
 
-### 2026-05-11/12 · NOW activated + unplanned fixes
+- **Bookkeeper screen** — 8 rules-based IRS Schedule C checks (1099 >$600, duplicate charges, sales-tax gap, Section 179, Meals 50%, docs >$75, stale uncategorized, personal-mix). Compliance score, next-deadline countdown, period-close checklist, per-issue "Fix all" + "Dismiss", `tags[]` column. 1099 contractor table + CSV export on Tax Summary. Post-import $600-threshold toast.
+- **Review-first Transactions** — defaults to Uncategorized tab + Categorized tab, inline Kitchen-invoice match button.
+- **Bridges fixed** — Marketing (tenant→slug→restaurant), Bookings Forecast (Book reservations + no-show rate).
+- **CSV parser** — multi-cardholder BoA format (CardHolder + last-4), credit-card sign flip, dedup on import.
+- **Prior-period flag** — accrual basis for P&L / Tax / Dashboard / Insights; cash basis for Cash Flow / balances.
+- **Bug hunt round 2 (partial)** — removed broken `fetchKitchenSnapshots` / `fetchKitchenStaff` (selected non-existent columns); Sync Kitchen is purchases-only now, revenue via Sync Sales.
 
-Activation surfaced several latent bugs that got fixed in the same session:
+### Earlier
 
-- Both migrations applied (`r7_ledger_recurring`, `r7_ledger_bank_accounts`).
-- Replication enabled on **all 7** `r7_ledger_*` tables (only `crm_*` and one POS table were on before — the "Live" indicator on the top bar had been lying since launch).
-- `SUPABASE_SERVICE_ROLE_KEY` added in Vercel, the Marketing + Bookings Forecast endpoints now respond 200.
-- **UNCATEGORIZED bug** — the client sentinel `"10"` was being saved into a UUID FK column, silently dropping every import without a category. Translation layer added in both directions.
-- **Marketing bridge tenant mapping** — `r7_tenants.id` and `mkt_restaurants.id` are independent UUIDs; resolution now goes through `slug`.
-- **Forecast bridge avg_ticket** — `r7_snapshots` is inventory, not Square POS revenue. The query was failing on a non-existent column. Removed for now; will be wired back in when `pos_orders` ships.
-- **Hardcoded dates** — "January 2025" and "Fiscal Year 2025" page subtitles, plus the tax export filename, all derived from `dateRange` now.
-- **Missing `.gap-10` utility** — the Budget category swatch was glued to its label.
-
-### Earlier · ecosystem bridges + Recurring + Bank Accounts foundations
-
-- Recurring transactions Phase 1 + 2 (rules CRUD, auto-match on import, monthly forecast on Cash Flow, drift/missing alerts on Insights).
-- Multi-account Phase 1 (CRUD, per-account balance with credit utilization).
-- Bridge Clariva Marketing → CFO (monthly ad-spend accruals; daily granularity is Phase 2, waiting on Marketing's daily cron).
-- Bridge Clariva Book → CFO Insights (forward-looking demand card with no-show rate).
+- Multi-account Phase 1 + 2, Recurring Phase 1 + 2, initial bug hunt + branding, NOW activation (migrations, replication, service role key, UNCATEGORIZED fix).
 
 ---
 
 ## NOW — ongoing dogfood
 
-The original NOW table from the previous version is fully checked off. What's left is **operational use** — TorresBee actually living in the app — which is what surfaces the bugs no automated sweep finds (see the "unplanned fixes" above).
+TorresBee living in the app surfaces the bugs no sweep finds. Flag anything off in the live app; fix inline before piling on features.
 
-Recommended cadence: every time you spot something off in the live app, flag it; we'll fix it inline before adding more features.
+**Pending operator actions:**
+- Re-sync Tips/Sales/Labor after each deploy to refresh Square data.
+- Compare Payroll run vs Paychex stub at period close (15th) to calibrate the 15% employer-burden rate and spot salaried/off-system gaps.
 
 ---
 
 ## NEXT — features that unblock real decisions
 
-Ordered by impact, not by ease.
-
 ### 1. Multi-tenant + proper Auth · `L`
 
 **Unblocks:** moving from "TorresBee's app" to a sellable SaaS product.
 
-Today the tenant is read from `VITE_TENANT_ID` env var → one tenant per Vercel deployment. Target: Supabase Auth + `clv_tenant_members` membership table + real tenant-aware RLS (the pattern POS, Marketing, and Book already use).
+Today the tenant is `VITE_TENANT_ID` env var → one tenant per deploy. Target: Supabase Auth + `clv_tenant_members` + tenant-aware RLS (the pattern POS/Marketing/Book already use). Also fixes the four hardcoded "TorresBee" strings.
 
-**Prerequisite:** a dedicated design session — touching RLS policies is fragile. Plan the migration of `USING (true)` permissive policies to tenant-aware ones without losing pilot data. Also unlocks fixing the four hardcoded "TorresBee" strings flagged during the dates sweep.
+**Prerequisite:** dedicated design session — RLS migration from `USING (true)` permissive policies to tenant-aware ones without losing pilot data is fragile. Worth planning before touching.
 
-### 2. Marketing bridge Phase 2 · `S`
+### 2. Finish Bug hunt round 2 · `S`
 
-**Unblocks:** ROI per campaign — the CMO question.
+- Posting workflow + Reconciliation screen end-to-end against real data.
+- Bill payment workflow (Kitchen purchase → bill → payment transaction).
+- Per-account reconciliation (the screen is global today).
+- `CLAUDE.md` is stale — it documents a "Ledger / Posting" screen that doesn't exist in the current nav. Reconcile docs with reality.
 
-**Prerequisite:** Clariva Marketing needs to run a daily cron with `date_preset='today'`. When that lands:
+### 3. Marketing bridge Phase 2 · `S`
 
-- Switch the endpoint grouping from monthly to daily (existing monthly rows keep their stable IDs and stop updating)
-- Add per-campaign breakdown using `snapshots.campaigns`
-- New variance card: "spend daily vs. planned daily budget"
+**Prerequisite:** Marketing needs a daily `date_preset='today'` cron. Then: daily granularity + per-campaign breakdown + planned-vs-actual variance card.
 
-### 3. Bug hunt round 2 · `S`
+### 4. Health · `S`
 
-Sweep the flows we documented but never validated against real data:
-
-- Posting workflow (auto-match bank vs. Kitchen invoices)
-- Reconciliation screen end-to-end
-- Bill payment workflow (Kitchen purchase → bill → payment transaction)
-- `fetchKitchenSnapshots` selects columns that don't exist on `r7_snapshots` (`gross_sales`, `net_sales`, `avg_ticket`, `orders`, `tips`) — Sync Kitchen revenue silently returned `[]` in production from day one. Decide: drop the call, or rewrite against `pos_orders` once POS ships.
-- Per-account reconciliation (the screen is global today)
-
-### 4. Health · `XS`
-
-- Bundle code-splitting (~507KB → ~200KB initial + lazy chunks). Vite warns on every build.
-- Consolidate the three migration files into a single `supabase_migration.sql` for fresh setups.
+- **Bundle code-splitting** — single chunk now ~540KB, Vite warns every build. Lazy-load screens behind the nav.
+- Consolidate migration files into one `supabase_migration.sql` for fresh setups.
 
 ---
 
@@ -95,41 +78,41 @@ Sweep the flows we documented but never validated against real data:
 
 | Item | Triggers when | Why |
 |---|---|---|
-| **Bridge Purchase → Bills** | `clariva-purchase` module ships (already in `dev`) | Purchase Orders become the source of truth for Bills, replacing the Kitchen-purchase fallback |
-| **Bridge POS → CFO** | `pos.clariva.cloud` ships (currently `dev`) | POS becomes the canonical revenue source, complementing or replacing Square snapshots — also unblocks real avg_ticket for the Bookings Forecast card |
-| **Stack migration: TS + Tailwind + Zustand** | Before the second customer | Aligns with POS / Purchase. Reduces cognitive load across modules. Pure refactor, zero new feature — only do once a real second tenant exists |
-| **Brazil-compliant DRE** | When expanding to BR | POS is already dual-region. CFO will need: multi-currency, NFC-e, Pix, Stone/Cielo, region adapter |
+| **Bridge Purchase → Bills** | `clariva-purchase` (in `dev`) ships | POs become the source of truth for Bills |
+| **Bridge POS → CFO** | `pos.clariva.cloud` ships | Canonical revenue + real avg_ticket for Bookings Forecast |
+| **Stack migration: TS + Tailwind** | Before second customer | Aligns with POS/Purchase (now that Day theme + fonts already match) |
+| **Brazil-compliant DRE** | Expanding to BR | multi-currency, NFC-e, Pix, Stone/Cielo |
 
 ### Product features
 
 | Item | Unblocks |
 |---|---|
-| **Recurring missing alerts (weekly/biweekly)** | Today only monthly cadence triggers a missing alert. Extend to payroll that didn't land on biweekly |
-| **Weekly email reports** | "P&L weekly digest" delivered Monday 8AM to the owner — top-of-mind decisions |
-| **Plaid integration** | When manual PDF/CSV imports stop scaling — direct bank account sync |
-| **Receipt photo upload** | Owner snaps a photo → AI extracts → links to a transaction. Mirrors the Kitchen invoice scanner |
-| **What-if scenarios** | Cash-flow modeling: "if I cut marketing 20%, what does runway look like?" — CFO/CEO decision tool |
-| **Persist internal transfer pairings** | Today detection runs client-side every render. Persisting via `source='internal_transfer'` lets P&L / Cash Flow exclude them consistently and survives offline state |
+| **Payroll Level 2 — pay 1099 contractors** | Pay musicians directly via ACH (Modern Treasury / Increase) — lower liability than W-2 |
+| **Recurring missing alerts (weekly/biweekly)** | Payroll that didn't land on biweekly cadence |
+| **Weekly email reports** | "P&L weekly digest" Monday 8AM to owner |
+| **Plaid integration** | When manual imports stop scaling |
+| **Receipt photo upload** | Photo → AI extract → link to transaction |
+| **What-if scenarios** | "cut marketing 20%, what's runway?" |
+| **Persist internal transfer pairings** | Detection runs client-side every render today |
+| **Sales tax module** | Texas 8.25% — collected vs filed reconciliation (Bookkeeper flags the gap but can't compute liability yet) |
 
 ### Tech health
 
 - Real-time stress test (multiple concurrent sessions)
-- Virtualize the Transactions table (today renders everything — fine at 100 rows, bad at 5k)
-- Backup and recovery drill
-- Error tracking (Sentry?) and product telemetry
+- Virtualize Transactions table (renders everything; fine at 100, bad at 5k)
+- Backup + recovery drill
+- Error tracking (Sentry?) + product telemetry
 
 ---
 
 ## HORIZON — 6+ months out
 
-When CFO has matured into a real SaaS product, opportunities open up:
-
-- **AI Assistant** — Claude integrated for natural questions: "why did my food cost jump last month?", "how much did I spend with Sysco this quarter?"
-- **Anomaly detection** — automatic alerts when a vendor charges outside its pattern, when a category jumps relative to history
-- **Investor reports** — exportable monthly P&L + cash flow + KPIs in investor-ready PDF
-- **Tax automation** — Schedule C export, 1099 generation, integration with TurboTax / CPA pipelines
-- **ML forecasting** — use history to project demand beyond what recurring rules can model
-- **Cross-tenant benchmarking** — anonymized aggregates across all Clariva restaurants → "your food cost is above the network median for casual dining in Texas"
+- **AI Assistant** — natural questions ("why did food cost jump last month?")
+- **Anomaly detection** — vendor charges outside pattern, category jumps
+- **Investor reports** — investor-ready PDF P&L + cash flow + KPIs
+- **Tax automation** — Schedule C export, 1099 generation, TurboTax/CPA pipelines
+- **ML forecasting** — demand projection beyond recurring rules
+- **Cross-tenant benchmarking** — anonymized network medians
 
 ---
 
@@ -137,23 +120,12 @@ When CFO has matured into a real SaaS product, opportunities open up:
 
 | Waiting on | Blocks here |
 |---|---|
-| `purchase` module shipping | Bridge Purchase → Bills (refactor of Bills source) |
-| `pos` module shipping | Bridge POS → CFO (revenue source alternative + real avg_ticket for Bookings Forecast) |
-| `marketing` adding daily cron | Phase 2 of the Marketing bridge (daily + per-campaign) |
-| `admin` module shipping | Centralized multi-tenant management instead of per-app dashboards |
-| `clv_apps` registry maturing | Auto-discovery of available modules from inside CFO |
+| `purchase` shipping | Bridge Purchase → Bills |
+| `pos` shipping | Bridge POS → CFO (revenue + avg_ticket) |
+| `marketing` daily cron | Marketing bridge Phase 2 |
+| `admin` shipping | Centralized multi-tenant management |
+| `clv_apps` registry | Auto-discovery of modules from inside CFO |
 
 ---
 
-## Recommended sequence
-
-Prioritizing as CFO/CEO/CTO of the product:
-
-1. **Multi-tenant + Auth** (~1 week, dedicated session) — the only real blocker for SaaS
-2. **Bug hunt round 2** (~2 days) — catch latent issues like `fetchKitchenSnapshots` before more tenants do
-3. **Bundle splitting + health** (~1 day) — infrastructure for scale
-4. Then react to whatever lands first in the rest of the ecosystem (Purchase, POS, Marketing daily sync)
-
----
-
-_Last updated: 2026-05-12 · Maintained alongside `CLAUDE.md`. Update when scope changes; do not let it drift._
+_Last updated: 2026-05-24 · Maintained alongside `CLAUDE.md` (which is now stale — see Bug hunt round 2). Update when scope changes._
