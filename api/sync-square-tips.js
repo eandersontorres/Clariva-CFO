@@ -36,6 +36,7 @@ export default async function handler(req, res) {
     const token = settings.sq_token;
     const locationId = settings.sq_location;
     const sandbox = !!settings.sq_sandbox;
+    const tenantTz = settings.timezone || "America/Chicago";
     if (!token || !locationId) return res.status(400).json({ error: "Square credentials not configured" });
 
     const base = sandbox ? "https://connect.squareupsandbox.com" : "https://connect.squareup.com";
@@ -101,7 +102,9 @@ export default async function handler(req, res) {
     for (const o of allOrders) {
       const closedAt = o.closed_at || o.created_at;
       if (!closedAt) continue;
-      const date = closedAt.slice(0, 10);
+      // Local-day bucket (America/Chicago), not UTC — matches Square Team Sales
+      // and the sales feed so tips line up with the right service day.
+      const date = new Date(closedAt).toLocaleDateString("en-CA", { timeZone: tenantTz });
       const tenders = Array.isArray(o.tenders) ? o.tenders : [];
 
       // Pick the primary server for this order — used as the fallback for

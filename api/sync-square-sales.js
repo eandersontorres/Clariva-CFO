@@ -39,6 +39,7 @@ export default async function handler(req, res) {
     const token = settings.sq_token;
     const locationId = settings.sq_location;
     const sandbox = !!settings.sq_sandbox;
+    const tenantTz = settings.timezone || "America/Chicago";
     if (!token || !locationId) return res.status(400).json({ error: "Square credentials not configured" });
 
     const base = sandbox ? "https://connect.squareupsandbox.com" : "https://connect.squareup.com";
@@ -94,7 +95,12 @@ export default async function handler(req, res) {
     for (const p of allPayments) {
       const created = p.created_at;
       if (!created) continue;
-      const date = created.slice(0, 10);
+      // Bucket by the restaurant's local day (America/Chicago for TorresBee),
+      // NOT UTC. A restaurant sells at night — payments after ~7pm Central are
+      // already the next UTC day, so a naive UTC slice leaks revenue into the
+      // following day and breaks reconciliation against the POS (which buckets
+      // in local time). en-CA locale yields YYYY-MM-DD.
+      const date = new Date(created).toLocaleDateString("en-CA", { timeZone: tenantTz });
       if (!byDay[date]) byDay[date] = { date, gross_cents: 0, fee_cents: 0, refund_cents: 0, payments: 0 };
       const grossCents = p.amount_money?.amount || 0;
       const refundedCents = p.refunded_money?.amount || 0;
