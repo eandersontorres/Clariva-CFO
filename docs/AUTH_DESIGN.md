@@ -1,7 +1,15 @@
 # Multi-tenant + Auth — Design
 
-Status: **DESIGN — not implemented.** Code changes await sign-off on this plan.
+Status: **Phase A DONE (2026-05-25).** Login live, stopgap reverted, per-tenant
+isolation enforced. Phase B/C still open.
 Author: design session 2026-05-24.
+
+### Progress
+- ✅ **Phase 0** — anon stopgap (applied 05-24, reverted 05-25 after login confirmed)
+- ✅ **Phase A** — Supabase Auth login gate (commit cc59cd9). Verified: anon sees
+  0 rows, authenticated tenant member sees all data. Anderson logged in OK.
+- ⬜ **Phase B** — multi-tenant polish (switcher, dynamic tenant name, role-aware UI)
+- ⬜ **Phase C** — endpoint hardening (forward token + membership check on /api/*)
 
 ---
 

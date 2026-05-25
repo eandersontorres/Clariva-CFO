@@ -9,6 +9,8 @@
 -- Supabase Auth login (Phase A in docs/AUTH_DESIGN.md) ships.
 --
 -- APPLIED 2026-05-24 via Supabase MCP. Tracked here for reversibility.
+-- REVERTED 2026-05-25 — Phase A login is live, per-tenant isolation enforced.
+-- This file is now historical; the REVERT block at the bottom was run.
 --
 -- TO REVERT once login is live (see bottom of file).
 -- ============================================================
