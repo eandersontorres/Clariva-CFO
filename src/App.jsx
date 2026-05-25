@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
+import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 
@@ -5541,6 +5542,75 @@ function Bookkeeper({ transactions, allTransactions, categories, setTransactions
   );
 }
 
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [info, setInfo] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [magicMode, setMagicMode] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null); setInfo(null); setLoading(true);
+    if (magicMode) {
+      const { error: err } = await sendMagicLink(email);
+      if (err) setError(err.message);
+      else setInfo("Check your email — we sent a sign-in link.");
+    } else {
+      const { error: err } = await signInWithPassword(email, password);
+      if (err) setError(err.message);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <>
+      <style>{STYLES}</style>
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", padding: 20 }}>
+        <div className="card" style={{ width: "100%", maxWidth: 380, padding: 32 }}>
+          <div className="flex items-center gap-10" style={{ marginBottom: 24 }}>
+            <div className="logo-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.65 1.87 1.96 0 2.4-.98 2.4-1.59 0-.83-.44-1.61-2.67-2.14-2.48-.6-4.18-1.62-4.18-3.67 0-1.72 1.39-2.84 3.11-3.21V4h2.67v1.95c1.86.45 2.79 1.86 2.85 3.39H14.3c-.05-1.11-.64-1.87-2.22-1.87-1.5 0-2.4.68-2.4 1.64 0 .84.65 1.39 2.67 1.91s4.18 1.39 4.18 3.91c-.01 1.83-1.38 2.83-3.12 3.16z" fill="var(--accent)"/>
+              </svg>
+            </div>
+            <div className="logo-text">
+              <div className="logo-mark">CLARIVA</div>
+              <div className="logo-sub">CFO</div>
+            </div>
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
+            {magicMode ? "Sign in with a link" : "Sign in"}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text3)", marginBottom: 20 }}>
+            {magicMode ? "We'll email you a one-time sign-in link." : "Login com sua conta Clariva"}
+          </div>
+          <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <input className="input" type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="email@exemplo.com" autoComplete="email" />
+            {!magicMode && (
+              <input className="input" type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="senha" autoComplete="current-password" />
+            )}
+            {error && <div style={{ background: "var(--redBg)", border: "1px solid var(--red)40", color: "var(--red)", borderRadius: "var(--radius2)", padding: "8px 10px", fontSize: 12 }}>{error}</div>}
+            {info && <div style={{ background: "var(--accentBg)", border: "1px solid var(--accentBorder)", color: "var(--accent)", borderRadius: "var(--radius2)", padding: "8px 10px", fontSize: 12 }}>{info}</div>}
+            <button className="btn btn-primary" type="submit" disabled={loading} style={{ justifyContent: "center", padding: "10px" }}>
+              {loading ? "..." : magicMode ? "Send sign-in link" : "Entrar"}
+            </button>
+          </form>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ marginTop: 14, width: "100%", justifyContent: "center", color: "var(--text3)" }}
+            onClick={() => { setMagicMode(m => !m); setError(null); setInfo(null); }}
+          >
+            {magicMode ? "← Use password" : "Forgot password? Email me a link"}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -5551,6 +5621,23 @@ export default function App() {
     document.documentElement.classList.toggle("theme-light", theme === "light");
     try { localStorage.setItem("clariva-cfo-theme", theme); } catch {}
   }, [theme]);
+  // Auth gate. `session === undefined` means we're still checking; null = logged
+  // out; object = logged in. `authorized` = the user belongs to this deploy's
+  // tenant. Demo mode skips auth entirely.
+  const [session, setSession] = useState(TENANT_ID === "demo" ? null : undefined);
+  const [authorized, setAuthorized] = useState(TENANT_ID === "demo");
+  useEffect(() => {
+    if (TENANT_ID === "demo") return;
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+  useEffect(() => {
+    if (TENANT_ID === "demo") return;
+    if (!session) { setAuthorized(false); return; }
+    getMyTenantIds().then(ids => setAuthorized(ids.includes(TENANT_ID) || ids.length > 0));
+  }, [session]);
+
   const [transactions, setTransactions] = useState(SAMPLE_TRANSACTIONS);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [budgets, setBudgets] = useState(SAMPLE_BUDGETS);
@@ -5811,6 +5898,28 @@ export default function App() {
     }
   };
 
+  // ── Auth gate (skipped in demo) ─────────────────────────────
+  if (TENANT_ID !== "demo") {
+    if (session === undefined) {
+      return (<><style>{STYLES}</style><div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", color: "var(--text3)", fontFamily: "var(--font-mono)", fontSize: 13 }}>Loading…</div></>);
+    }
+    if (!session) return <LoginScreen />;
+    if (!authorized) {
+      return (
+        <><style>{STYLES}</style>
+          <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", padding: 20 }}>
+            <div className="card" style={{ maxWidth: 420, padding: 32, textAlign: "center" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🔒</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>No access</div>
+              <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 20 }}>Your account isn't linked to this restaurant. Ask an admin to add you in the team settings.</div>
+              <button className="btn btn-outline btn-sm" onClick={() => signOutUser()}>Sign out</button>
+            </div>
+          </div>
+        </>
+      );
+    }
+  }
+
   return (
     <>
       <style>{STYLES}</style>
@@ -5863,6 +5972,11 @@ export default function App() {
               <strong>TorresBee</strong>
               Round Rock, TX
             </div>
+            {TENANT_ID !== "demo" && (
+              <button className="btn btn-ghost btn-sm" style={{ width: "100%", justifyContent: "center", marginTop: 8, color: "var(--text3)", fontSize: 11 }} onClick={() => signOutUser()}>
+                Sign out
+              </button>
+            )}
           </div>
         </nav>
 

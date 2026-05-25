@@ -3,9 +3,35 @@ import { UNCATEGORIZED } from './constants.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-export const supabase = createClient(supabaseUrl, supabaseKey)
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: { persistSession: true, autoRefreshToken: true },
+})
 
 const TENANT = () => import.meta.env.VITE_TENANT_ID || 'demo'
+
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
+// Tenant ids the logged-in user belongs to, via the SECURITY DEFINER function
+// that reads r7_user_tenants. Same path Clariva Purchase uses.
+export async function getMyTenantIds() {
+  const { data, error } = await supabase.rpc('r7_get_my_tenant_ids')
+  if (error) { console.error('getMyTenantIds', error); return [] }
+  return data || []
+}
+
+export async function signInWithPassword(email, password) {
+  return await supabase.auth.signInWithPassword({ email, password })
+}
+
+export async function sendMagicLink(email) {
+  return await supabase.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.origin },
+  })
+}
+
+export async function signOutUser() {
+  return await supabase.auth.signOut()
+}
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
 export async function fetchTransactions(tenantId, { start, end } = {}) {
