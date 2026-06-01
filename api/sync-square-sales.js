@@ -168,7 +168,12 @@ export default async function handler(req, res) {
       .gte("date", beginDate)
       .lte("date", endDate)
       .gt("amount", 0);
-    const isSquareDeposit = (desc) => /^square|^sq\s|^sq\b|sq\*square|square inc/i.test(desc || "");
+    // Re-tag matches the word "square" anywhere (not just as a prefix), so BoA
+    // descriptions like "TRANSFER SQUARE" or "ACH DEPOSIT - SQUARE INC" still
+    // get caught. Combined with the `amount > 0` filter above this is safe:
+    // expense rows that happen to mention Square (e.g. "SQUARE PROCESSING
+    // FEES") are negative and never reach this branch.
+    const isSquareDeposit = (desc) => /\bsquare\b|sq\*square|^sq\s|^sq\b/i.test(desc || "");
     const reTagIds = (candidates || [])
       .filter(c => isSquareDeposit(c.description) && c.source !== "square_sale_gross" && c.source !== "square_settlement")
       .map(c => c.id);
