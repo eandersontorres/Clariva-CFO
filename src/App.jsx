@@ -1908,7 +1908,7 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
   };
 
   const txnCount = (cid) => transactions.filter(t => t.category === cid).length;
-  const txnTotal = (cid) => transactions.filter(t => t.category === cid).reduce((s, t) => s + t.amount, 0);
+  const txnTotal = (cid) => transactions.filter(t => t.category === cid && isRevenueRelevant(t)).reduce((s, t) => s + t.amount, 0);
 
   return (
     <div className="page">
@@ -2004,7 +2004,10 @@ function PLReport({ transactions, categories, dateRange = {} }) {
   const incomeCats = categories.filter(c => c.type === "income");
   const expenseCats = categories.filter(c => c.type === "expense" && c.id !== UNCATEGORIZED);
 
-  const getAmount = (catId) => transactions.filter(t => t.category === catId).reduce((s, t) => s + t.amount, 0);
+  // isRevenueRelevant excludes settlement/internal-transfer rows so the same
+  // gross-sale dollar is not counted twice (once as square_sale_gross and again
+  // when the bank deposit lands tagged as square_settlement).
+  const getAmount = (catId) => transactions.filter(t => t.category === catId && isRevenueRelevant(t)).reduce((s, t) => s + t.amount, 0);
 
   const totalIncome = incomeCats.reduce((s, c) => s + Math.max(0, getAmount(c.id)), 0);
   const totalCOGS = expenseCats.filter(c => c.taxLine === "COGS").reduce((s, c) => s + Math.abs(Math.min(0, getAmount(c.id))), 0);
@@ -2147,7 +2150,7 @@ function PLReport({ transactions, categories, dateRange = {} }) {
 
 // ─── CASH FLOW ────────────────────────────────────────────────────────────────
 function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) {
-  const operating = transactions.filter(t => ["1","2","3","4","6","7","8","9"].includes(t.category));
+  const operating = transactions.filter(t => ["1","2","3","4","6","7","8","9"].includes(t.category) && isRevenueRelevant(t));
   const opInflow = operating.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const opOutflow = Math.abs(operating.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
   const netOperating = opInflow - opOutflow;
@@ -2297,7 +2300,7 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
 function Budget({ transactions, categories, budgets, setBudgets, saveBudget, showToast }) {
   const [period, setPeriod] = useState("monthly");
 
-  const getActual = (catId) => Math.abs(transactions.filter(t => t.category === catId && t.amount < 0).reduce((s, t) => s + t.amount, 0));
+  const getActual = (catId) => Math.abs(transactions.filter(t => t.category === catId && t.amount < 0 && isRevenueRelevant(t)).reduce((s, t) => s + t.amount, 0));
 
   const getBudget = (catId) => {
     const b = budgets.find(b => b.categoryId === catId);
@@ -2443,7 +2446,7 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
   };
   const byTaxLine = {};
   categories.forEach(c => {
-    const total = transactions.filter(t => t.category === c.id).reduce((s, t) => s + t.amount, 0);
+    const total = transactions.filter(t => t.category === c.id && isRevenueRelevant(t)).reduce((s, t) => s + t.amount, 0);
     if (total !== 0 && c.taxLine) {
       if (!byTaxLine[c.taxLine]) byTaxLine[c.taxLine] = { income: 0, expense: 0 };
       if (total > 0) byTaxLine[c.taxLine].income += total;
@@ -3098,11 +3101,11 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
     return () => { cancelled = true; };
   }, [tenantId]);
   const [period, setPeriod] = useState("weekly");
-  const totalIncome  = transactions.filter(t => t.amount > 0).reduce((s,t) => s+t.amount, 0);
-  const totalExpense = Math.abs(transactions.filter(t => t.amount < 0).reduce((s,t) => s+t.amount, 0));
+  const totalIncome  = transactions.filter(t => t.amount > 0 && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0);
+  const totalExpense = Math.abs(transactions.filter(t => t.amount < 0 && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0));
   const netIncome    = totalIncome - totalExpense;
   const netMargin    = totalIncome > 0 ? (netIncome/totalIncome)*100 : 0;
-  const getCat = (id) => Math.abs(transactions.filter(t => t.category === id).reduce((s,t) => s+t.amount, 0));
+  const getCat = (id) => Math.abs(transactions.filter(t => t.category === id && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0));
   const foodCost = getCat("1"), labor = getCat("2"), rent = getCat("3");
   const marketing = getCat("4"), insurance = getCat("6");
   const foodCostPct  = totalIncome > 0 ? (foodCost/totalIncome)*100 : 0;
@@ -3436,8 +3439,8 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
   const [form, setForm] = useState(empty);
 
   // Financials
-  const totalIncomePeriod = transactions.filter(t => t.amount > 0).reduce((s,t) => s+t.amount, 0);
-  const totalExpense      = Math.abs(transactions.filter(t => t.amount < 0).reduce((s,t) => s+t.amount, 0));
+  const totalIncomePeriod = transactions.filter(t => t.amount > 0 && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0);
+  const totalExpense      = Math.abs(transactions.filter(t => t.amount < 0 && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0));
   const net               = totalIncomePeriod - totalExpense;
   const monthlyFree       = Math.max(net * 0.3, 0); // 30% of net for projects
   const totalInvestment   = projects.reduce((s,p) => s + (parseFloat(p.investment)||0), 0);
