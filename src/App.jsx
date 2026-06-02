@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -2572,7 +2572,9 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
 // ─── RECONCILIATION ───────────────────────────────────────────────────────────
 function Reconciliation({ transactions, setTransactions, saveTransactions, categories, tenantId, dateRange, showToast }) {
   const [kitchenInvoices, setKitchenInvoices] = useState([]);
+  const [squarePayouts, setSquarePayouts] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [syncingPayouts, setSyncingPayouts] = useState(false);
 
   // Pull real invoices from Clariva Kitchen (r7_purchases) for the current window.
   // The mock list this used to render was already stale by the time the screen
@@ -2584,7 +2586,8 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     Promise.all([
       fetchKitchenPurchases(tenantId, dateRange),
       fetchKitchenVendors(tenantId),
-    ]).then(([purchases, vendors]) => {
+      fetchSquarePayouts(tenantId, dateRange),
+    ]).then(([purchases, vendors, payouts]) => {
       if (cancelled) return;
       const vendorMap = Object.fromEntries((vendors || []).map(v => [v.id, v.name]));
       const invoices = (purchases || []).map(p => {
@@ -2599,13 +2602,61 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
         };
       });
       setKitchenInvoices(invoices);
+      setSquarePayouts(payouts || []);
     }).catch(err => {
-      console.error("Reconciliation kitchen fetch failed:", err);
+      console.error("Reconciliation fetch failed:", err);
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
   }, [tenantId, dateRange?.start, dateRange?.end]);
+
+  const handleSyncPayouts = async () => {
+    if (!tenantId || tenantId === "demo") return;
+    setSyncingPayouts(true);
+    showToast("Pulling payouts from Square...", "info");
+    try {
+      const result = await syncSquarePayouts(tenantId, dateRange);
+      const msg = `${result.rows_written || 0} payout${result.rows_written === 1 ? "" : "s"} synced` +
+        ` · ${result.payouts_scanned || 0} scanned`;
+      showToast(msg, "success");
+      const fresh = await fetchSquarePayouts(tenantId, dateRange);
+      setSquarePayouts(fresh || []);
+    } catch (err) {
+      console.error("syncSquarePayouts", err);
+      showToast("Square Payouts sync failed: " + err.message, "error");
+    } finally {
+      setSyncingPayouts(false);
+    }
+  };
+
+  // Match each Square payout against the bank ledger by amount + date proximity.
+  // Window: ±2 days around arrival_date. Tolerance: $0.01 (Square reports cents
+  // and the bank rounds the same way). Only positive ledger rows are eligible.
+  // PR2 will move this match to the server and write `source='square_settlement'`
+  // + matched_txn_id deterministically. For PR1 we just compute it on render so
+  // the operator can spot drift visually.
+  const bankPositives = transactions.filter(t => parseFloat(t.amount) > 0);
+  const dayMs = 86400000;
+  const findPayoutMatch = (payout) => {
+    const target = parseFloat(payout.amount);
+    const arrivalMs = new Date(payout.arrival_date).getTime();
+    const candidates = bankPositives.filter(t => {
+      if (Math.abs(parseFloat(t.amount) - target) > 0.01) return false;
+      const dt = new Date(t.date).getTime();
+      return Math.abs(dt - arrivalMs) <= 2 * dayMs;
+    });
+    // Prefer an exact-date match if one exists; otherwise the closest in time.
+    candidates.sort((a, b) =>
+      Math.abs(new Date(a.date).getTime() - arrivalMs) -
+      Math.abs(new Date(b.date).getTime() - arrivalMs)
+    );
+    return candidates[0] || null;
+  };
+  const payoutMatches = squarePayouts.map(p => ({ payout: p, match: findPayoutMatch(p) }));
+  const matchedPayouts = payoutMatches.filter(x => x.match).length;
+  const unmatchedPayouts = squarePayouts.length - matchedPayouts;
+  const totalPayoutAmount = squarePayouts.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
 
   // Bank-side rows are unreconciled outflows from any source that ISN'T a
   // Kitchen purchase shadow — the real card/check that hit the bank.
@@ -2651,11 +2702,31 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
       <div className="page-header">
         <div>
           <div className="page-title">Reconciliation</div>
-          <div className="page-subtitle">{dateRange?.start} → {dateRange?.end} · Kitchen invoices ↔ bank transactions</div>
+          <div className="page-subtitle">{dateRange?.start} → {dateRange?.end} · Square payouts ↔ bank deposits · Kitchen invoices ↔ bank transactions</div>
+        </div>
+        <div className="flex gap-8">
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={handleSyncPayouts}
+            disabled={syncingPayouts || !tenantId || tenantId === "demo"}
+            title="Pull every Square payout for this window — used to confirm each Square liquidation actually landed in the bank"
+          >
+            {syncingPayouts ? "Syncing…" : "Sync Payouts"}
+          </button>
         </div>
       </div>
 
-      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 20 }}>
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(5, 1fr)", marginBottom: 20 }}>
+        <div className="kpi-card kpi-accent">
+          <div className="kpi-label">Square Payouts</div>
+          <div className="kpi-value">{squarePayouts.length}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>{fmt(totalPayoutAmount)} total</div>
+        </div>
+        <div className="kpi-card" style={{ borderColor: unmatchedPayouts > 0 ? "var(--red)" : "var(--accentBorder)" }}>
+          <div className="kpi-label">Unmatched Payouts</div>
+          <div className="kpi-value" style={{ color: unmatchedPayouts > 0 ? "var(--red)" : "var(--accent)" }}>{unmatchedPayouts}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>{matchedPayouts} matched to bank</div>
+        </div>
         <div className="kpi-card kpi-yellow">
           <div className="kpi-label">Unreconciled</div>
           <div className="kpi-value">{unreconciled.length}</div>
@@ -2669,6 +2740,86 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
           <div className="kpi-label">Auto-Matched</div>
           <div className="kpi-value">{autoMatched}</div>
         </div>
+      </div>
+
+      {/* Square Payouts ↔ Bank Deposits — PR1 (visibility only). Each row is a
+          Square payout; the right column is the best-guess bank deposit it
+          should reconcile against (±2 days, same amount). Drift = payouts the
+          Square API says were sent but we can't see in the bank ledger. */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Square Payouts ↔ Bank Deposits</div>
+          <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>
+            {squarePayouts.length === 0 ? "" : `${matchedPayouts}/${squarePayouts.length} matched`}
+          </div>
+        </div>
+        {squarePayouts.length === 0 ? (
+          <div className="empty" style={{ padding: 30 }}>
+            <div className="empty-icon">🏦</div>
+            <div className="empty-title">No Square payouts yet for this window</div>
+            <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>
+              Click <strong>Sync Payouts</strong> to pull from Square (cron also runs daily at 03:00 Central).
+            </div>
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Arrival</th>
+                  <th>Payout ID</th>
+                  <th>Status</th>
+                  <th style={{ textAlign: "right" }}>Payout</th>
+                  <th>Bank deposit</th>
+                  <th style={{ textAlign: "right" }}>Drift</th>
+                  <th>Match</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payoutMatches.map(({ payout, match }) => {
+                  const drift = match ? (parseFloat(match.amount) - parseFloat(payout.amount)) : null;
+                  const statusColor = payout.status === "PAID" ? "var(--accent)"
+                    : payout.status === "FAILED" ? "var(--red)"
+                    : "var(--text3)";
+                  return (
+                    <tr key={payout.id}>
+                      <td className="mono" style={{ color: "var(--text3)" }}>{fmtDate(payout.arrival_date)}</td>
+                      <td className="mono" style={{ fontSize: 10, color: "var(--text3)" }} title={payout.id}>
+                        {String(payout.id).slice(0, 14)}…
+                      </td>
+                      <td>
+                        <span className="tag" style={{ fontSize: 10, color: statusColor, border: `1px solid ${statusColor}40`, background: "transparent" }}>
+                          {payout.status || "—"}
+                        </span>
+                      </td>
+                      <td className="mono text-right" style={{ color: "var(--accent)" }}>{fmt(parseFloat(payout.amount))}</td>
+                      <td>
+                        {match ? (
+                          <div>
+                            <div style={{ fontSize: 12 }}>{String(match.description || "").slice(0, 40)}</div>
+                            <div className="mono" style={{ fontSize: 10, color: "var(--text3)" }}>{fmtDate(match.date)} · {match.account || "—"}</div>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: 12, color: "var(--red)" }}>⚠️ no bank deposit found</span>
+                        )}
+                      </td>
+                      <td className="mono text-right" style={{ color: drift === null ? "var(--text3)" : Math.abs(drift) < 0.01 ? "var(--accent)" : "var(--red)" }}>
+                        {drift === null ? "—" : (drift >= 0 ? "+" : "") + fmt(drift)}
+                      </td>
+                      <td>
+                        {match ? (
+                          <span className="tag" style={{ fontSize: 10, color: "var(--accent)", border: "1px solid var(--accentBorder)", background: "var(--accentBg)" }}>✅ matched</span>
+                        ) : (
+                          <span className="tag" style={{ fontSize: 10, color: "var(--red)", border: "1px solid var(--red)40", background: "transparent" }}>⚠️ missing</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
@@ -5751,6 +5902,8 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_payroll_runs", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_labor_tips_daily", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "r7_square_payouts", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .subscribe((status) => {
         if (status === "SUBSCRIBED") { console.log("Clariva CFO: real-time active"); setRealtimeActive(true); }

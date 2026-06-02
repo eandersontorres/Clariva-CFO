@@ -28,7 +28,14 @@ export default async function handler(req, res) {
     ? `https://${process.env.VERCEL_URL}`
     : (process.env.CFO_PUBLIC_URL || "https://cfo.clariva.cloud");
 
-  const endpoints = ["sync-square-sales", "sync-square-tips", "sync-square-labor"];
+  const endpoints = [
+    "sync-square-sales",
+    "sync-square-tips",
+    "sync-square-labor",
+    // Payouts feed — populates r7_square_payouts for the Reconciliation screen
+    // (see api/sync-square-payouts.js). Idempotent on payout_id, safe to re-run.
+    "sync-square-payouts",
+  ];
   const results = {};
   for (const ep of endpoints) {
     try {

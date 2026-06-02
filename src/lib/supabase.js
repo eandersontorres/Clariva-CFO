@@ -323,6 +323,31 @@ export async function syncSquareSales(tenantId, range = {}) {
   return await res.json()
 }
 
+// Square Payouts — the "money hitting the bank" feed. Used by the
+// Reconciliation screen to confirm every Square liquidation actually landed
+// in the bank account (PR1 = visibility, PR2 = auto-match).
+export async function fetchSquarePayouts(tenantId, { start, end } = {}) {
+  let q = supabase.from('r7_square_payouts').select('*').eq('tenant_id', tenantId).order('arrival_date', { ascending: false })
+  if (start) q = q.gte('arrival_date', start)
+  if (end)   q = q.lte('arrival_date', end)
+  const { data, error } = await q
+  if (error) { console.error('fetchSquarePayouts', error); return [] }
+  return data || []
+}
+
+export async function syncSquarePayouts(tenantId, range = {}) {
+  const res = await fetch('/api/sync-square-payouts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId, start: range.start, end: range.end }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
 export async function syncSquareTips(tenantId, range = {}) {
   const res = await fetch('/api/sync-square-tips', {
     method: 'POST',
