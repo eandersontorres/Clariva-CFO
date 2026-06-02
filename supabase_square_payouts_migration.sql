@@ -77,5 +77,13 @@ CREATE POLICY r7_square_payouts_update ON r7_square_payouts
 -- the project later moves to a non-service-role server key, add it here.
 
 -- Enable Supabase Realtime so the Reconciliation screen updates live when the
--- cron writes new payouts.
-ALTER PUBLICATION supabase_realtime ADD TABLE r7_square_payouts;
+-- cron writes new payouts. Wrapped in DO block because ALTER PUBLICATION has
+-- no IF NOT EXISTS guard — re-running the migration would fail otherwise.
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE r7_square_payouts;
+EXCEPTION
+  WHEN duplicate_object THEN
+    -- Already a member of the publication — nothing to do.
+    NULL;
+END $$;
