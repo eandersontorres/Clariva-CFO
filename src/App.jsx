@@ -2617,9 +2617,17 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     showToast("Pulling payouts from Square...", "info");
     try {
       const result = await syncSquarePayouts(tenantId, dateRange);
-      const msg = `${result.rows_written || 0} payout${result.rows_written === 1 ? "" : "s"} synced` +
-        ` · ${result.payouts_scanned || 0} scanned`;
-      showToast(msg, "success");
+      const parts = [
+        `${result.rows_written || 0} payout${result.rows_written === 1 ? "" : "s"} synced`,
+        `${result.payouts_scanned || 0} scanned`,
+      ];
+      if (typeof result.auto_matched === "number" && result.auto_matched > 0) {
+        parts.push(`${result.auto_matched} auto-matched to bank`);
+      }
+      if (typeof result.no_match === "number" && result.no_match > 0) {
+        parts.push(`${result.no_match} unmatched`);
+      }
+      showToast(parts.join(" · "), "success");
       const fresh = await fetchSquarePayouts(tenantId, dateRange);
       setSquarePayouts(fresh || []);
     } catch (err) {
@@ -2630,15 +2638,16 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     }
   };
 
-  // Match each Square payout against the bank ledger by amount + date proximity.
-  // Window: ±2 days around arrival_date. Tolerance: $0.01 (Square reports cents
-  // and the bank rounds the same way). Only positive ledger rows are eligible.
-  // PR2 will move this match to the server and write `source='square_settlement'`
-  // + matched_txn_id deterministically. For PR1 we just compute it on render so
-  // the operator can spot drift visually.
+  // Match each Square payout against the bank ledger. The deterministic
+  // server-side match runs inside sync-square-payouts and writes
+  // `matched_txn_id` on the payout row — when present, that's the source of
+  // truth. We fall back to a client-side heuristic (amount within $0.01,
+  // arrival_date ±2 days) for any payout where the server pass hasn't run
+  // yet, so the screen still has a useful preview before the next cron tick.
+  const txnsById = new Map(transactions.map(t => [t.id, t]));
   const bankPositives = transactions.filter(t => parseFloat(t.amount) > 0);
   const dayMs = 86400000;
-  const findPayoutMatch = (payout) => {
+  const heuristicMatch = (payout) => {
     const target = parseFloat(payout.amount);
     const arrivalMs = new Date(payout.arrival_date).getTime();
     const candidates = bankPositives.filter(t => {
@@ -2646,15 +2655,23 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
       const dt = new Date(t.date).getTime();
       return Math.abs(dt - arrivalMs) <= 2 * dayMs;
     });
-    // Prefer an exact-date match if one exists; otherwise the closest in time.
     candidates.sort((a, b) =>
       Math.abs(new Date(a.date).getTime() - arrivalMs) -
       Math.abs(new Date(b.date).getTime() - arrivalMs)
     );
     return candidates[0] || null;
   };
-  const payoutMatches = squarePayouts.map(p => ({ payout: p, match: findPayoutMatch(p) }));
-  const matchedPayouts = payoutMatches.filter(x => x.match).length;
+  const payoutMatches = squarePayouts.map(p => {
+    if (p.matched_txn_id) {
+      const persisted = txnsById.get(p.matched_txn_id);
+      // Server has persisted the link. Even if the txn is missing from the
+      // current date-range slice we still consider this matched — the link
+      // is authoritative — but render an "out of range" hint.
+      return { payout: p, match: persisted || null, matchType: "auto", outOfRange: !persisted };
+    }
+    return { payout: p, match: heuristicMatch(p), matchType: "heuristic", outOfRange: false };
+  });
+  const matchedPayouts = payoutMatches.filter(x => x.match || x.outOfRange).length;
   const unmatchedPayouts = squarePayouts.length - matchedPayouts;
   const totalPayoutAmount = squarePayouts.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
 
@@ -2776,11 +2793,22 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                 </tr>
               </thead>
               <tbody>
-                {payoutMatches.map(({ payout, match }) => {
+                {payoutMatches.map(({ payout, match, matchType, outOfRange }) => {
                   const drift = match ? (parseFloat(match.amount) - parseFloat(payout.amount)) : null;
                   const statusColor = payout.status === "PAID" ? "var(--accent)"
                     : payout.status === "FAILED" ? "var(--red)"
                     : "var(--text3)";
+                  const isMatched = !!match || outOfRange;
+                  let matchBadge;
+                  if (outOfRange) {
+                    matchBadge = <span className="tag" title={"Matched to txn " + payout.matched_txn_id + " (outside current date range)"} style={{ fontSize: 10, color: "var(--accent)", border: "1px solid var(--accentBorder)", background: "var(--accentBg)" }}>🔒 auto · out of range</span>;
+                  } else if (match && matchType === "auto") {
+                    matchBadge = <span className="tag" title="Deterministically matched server-side via Square payout_id" style={{ fontSize: 10, color: "var(--accent)", border: "1px solid var(--accentBorder)", background: "var(--accentBg)" }}>🔒 auto-matched</span>;
+                  } else if (match) {
+                    matchBadge = <span className="tag" title="Heuristic preview (amount + date). Will become deterministic on next sync." style={{ fontSize: 10, color: "var(--blue)", border: "1px solid var(--blue)40", background: "transparent" }}>≈ heuristic</span>;
+                  } else {
+                    matchBadge = <span className="tag" style={{ fontSize: 10, color: "var(--red)", border: "1px solid var(--red)40", background: "transparent" }}>⚠️ missing</span>;
+                  }
                   return (
                     <tr key={payout.id}>
                       <td className="mono" style={{ color: "var(--text3)" }}>{fmtDate(payout.arrival_date)}</td>
@@ -2799,6 +2827,8 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                             <div style={{ fontSize: 12 }}>{String(match.description || "").slice(0, 40)}</div>
                             <div className="mono" style={{ fontSize: 10, color: "var(--text3)" }}>{fmtDate(match.date)} · {match.account || "—"}</div>
                           </div>
+                        ) : outOfRange ? (
+                          <span style={{ fontSize: 12, color: "var(--text3)" }}>linked txn outside current window</span>
                         ) : (
                           <span style={{ fontSize: 12, color: "var(--red)" }}>⚠️ no bank deposit found</span>
                         )}
@@ -2806,13 +2836,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                       <td className="mono text-right" style={{ color: drift === null ? "var(--text3)" : Math.abs(drift) < 0.01 ? "var(--accent)" : "var(--red)" }}>
                         {drift === null ? "—" : (drift >= 0 ? "+" : "") + fmt(drift)}
                       </td>
-                      <td>
-                        {match ? (
-                          <span className="tag" style={{ fontSize: 10, color: "var(--accent)", border: "1px solid var(--accentBorder)", background: "var(--accentBg)" }}>✅ matched</span>
-                        ) : (
-                          <span className="tag" style={{ fontSize: 10, color: "var(--red)", border: "1px solid var(--red)40", background: "transparent" }}>⚠️ missing</span>
-                        )}
-                      </td>
+                      <td>{matchBadge}</td>
                     </tr>
                   );
                 })}

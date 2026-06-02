@@ -159,6 +159,14 @@ export default async function handler(req, res) {
     // Existing settlements keep their categories, notes and reconciled flag —
     // only the source is rewritten so the client knows to exclude them from
     // income totals.
+    //
+    // NOTE (PR2): the deterministic source of truth is now the Square Payouts
+    // API match in api/sync-square-payouts.js, which links bank deposit ↔
+    // payout via payout_id. This regex pass is kept as a fallback for the
+    // window between a Square sale recording and the payout actually being
+    // issued (and for any edge case the API match misses). It's safe to run
+    // both — the payout match already sets source='square_settlement', and
+    // this pass simply skips rows that are already tagged.
     const beginDate = beginTime.slice(0, 10);
     const endDate = endTime.slice(0, 10);
     const { data: candidates } = await supabase

@@ -98,10 +98,104 @@ export default async function handler(req, res) {
       upserted = count ?? rows.length;
     }
 
+    // ── PR2: deterministic auto-match ─────────────────────────────────────
+    // For each payout without a matched_txn_id, find the bank-side ledger row
+    // (positive amount, within ±2 days of arrival_date, amount equal to the
+    // cent). When we find exactly one (or pick the closest in time when there
+    // are ties), record the link on both sides:
+    //   - r7_square_payouts.matched_txn_id  → forward link, audit trail
+    //   - r7_ledger_transactions.source = 'square_settlement' → makes
+    //     isRevenueRelevant() exclude the row from income totals
+    //
+    // The same Set tracks ledger rows already consumed in this run so two
+    // payouts can't claim the same deposit. We also pre-load every
+    // matched_txn_id already in the table to honor prior runs.
+    const dayMs = 86400000;
+    const windowStart = beginTime.slice(0, 10);
+    const windowEnd = endTime.slice(0, 10);
+
+    const expandedStart = new Date(windowStart);
+    expandedStart.setDate(expandedStart.getDate() - 2);
+    const expandedEnd = new Date(windowEnd);
+    expandedEnd.setDate(expandedEnd.getDate() + 2);
+
+    const { data: unmatched } = await supabase
+      .from("r7_square_payouts")
+      .select("id, arrival_date, amount")
+      .eq("tenant_id", tenant_id)
+      .gte("arrival_date", windowStart)
+      .lte("arrival_date", windowEnd)
+      .is("matched_txn_id", null);
+
+    const { data: candidates } = await supabase
+      .from("r7_ledger_transactions")
+      .select("id, date, amount")
+      .eq("tenant_id", tenant_id)
+      .gte("date", expandedStart.toISOString().slice(0, 10))
+      .lte("date", expandedEnd.toISOString().slice(0, 10))
+      .gt("amount", 0);
+
+    const { data: existingMatches } = await supabase
+      .from("r7_square_payouts")
+      .select("matched_txn_id")
+      .eq("tenant_id", tenant_id)
+      .not("matched_txn_id", "is", null);
+    const consumedTxnIds = new Set((existingMatches || []).map(r => r.matched_txn_id).filter(Boolean));
+
+    let auto_matched = 0;
+    let no_match = 0;
+    const txnIdsToTag = [];
+
+    for (const payout of unmatched || []) {
+      const target = parseFloat(payout.amount);
+      const arrivalMs = new Date(payout.arrival_date).getTime();
+      const winners = (candidates || []).filter(t => {
+        if (consumedTxnIds.has(t.id)) return false;
+        if (Math.abs(parseFloat(t.amount) - target) > 0.01) return false;
+        const dt = new Date(t.date).getTime();
+        return Math.abs(dt - arrivalMs) <= 2 * dayMs;
+      });
+      if (winners.length === 0) { no_match++; continue; }
+      // Tie-break: closest in time, then earliest id (stable).
+      winners.sort((a, b) => {
+        const dA = Math.abs(new Date(a.date).getTime() - arrivalMs);
+        const dB = Math.abs(new Date(b.date).getTime() - arrivalMs);
+        return dA - dB || String(a.id).localeCompare(String(b.id));
+      });
+      const chosen = winners[0];
+      consumedTxnIds.add(chosen.id);
+      txnIdsToTag.push(chosen.id);
+
+      // Forward link on payout side (one row at a time so an individual
+      // failure doesn't block the whole batch).
+      const { error: pErr } = await supabase
+        .from("r7_square_payouts")
+        .update({
+          matched_txn_id: chosen.id,
+          matched_at: new Date().toISOString(),
+          match_method: "auto",
+        })
+        .eq("id", payout.id);
+      if (pErr) { console.error("match update payout", payout.id, pErr); continue; }
+      auto_matched++;
+    }
+
+    let settlements_retagged_by_match = 0;
+    if (txnIdsToTag.length > 0) {
+      const { error: tagErr } = await supabase
+        .from("r7_ledger_transactions")
+        .update({ source: "square_settlement" })
+        .in("id", txnIdsToTag);
+      if (!tagErr) settlements_retagged_by_match = txnIdsToTag.length;
+    }
+
     return res.status(200).json({
       payouts_scanned: allPayouts.length,
       rows_written: upserted,
-      window: { start: beginTime.slice(0, 10), end: endTime.slice(0, 10) },
+      auto_matched,
+      no_match,
+      settlements_retagged_by_match,
+      window: { start: windowStart, end: windowEnd },
     });
   } catch (err) {
     return res.status(500).json({ error: err.message || String(err) });
