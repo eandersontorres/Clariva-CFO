@@ -5943,6 +5943,96 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
     payDate: (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })(),
   });
 
+  // Paystub PDF import — extracts COMPANY TOTALS via /api/parse-paystub.
+  // The preview modal lets the operator confirm before saving (Anthropic
+  // numbers are usually right, but pay periods that overlap or have weird
+  // formatting can mistake columns).
+  const [paystubParsing, setPaystubParsing] = useState(false);
+  const [paystubPreview, setPaystubPreview] = useState(null); // { totals, split_suggestion, filename }
+  const fileInputRef = useRef(null);
+
+  const handlePaystubFile = async (file) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      showToast("Paystub must be a PDF", "error");
+      return;
+    }
+    setPaystubParsing(true);
+    showToast("Reading paystub with AI... 10-20 seconds", "info");
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(String(e.target.result).split(",")[1]);
+        reader.onerror = () => reject(new Error("Read failed"));
+        reader.readAsDataURL(file);
+      });
+      const apiRes = await fetch("/api/parse-paystub", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: base64, filename: file.name }),
+      });
+      if (!apiRes.ok) {
+        const err = await apiRes.json().catch(() => ({ error: "Server error " + apiRes.status }));
+        showToast(err.error || ("Server error " + apiRes.status), "error");
+        return;
+      }
+      const data = await apiRes.json();
+      setPaystubPreview(data);
+    } catch (err) {
+      showToast("Paystub parse failed: " + err.message, "error");
+    } finally {
+      setPaystubParsing(false);
+    }
+  };
+
+  const savePaystubAsRun = async () => {
+    if (!paystubPreview) return;
+    const t = paystubPreview.totals || {};
+    if (!t.period_start || !t.period_end) {
+      showToast("Period dates missing — edit the PDF or save manually", "error");
+      return;
+    }
+    // Look for an existing run for the same period — update it; otherwise create.
+    const existing = runs.find(r => r.period_start === t.period_start && r.period_end === t.period_end);
+    // Stash the full paystub envelope inside `totals` so we don't need a new
+    // column on r7_payroll_runs — `totals` is already JSONB. The CFO Source
+    // comparison view (future PR6) can read totals.paystub_meta for audit.
+    const totalsWithMeta = {
+      ...t,
+      paystub_meta: {
+        source: "paystub_pdf",
+        filename: paystubPreview.filename,
+        split_suggestion: paystubPreview.split_suggestion,
+        extracted_at: new Date().toISOString(),
+      },
+    };
+    const runRow = existing
+      ? { ...existing, totals: { ...(existing.totals || {}), ...totalsWithMeta } }
+      : {
+          id: "pr_" + Date.now(),
+          period_start: t.period_start,
+          period_end: t.period_end,
+          pay_date: t.check_date || null,
+          status: "submitted",
+          lines: [],
+          totals: totalsWithMeta,
+          notes: "Imported from paystub " + (paystubPreview.filename || "paystub.pdf"),
+        };
+    const saved = await upsertPayrollRun(runRow, tenantId);
+    if (!saved.ok) {
+      showToast("Save failed: " + (saved.error || "unknown"), "error");
+      return;
+    }
+    if (onChange) onChange();
+    showToast(
+      existing
+        ? `Run ${t.period_start} → ${t.period_end} updated with paystub data`
+        : `Run created · gross ${fmt(t.wages_subtotal + t.tips_charged)} · net ${fmt(t.net_pay)}`,
+      "success"
+    );
+    setPaystubPreview(null);
+  };
+
   const selected = runs.find(r => r.id === selectedId);
 
   const persist = async (row) => {
@@ -6039,7 +6129,24 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
           <div className="page-title">Payroll</div>
           <div className="page-subtitle">Payroll prep + Paychex CSV export · {runs.length} run{runs.length === 1 ? "" : "s"} on record</div>
         </div>
-        <button className="btn btn-primary btn-sm" onClick={() => setCreateOpen(true)}><Icon name="plus" size={13} /> New payroll run</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf"
+            style={{ display: "none" }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePaystubFile(f); e.target.value = ""; }}
+          />
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={paystubParsing}
+            onClick={() => fileInputRef.current?.click()}
+            title="Upload a Paychex/ADP/Gusto payroll journal PDF — AI extracts company totals + suggests how to split the Paychex bank ACH debit"
+          >
+            {paystubParsing ? "Reading PDF…" : "📄 Import paystub PDF"}
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={() => setCreateOpen(true)}><Icon name="plus" size={13} /> New payroll run</button>
+        </div>
       </div>
 
       <div className="card" style={{ background: "var(--yellowBg)", border: "1px solid var(--yellow)40", marginBottom: 20, padding: "10px 14px" }}>
@@ -6179,6 +6286,103 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
           </div>
         </div>
       )}
+
+      {paystubPreview && (
+        <PaystubPreviewModal
+          data={paystubPreview}
+          onClose={() => setPaystubPreview(null)}
+          onSave={savePaystubAsRun}
+        />
+      )}
+    </div>
+  );
+}
+
+function PaystubPreviewModal({ data, onClose, onSave }) {
+  const t = data.totals || {};
+  const s = data.split_suggestion || {};
+  const row = (label, value, options = {}) => (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px dotted var(--border)" }}>
+      <span style={{ fontSize: 12, color: options.dim ? "var(--text3)" : "var(--text2)", paddingLeft: options.indent ? 18 : 0 }}>{label}</span>
+      <span className="mono" style={{ fontSize: 12, color: options.color || "var(--text)", fontWeight: options.bold ? 700 : 400 }}>
+        {typeof value === "number" ? fmt(value) : value}
+      </span>
+    </div>
+  );
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">Paystub extracted</div>
+            <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4, fontFamily: "var(--font-mono)" }}>
+              {data.filename || "paystub.pdf"} · review before saving
+            </div>
+          </div>
+        </div>
+        <div className="modal-body">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+            <div>
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 12, marginBottom: 8, color: "var(--accent)" }}>Period</div>
+              {row("Start", t.period_start || "—")}
+              {row("End", t.period_end || "—")}
+              {row("Check date", t.check_date || "—")}
+              {row("Employees", t.employee_count || 0)}
+
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 12, margin: "14px 0 8px", color: "var(--accent)" }}>Earnings</div>
+              {row("Hourly", t.hourly_earnings || 0)}
+              {row("Overtime", t.overtime_earnings || 0)}
+              {row("Wages subtotal", t.wages_subtotal || 0, { bold: true })}
+              {row("Tips charged", t.tips_charged || 0, { color: "var(--purple)" })}
+              {row("Reimb non-tax", t.reimb_non_tax || 0, { color: "var(--blue)" })}
+            </div>
+            <div>
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 12, marginBottom: 8, color: "var(--accent)" }}>Employee withholdings</div>
+              {row("Social Security", t.employee_ss || 0, { dim: true })}
+              {row("Medicare", t.employee_medicare || 0, { dim: true })}
+              {row("Fed income tax", t.employee_fed_income || 0, { dim: true })}
+              {row("Total withhold", t.employee_withhold_total || 0, { bold: true })}
+
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 12, margin: "14px 0 8px", color: "var(--accent)" }}>Employer liability</div>
+              {row("Employer SS", t.employer_ss || 0, { dim: true })}
+              {row("Employer Medicare", t.employer_medicare || 0, { dim: true })}
+              {row("Fed unemploy", t.fed_unemploy || 0, { dim: true })}
+              {row("TX unemploy", t.tx_unemploy || 0, { dim: true })}
+              {row("Employer match", t.employer_match_total || 0, { bold: true })}
+            </div>
+          </div>
+
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, marginTop: 18 }}>
+            <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 12, marginBottom: 8, color: "var(--accent)" }}>Cash flow</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+              <div>
+                {row("Net pay (to employees)", t.net_pay || 0)}
+                {row("Tax liability (to gov)", t.total_tax_liability || 0)}
+                {row("True labor cost", t.true_labor_cost || 0, { color: "var(--accent)", bold: true })}
+              </div>
+              <div>
+                {row("Total bank debit (Paychex ACH)", t.total_bank_debit || 0, { color: "var(--yellow)", bold: true })}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, marginTop: 18 }}>
+            <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
+              Suggested split for the Paychex ACH debit
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 8 }}>
+              When the bank statement imports, find the Paychex ACH (~{fmt(t.total_bank_debit || 0)}) and split into:
+            </div>
+            {row("Payroll (Labor)", s.labor || 0, { color: "var(--accent)" })}
+            {row("Tip Pass-Through", s.tip_pass_through || 0, { color: "var(--purple)" })}
+            {row("Exp Reimbursement", s.exp_reimbursement || 0, { color: "var(--blue)" })}
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-outline" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={onSave}>Save to Payroll Run</button>
+        </div>
+      </div>
     </div>
   );
 }
