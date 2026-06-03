@@ -1996,10 +1996,79 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
   );
 }
 
+// Compact drill-down table rendered inline beneath each P&L category row.
+// Reuses the page's font/color tokens so it visually nests inside the section
+// rather than feeling like a separate widget. Showing source as a tiny tag
+// helps the operator immediately see "this came from Square sales" vs CSV
+// import vs Kitchen sync — useful when one category has mixed origins.
+function PLCategoryDetails({ txns, signNegative }) {
+  if (!txns || txns.length === 0) {
+    return (
+      <div style={{ padding: "8px 14px 12px 42px", fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>
+        No transactions in this category for the current window.
+      </div>
+    );
+  }
+  return (
+    <div style={{ padding: "4px 14px 12px 32px", background: "var(--surface2)" }}>
+      <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ color: "var(--text3)", fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            <th style={{ textAlign: "left",  padding: "5px 8px 5px 0", whiteSpace: "nowrap" }}>Date</th>
+            <th style={{ textAlign: "left",  padding: "5px 8px" }}>Description</th>
+            <th style={{ textAlign: "left",  padding: "5px 8px" }}>Source</th>
+            <th style={{ textAlign: "left",  padding: "5px 8px" }}>Account</th>
+            <th style={{ textAlign: "right", padding: "5px 0 5px 8px", whiteSpace: "nowrap" }}>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {txns.map(t => {
+            const amt = Math.abs(parseFloat(t.amount || 0));
+            return (
+              <tr key={t.id} style={{ borderTop: "1px solid var(--border)" }}>
+                <td className="mono" style={{ padding: "4px 8px 4px 0", color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
+                <td style={{ padding: "4px 8px", color: "var(--text2)" }}>{String(t.description || "").slice(0, 70)}</td>
+                <td style={{ padding: "4px 8px" }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--text3)", padding: "1px 5px", border: "1px solid var(--border)", borderRadius: 3 }}>
+                    {t.source || "manual"}
+                  </span>
+                </td>
+                <td className="mono" style={{ padding: "4px 8px", color: "var(--text3)", fontSize: 10 }}>{t.account || "—"}</td>
+                <td className="mono" style={{ padding: "4px 0 4px 8px", textAlign: "right", color: signNegative ? "var(--red)" : "var(--accent)", whiteSpace: "nowrap" }}>
+                  {signNegative ? `(${fmt(amt)})` : fmt(amt)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── P&L REPORT ───────────────────────────────────────────────────────────────
 function PLReport({ transactions, categories, dateRange = {} }) {
   const [period, setPeriod] = useState("monthly");
   const [expanded, setExpanded] = useState({ income: true, expense: true });
+  // Per-category drill-down: clicking a row expands a small table with every
+  // transaction making up that category's total. Same isRevenueRelevant filter
+  // applied so settlement / transfer rows don't leak in.
+  const [expandedCats, setExpandedCats] = useState(() => new Set());
+  const toggleCat = (id) => setExpandedCats(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const txnsForCategory = (catId, { sign } = {}) => {
+    return transactions
+      .filter(t => t.category === catId && isRevenueRelevant(t))
+      .filter(t => {
+        if (sign === "positive") return parseFloat(t.amount) > 0;
+        if (sign === "negative") return parseFloat(t.amount) < 0;
+        return true;
+      })
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  };
 
   const incomeCats = categories.filter(c => c.type === "income");
   const expenseCats = categories.filter(c => c.type === "expense" && c.id !== UNCATEGORIZED);
@@ -2044,14 +2113,21 @@ function PLReport({ transactions, categories, dateRange = {} }) {
             </div>
             {expanded.income && incomeCats.map(c => {
               const amt = Math.max(0, getAmount(c.id));
+              const open = expandedCats.has(c.id);
+              const txns = open ? txnsForCategory(c.id, { sign: "positive" }) : [];
               return (
-                <div key={c.id} className="pl-row">
-                  <div className="flex items-center gap-8">
-                    <div className="swatch" style={{ background: c.color }} />
-                    <span className="pl-row-name">{c.name}</span>
+                <Fragment key={c.id}>
+                  <div className="pl-row" onClick={() => toggleCat(c.id)} style={{ cursor: "pointer" }} title="Click to expand transactions">
+                    <div className="flex items-center gap-8">
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text3)", width: 10 }}>{open ? "▾" : "▸"}</span>
+                      <div className="swatch" style={{ background: c.color }} />
+                      <span className="pl-row-name">{c.name}</span>
+                      <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>· {txnsForCategory(c.id, { sign: "positive" }).length} txn</span>
+                    </div>
+                    <span className="mono" style={{ color: "var(--accent)" }}>{fmt(amt)}</span>
                   </div>
-                  <span className="mono" style={{ color: "var(--accent)" }}>{fmt(amt)}</span>
-                </div>
+                  {open && <PLCategoryDetails txns={txns} signNegative={false} />}
+                </Fragment>
               );
             })}
           </div>
@@ -2069,14 +2145,21 @@ function PLReport({ transactions, categories, dateRange = {} }) {
             </div>
             {expanded.cogs && expenseCats.filter(c => c.taxLine === "COGS").map(c => {
               const amt = Math.abs(Math.min(0, getAmount(c.id)));
+              const open = expandedCats.has(c.id);
+              const txns = open ? txnsForCategory(c.id, { sign: "negative" }) : [];
               return (
-                <div key={c.id} className="pl-row">
-                  <div className="flex items-center gap-8">
-                    <div className="swatch" style={{ background: c.color }} />
-                    <span className="pl-row-name">{c.name}</span>
+                <Fragment key={c.id}>
+                  <div className="pl-row" onClick={() => toggleCat(c.id)} style={{ cursor: "pointer" }} title="Click to expand transactions">
+                    <div className="flex items-center gap-8">
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text3)", width: 10 }}>{open ? "▾" : "▸"}</span>
+                      <div className="swatch" style={{ background: c.color }} />
+                      <span className="pl-row-name">{c.name}</span>
+                      <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>· {txnsForCategory(c.id, { sign: "negative" }).length} txn</span>
+                    </div>
+                    <span className="mono" style={{ color: "var(--red)" }}>({fmt(amt)})</span>
                   </div>
-                  <span className="mono" style={{ color: "var(--red)" }}>({fmt(amt)})</span>
-                </div>
+                  {open && <PLCategoryDetails txns={txns} signNegative={true} />}
+                </Fragment>
               );
             })}
           </div>
@@ -2100,14 +2183,21 @@ function PLReport({ transactions, categories, dateRange = {} }) {
             {expanded.opex && expenseCats.filter(c => c.taxLine !== "COGS").map(c => {
               const amt = Math.abs(Math.min(0, getAmount(c.id)));
               if (amt === 0) return null;
+              const open = expandedCats.has(c.id);
+              const txns = open ? txnsForCategory(c.id, { sign: "negative" }) : [];
               return (
-                <div key={c.id} className="pl-row">
-                  <div className="flex items-center gap-8">
-                    <div className="swatch" style={{ background: c.color }} />
-                    <span className="pl-row-name">{c.name}</span>
+                <Fragment key={c.id}>
+                  <div className="pl-row" onClick={() => toggleCat(c.id)} style={{ cursor: "pointer" }} title="Click to expand transactions">
+                    <div className="flex items-center gap-8">
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text3)", width: 10 }}>{open ? "▾" : "▸"}</span>
+                      <div className="swatch" style={{ background: c.color }} />
+                      <span className="pl-row-name">{c.name}</span>
+                      <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>· {txnsForCategory(c.id, { sign: "negative" }).length} txn</span>
+                    </div>
+                    <span className="mono" style={{ color: "var(--red)" }}>({fmt(amt)})</span>
                   </div>
-                  <span className="mono" style={{ color: "var(--red)" }}>({fmt(amt)})</span>
-                </div>
+                  {open && <PLCategoryDetails txns={txns} signNegative={true} />}
+                </Fragment>
               );
             })}
           </div>
