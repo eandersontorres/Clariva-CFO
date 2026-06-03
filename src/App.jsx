@@ -1066,11 +1066,20 @@ function SalesSyncButton({ tenantId, dateRange, onSync, showToast }) {
     try {
       const result = await syncSquareSales(tenantId, dateRange);
       setLastSync(new Date().toLocaleTimeString());
-      const summary = `${result.days_with_sales} days · gross ${fmt(result.totals.gross_sales)} · fees ${fmt(result.totals.processing_fees)}`;
+      // Response shape changed in PR5 (Orders API): totals now expose net_sales,
+      // tax, tips, etc separately. Fall back to the old gross_sales field for
+      // backward compat in case a stale deployment is still answering.
+      const t = result.totals || {};
+      const headline = t.net_sales != null
+        ? `${result.days_with_sales} days · net ${fmt(t.net_sales)} · tax ${fmt(t.tax || 0)} · tips ${fmt((t.tips || 0) + (t.auto_gratuity || 0))} · fees ${fmt(t.processing_fees || 0)}`
+        : `${result.days_with_sales} days · gross ${fmt(t.gross_sales || 0)} · fees ${fmt(t.processing_fees || 0)}`;
       const settlementNote = result.settlements_retagged > 0
         ? ` · ${result.settlements_retagged} bank deposit${result.settlements_retagged === 1 ? "" : "s"} marked as settlement`
         : "";
-      showToast(summary + settlementNote, "success");
+      const skipNote = ((result.skipped_tax || 0) + (result.skipped_tip || 0)) > 0
+        ? ` · ⚠️ skipped ${result.skipped_tax || 0} tax + ${result.skipped_tip || 0} tip days (missing transfer category)`
+        : "";
+      showToast(headline + settlementNote + skipNote, "success");
       if (onSync) onSync();
     } catch (err) {
       showToast("Square Sales sync failed: " + err.message, "error");
