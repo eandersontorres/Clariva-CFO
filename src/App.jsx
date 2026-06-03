@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -662,6 +662,29 @@ function isRevenueRelevant(t) {
   return t && !NON_REVENUE_SOURCES.has(t.source);
 }
 
+// Enhanced filter that also accounts for:
+//   - Categories of type='transfer' (Tip Pass-Through, Square Holding, etc).
+//     These represent passthrough flows — money the operator is moving on
+//     behalf of someone else (server tips, customer holds). They never hit
+//     P&L as income or expense.
+//   - Split parents — when a bank transaction has been split into smaller
+//     rows (parent_id pointing back at it), the parent is just the audit
+//     record of the bank line. The children carry the real classification
+//     and are the ones that count.
+// Use it from any roll-up that aggregates transactions for P&L / Insights /
+// Budget / Tax / CashFlow purposes. Memoize at the screen level — both Sets
+// only change when categories or transactions change.
+function makeLedgerFilter(categories, allTxns) {
+  const transferCatIds = new Set((categories || []).filter(c => c.type === "transfer").map(c => c.id));
+  const splitParentIds = new Set();
+  for (const t of (allTxns || [])) if (t.parent_id) splitParentIds.add(t.parent_id);
+  return function ledgerFilter(t) {
+    return isRevenueRelevant(t)
+      && !transferCatIds.has(t.category)
+      && !splitParentIds.has(t.id);
+  };
+}
+
 // ─── INTERNAL TRANSFER DETECTION ──────────────────────────────────────────────
 // A transfer between your own accounts (Checking -> Savings, payment of credit
 // card from checking) shows up in the ledger as two transactions: one negative
@@ -1170,7 +1193,8 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
   // Detect internal transfers across ALL transactions (not just the date window)
   // so a transfer that straddles a date boundary still pairs correctly.
   const transferPairs = detectTransferPairs(allTransactions || transactions);
-  const realTxns = transactions.filter(t => !transferPairs.has(t.id) && isRevenueRelevant(t));
+  const isLedger = makeLedgerFilter(categories, allTransactions || transactions);
+  const realTxns = transactions.filter(t => !transferPairs.has(t.id) && isLedger(t));
   const transferCount = transactions.filter(t => transferPairs.has(t.id)).length;
   const totalIncome = realTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalExpense = Math.abs(realTxns.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
@@ -1352,6 +1376,233 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── SPLIT MODAL ──────────────────────────────────────────────────────────────
+// One bank transaction → multiple sub-rows with different categories. The
+// classic case Anderson hit: a $5,000 PAYROLL ACH where $4,000 is wages
+// (Labor expense) and $1,000 is tip-out (Tip Pass-Through, type=transfer).
+// The parent stays as the bank-side audit record; children carry the real
+// classification and the P&L filters out the parent automatically.
+//
+// Auto-suggest: if the parent description looks like payroll and there's a
+// recent r7_payroll_runs entry within ±10 days, pre-fill the split using its
+// totals (gross wages + tips). Operator can edit before saving.
+function SplitModal({ txn, categories, payrollRuns = [], onClose, onSave, transactions = [] }) {
+  // Find an existing split (if user is editing an already-split txn).
+  const existingChildren = (transactions || []).filter(t => t.parent_id === txn.id);
+
+  // Decide an initial set of child rows. Three sources, in priority order:
+  //   1) Existing children — operator is re-editing the split.
+  //   2) Payroll auto-suggest — bank desc + recent payroll run match.
+  //   3) Default 50/50 — two empty rows, user fills.
+  const initialChildren = (() => {
+    if (existingChildren.length > 0) {
+      return existingChildren.map(c => ({
+        id: c.id,
+        description: c.description || "",
+        category: c.category || c.category_id || "",
+        amount: parseFloat(c.amount),
+      }));
+    }
+
+    const descUpper = (txn.description || "").toUpperCase();
+    const isPayrollLike = /PAYROLL|ACH.*PAY|GUSTO|ADP|PAYCHEX|SQUARE.*PAY/.test(descUpper);
+    if (isPayrollLike) {
+      const txnTime = new Date(txn.date).getTime();
+      const tenDays = 10 * 24 * 3600 * 1000;
+      const nearby = (payrollRuns || []).filter(r => {
+        const payDate = r.pay_date || r.payDate || r.period_end || r.periodEnd;
+        if (!payDate) return false;
+        return Math.abs(new Date(payDate).getTime() - txnTime) <= tenDays;
+      }).sort((a, b) => Math.abs(new Date(a.pay_date || a.period_end).getTime() - txnTime) - Math.abs(new Date(b.pay_date || b.period_end).getTime() - txnTime));
+
+      const run = nearby[0];
+      const totals = run?.totals || {};
+      const grossPick = ["total_gross", "gross_total", "gross_wages", "gross", "total_pay", "total"].find(k => totals[k] != null);
+      const tipsPick  = ["total_tips", "tips_total", "tips_owed", "tips"].find(k => totals[k] != null);
+
+      if (run && (grossPick || tipsPick)) {
+        const totalAbs = Math.abs(parseFloat(txn.amount));
+        const tipsRaw = tipsPick ? Math.abs(parseFloat(totals[tipsPick])) : 0;
+        const grossRaw = grossPick ? Math.abs(parseFloat(totals[grossPick])) : (totalAbs - tipsRaw);
+        // Heuristic guard: if suggested numbers don't roughly sum to the
+        // bank amount, scale them proportionally so the modal opens balanced.
+        const suggestedSum = grossRaw + tipsRaw;
+        const scale = suggestedSum > 0 ? totalAbs / suggestedSum : 1;
+        const wages = Math.round((grossRaw * scale) * 100) / 100;
+        const tips = Math.round((totalAbs - wages) * 100) / 100;
+
+        const sign = parseFloat(txn.amount) < 0 ? -1 : 1;
+        const laborCat = categories.find(c => c.type === "expense" && /labor|wage|payroll/i.test(c.name)) || categories.find(c => c.type === "expense");
+        const tipsCat = categories.find(c => c.type === "transfer" && /tip/i.test(c.name)) || categories.find(c => c.type === "transfer");
+        return [
+          { description: "Wages — " + (txn.description || "").slice(0, 40), category: laborCat?.id || "", amount: sign * wages },
+          { description: "Tips pass-through — " + (txn.description || "").slice(0, 30), category: tipsCat?.id || "", amount: sign * tips },
+        ];
+      }
+    }
+
+    // Default: two empty rows summing to parent amount.
+    const half = Math.round((parseFloat(txn.amount) / 2) * 100) / 100;
+    const other = Math.round((parseFloat(txn.amount) - half) * 100) / 100;
+    return [
+      { description: txn.description || "", category: "", amount: half },
+      { description: txn.description || "", category: "", amount: other },
+    ];
+  })();
+
+  const [children, setChildren] = useState(initialChildren);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const sumChildren = children.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+  const parentAmount = parseFloat(txn.amount);
+  const remaining = Math.round((parentAmount - sumChildren) * 100) / 100;
+  const balanced = Math.abs(remaining) < 0.01;
+
+  const updateChild = (i, patch) => {
+    setChildren(prev => prev.map((c, j) => j === i ? { ...c, ...patch } : c));
+  };
+  const addChild = () => {
+    setChildren(prev => [...prev, { description: "", category: "", amount: remaining }]);
+  };
+  const removeChild = (i) => {
+    if (children.length <= 2) return; // need at least 2
+    setChildren(prev => prev.filter((_, j) => j !== i));
+  };
+
+  const handleSave = async () => {
+    setErr("");
+    if (!balanced) { setErr(`Sum of splits must equal ${fmt(parentAmount)} (off by ${fmt(remaining)}).`); return; }
+    if (children.some(c => !c.category)) { setErr("Every split row needs a category."); return; }
+    if (children.some(c => parseFloat(c.amount) === 0 || isNaN(parseFloat(c.amount)))) { setErr("Every split row needs a non-zero amount."); return; }
+    setSaving(true);
+    try {
+      // Always include date inherited from parent.
+      const payload = children.map(c => ({
+        ...c,
+        date: txn.date,
+        account_id: txn.account_id || null,
+        account: txn.account || "Split",
+        source: "split",
+      }));
+      await onSave(payload, existingChildren.map(c => c.id));
+      onClose();
+    } catch (e) {
+      setErr(e.message || "Failed to save split");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">Split transaction</div>
+            <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4, fontFamily: "var(--font-mono)" }}>
+              {fmtDate(txn.date)} · {(txn.description || "").slice(0, 60)} · {fmt(parentAmount)}
+            </div>
+          </div>
+        </div>
+        <div className="modal-body">
+          <div style={{ marginBottom: 14, fontSize: 12, color: "var(--text2)", lineHeight: 1.5 }}>
+            Divide the bank amount into rows with different categories. The original line stays as the bank audit record;
+            P&L reflects the split classification.
+          </div>
+
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ color: "var(--text3)", fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                <th style={{ textAlign: "left", padding: "6px 4px" }}>Description</th>
+                <th style={{ textAlign: "left", padding: "6px 4px" }}>Category</th>
+                <th style={{ textAlign: "right", padding: "6px 4px", width: 110 }}>Amount</th>
+                <th style={{ width: 30 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {children.map((c, i) => (
+                <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
+                  <td style={{ padding: "6px 4px" }}>
+                    <input
+                      value={c.description || ""}
+                      onChange={(e) => updateChild(i, { description: e.target.value })}
+                      style={{ width: "100%", background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)", padding: "5px 7px", borderRadius: 3, fontSize: 11 }}
+                    />
+                  </td>
+                  <td style={{ padding: "6px 4px" }}>
+                    <select
+                      value={c.category || ""}
+                      onChange={(e) => updateChild(i, { category: e.target.value })}
+                      style={{ width: "100%", background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)", padding: "5px 7px", borderRadius: 3, fontSize: 11 }}
+                    >
+                      <option value="">— select —</option>
+                      <optgroup label="Income">
+                        {categories.filter(c => c.type === "income").map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                      </optgroup>
+                      <optgroup label="Expense">
+                        {categories.filter(c => c.type === "expense").map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                      </optgroup>
+                      <optgroup label="Transfer / Pass-through">
+                        {categories.filter(c => c.type === "transfer").map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                      </optgroup>
+                    </select>
+                  </td>
+                  <td style={{ padding: "6px 4px", textAlign: "right" }}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={c.amount}
+                      onChange={(e) => updateChild(i, { amount: parseFloat(e.target.value) || 0 })}
+                      style={{ width: 100, background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)", padding: "5px 7px", borderRadius: 3, fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}
+                    />
+                  </td>
+                  <td style={{ padding: "6px 4px", textAlign: "center" }}>
+                    {children.length > 2 && (
+                      <button onClick={() => removeChild(i)} title="Remove this row" style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text3)", padding: "2px 6px", borderRadius: 3, cursor: "pointer", fontSize: 10, fontFamily: "var(--font-mono)" }}>×</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div style={{ marginTop: 10 }}>
+            <button onClick={addChild} className="btn btn-outline btn-sm">+ Add row</button>
+          </div>
+
+          <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--surface2)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ color: "var(--text3)" }}>Sum of splits</span>
+              <span>{fmt(sumChildren)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ color: "var(--text3)" }}>Parent amount</span>
+              <span>{fmt(parentAmount)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4, borderTop: "1px solid var(--border)", color: balanced ? "var(--accent)" : "var(--red)" }}>
+              <span>{balanced ? "Balanced" : "Remaining"}</span>
+              <span>{balanced ? "$0.00 ✓" : fmt(remaining)}</span>
+            </div>
+          </div>
+
+          {err && (
+            <div style={{ marginTop: 10, padding: "8px 10px", background: "var(--red)15", color: "var(--red)", borderRadius: 4, fontSize: 11, fontFamily: "var(--font-mono)" }}>
+              {err}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-outline" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={!balanced || saving}>
+            {saving ? "Saving…" : existingChildren.length > 0 ? "Update split" : "Save split"}
+          </button>
         </div>
       </div>
     </div>
@@ -1908,7 +2159,8 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
   };
 
   const txnCount = (cid) => transactions.filter(t => t.category === cid).length;
-  const txnTotal = (cid) => transactions.filter(t => t.category === cid && isRevenueRelevant(t)).reduce((s, t) => s + t.amount, 0);
+  const isLedger = makeLedgerFilter(categories, transactions);
+  const txnTotal = (cid) => transactions.filter(t => t.category === cid && isLedger(t)).reduce((s, t) => s + t.amount, 0);
 
   return (
     <div className="page">
@@ -2005,7 +2257,7 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
 // rows under "Revenue - Dining" the operator sees "SQUARE SALES (26) $103k"
 // at the top and can expand only the vendor they care about. For categories
 // with one vendor, the experience collapses gracefully to a single group.
-function PLCategoryDetails({ txns, signNegative, onDelete }) {
+function PLCategoryDetails({ txns, signNegative, onDelete, onSplit }) {
   const [expandedVendors, setExpandedVendors] = useState(() => new Set());
   if (!txns || txns.length === 0) {
     return (
@@ -2082,7 +2334,7 @@ function PLCategoryDetails({ txns, signNegative, onDelete }) {
                     <th style={{ textAlign: "left",  padding: "4px 8px" }}>Source</th>
                     <th style={{ textAlign: "left",  padding: "4px 8px" }}>Account</th>
                     <th style={{ textAlign: "right", padding: "4px 0 4px 8px", whiteSpace: "nowrap" }}>Amount</th>
-                    {onDelete && <th style={{ width: 22 }}></th>}
+                    {(onDelete || onSplit) && <th style={{ width: 50 }}></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -2108,15 +2360,26 @@ function PLCategoryDetails({ txns, signNegative, onDelete }) {
                         <td className="mono" style={{ padding: "3px 0 3px 8px", textAlign: "right", color: signNegative ? "var(--red)" : "var(--accent)", whiteSpace: "nowrap" }}>
                           {signNegative ? `(${fmt(amt)})` : fmt(amt)}
                         </td>
-                        {onDelete && (
-                          <td style={{ padding: "3px 0 3px 6px", width: 22, textAlign: "right" }}>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); onDelete(t.id); }}
-                              title="Delete this transaction"
-                              style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text3)", padding: "1px 5px", borderRadius: 3, cursor: "pointer", fontSize: 10, lineHeight: 1, fontFamily: "var(--font-mono)" }}
-                            >
-                              ×
-                            </button>
+                        {(onDelete || onSplit) && (
+                          <td style={{ padding: "3px 0 3px 6px", whiteSpace: "nowrap", textAlign: "right" }}>
+                            {onSplit && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onSplit(t.id); }}
+                                title="Split this transaction into multiple categories"
+                                style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text3)", padding: "1px 5px", borderRadius: 3, cursor: "pointer", fontSize: 10, lineHeight: 1, fontFamily: "var(--font-mono)", marginRight: 3 }}
+                              >
+                                ⫶
+                              </button>
+                            )}
+                            {onDelete && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onDelete(t.id); }}
+                                title="Delete this transaction"
+                                style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text3)", padding: "1px 5px", borderRadius: 3, cursor: "pointer", fontSize: 10, lineHeight: 1, fontFamily: "var(--font-mono)" }}
+                              >
+                                ×
+                              </button>
+                            )}
                           </td>
                         )}
                       </tr>
@@ -2133,7 +2396,52 @@ function PLCategoryDetails({ txns, signNegative, onDelete }) {
 }
 
 // ─── P&L REPORT ───────────────────────────────────────────────────────────────
-function PLReport({ transactions, categories, dateRange = {}, setTransactions, deleteTxn, showToast }) {
+function PLReport({ transactions, allTransactions, categories, dateRange = {}, setTransactions, deleteTxn, payrollRuns = [], tenantId, showToast }) {
+  // Split modal state — opens when a row's [⫶] split button is clicked.
+  const [splittingTxn, setSplittingTxn] = useState(null);
+  const handleSaveSplit = async (childrenPayload, oldChildIds) => {
+    // If updating an existing split, drop the old children first so we don't
+    // end up with stale rows from a previous edit (e.g. user removed a row).
+    if (oldChildIds?.length > 0 && tenantId && tenantId !== "demo") {
+      for (const cid of oldChildIds) {
+        try { await deleteTransaction(cid); } catch (e) { console.error("split: delete old child", cid, e); }
+      }
+    }
+    const res = await splitTransaction(splittingTxn.id, childrenPayload, tenantId);
+    if (!res.ok) throw new Error(res.error || "Failed to save split");
+    showToast?.(`Split saved · ${childrenPayload.length} rows`, "success");
+    // Optimistic: push children into local state so the screen updates without
+    // waiting for the realtime echo (which arrives in <1s but still feels laggy).
+    if (setTransactions) {
+      setTransactions(prev => {
+        const stale = new Set(oldChildIds || []);
+        const filtered = prev.filter(t => !stale.has(t.id));
+        const newChildren = childrenPayload.map((c, i) => ({
+          id: c.id || `split_${splittingTxn.id}_${Date.now()}_${i}`,
+          tenant_id: tenantId,
+          date: c.date,
+          description: c.description,
+          amount: parseFloat(c.amount),
+          category: c.category,
+          category_id: c.category,
+          account_id: c.account_id || null,
+          account: c.account || "Split",
+          source: "split",
+          parent_id: splittingTxn.id,
+          reconciled: false,
+          tags: [],
+          notes: "",
+        }));
+        return [...filtered, ...newChildren];
+      });
+    }
+  };
+
+  const handleOpenSplit = (id) => {
+    const t = transactions.find(x => x.id === id) || (allTransactions || []).find(x => x.id === id);
+    if (t) setSplittingTxn(t);
+  };
+
   // Inline delete from the drill-down. Same pattern Transactions uses:
   // optimistically drop from local state, fire deleteTxn (no-op in demo),
   // surface success via toast. The drill-down auto-refreshes because totals
@@ -2169,7 +2477,7 @@ function PLReport({ transactions, categories, dateRange = {}, setTransactions, d
   });
   const txnsForCategory = (catId, { sign } = {}) => {
     return transactions
-      .filter(t => t.category === catId && isRevenueRelevant(t))
+      .filter(t => t.category === catId && isLedger(t))
       .filter(t => {
         if (sign === "positive") return parseFloat(t.amount) > 0;
         if (sign === "negative") return parseFloat(t.amount) < 0;
@@ -2181,10 +2489,11 @@ function PLReport({ transactions, categories, dateRange = {}, setTransactions, d
   const incomeCats = categories.filter(c => c.type === "income");
   const expenseCats = categories.filter(c => c.type === "expense" && c.id !== UNCATEGORIZED);
 
-  // isRevenueRelevant excludes settlement/internal-transfer rows so the same
-  // gross-sale dollar is not counted twice (once as square_sale_gross and again
-  // when the bank deposit lands tagged as square_settlement).
-  const getAmount = (catId) => transactions.filter(t => t.category === catId && isRevenueRelevant(t)).reduce((s, t) => s + t.amount, 0);
+  // makeLedgerFilter excludes settlement/internal-transfer rows AND categories
+  // of type=transfer (Tip Pass-Through, Square Holding) AND split parents
+  // (their children carry the real categorization, parent is just bank audit).
+  const isLedger = makeLedgerFilter(categories, transactions);
+  const getAmount = (catId) => transactions.filter(t => t.category === catId && isLedger(t)).reduce((s, t) => s + t.amount, 0);
 
   const totalIncome = incomeCats.reduce((s, c) => s + Math.max(0, getAmount(c.id)), 0);
   const totalCOGS = expenseCats.filter(c => c.taxLine === "COGS").reduce((s, c) => s + Math.abs(Math.min(0, getAmount(c.id))), 0);
@@ -2234,7 +2543,7 @@ function PLReport({ transactions, categories, dateRange = {}, setTransactions, d
                     </div>
                     <span className="mono" style={{ color: "var(--accent)" }}>{fmt(amt)}</span>
                   </div>
-                  {open && <PLCategoryDetails txns={txns} signNegative={false} onDelete={handleDeleteTxn} />}
+                  {open && <PLCategoryDetails txns={txns} signNegative={false} onDelete={handleDeleteTxn} onSplit={handleOpenSplit} />}
                 </Fragment>
               );
             })}
@@ -2266,7 +2575,7 @@ function PLReport({ transactions, categories, dateRange = {}, setTransactions, d
                     </div>
                     <span className="mono" style={{ color: "var(--red)" }}>({fmt(amt)})</span>
                   </div>
-                  {open && <PLCategoryDetails txns={txns} signNegative={true} onDelete={handleDeleteTxn} />}
+                  {open && <PLCategoryDetails txns={txns} signNegative={true} onDelete={handleDeleteTxn} onSplit={handleOpenSplit} />}
                 </Fragment>
               );
             })}
@@ -2304,7 +2613,7 @@ function PLReport({ transactions, categories, dateRange = {}, setTransactions, d
                     </div>
                     <span className="mono" style={{ color: "var(--red)" }}>({fmt(amt)})</span>
                   </div>
-                  {open && <PLCategoryDetails txns={txns} signNegative={true} onDelete={handleDeleteTxn} />}
+                  {open && <PLCategoryDetails txns={txns} signNegative={true} onDelete={handleDeleteTxn} onSplit={handleOpenSplit} />}
                 </Fragment>
               );
             })}
@@ -2342,13 +2651,25 @@ function PLReport({ transactions, categories, dateRange = {}, setTransactions, d
           </div>
         </div>
       </div>
+
+      {splittingTxn && (
+        <SplitModal
+          txn={splittingTxn}
+          categories={categories}
+          payrollRuns={payrollRuns}
+          transactions={allTransactions || transactions}
+          onClose={() => setSplittingTxn(null)}
+          onSave={handleSaveSplit}
+        />
+      )}
     </div>
   );
 }
 
 // ─── CASH FLOW ────────────────────────────────────────────────────────────────
 function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) {
-  const operating = transactions.filter(t => ["1","2","3","4","6","7","8","9"].includes(t.category) && isRevenueRelevant(t));
+  const isLedger = makeLedgerFilter(categories, transactions);
+  const operating = transactions.filter(t => ["1","2","3","4","6","7","8","9"].includes(t.category) && isLedger(t));
   const opInflow = operating.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const opOutflow = Math.abs(operating.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
   const netOperating = opInflow - opOutflow;
@@ -2498,7 +2819,8 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
 function Budget({ transactions, categories, budgets, setBudgets, saveBudget, showToast }) {
   const [period, setPeriod] = useState("monthly");
 
-  const getActual = (catId) => Math.abs(transactions.filter(t => t.category === catId && t.amount < 0 && isRevenueRelevant(t)).reduce((s, t) => s + t.amount, 0));
+  const isLedger = makeLedgerFilter(categories, transactions);
+  const getActual = (catId) => Math.abs(transactions.filter(t => t.category === catId && t.amount < 0 && isLedger(t)).reduce((s, t) => s + t.amount, 0));
 
   const getBudget = (catId) => {
     const b = budgets.find(b => b.categoryId === catId);
@@ -2642,9 +2964,10 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `1099_contractors_${fiscalYear}.csv`; a.click();
   };
+  const isLedger = makeLedgerFilter(categories, transactions);
   const byTaxLine = {};
   categories.forEach(c => {
-    const total = transactions.filter(t => t.category === c.id && isRevenueRelevant(t)).reduce((s, t) => s + t.amount, 0);
+    const total = transactions.filter(t => t.category === c.id && isLedger(t)).reduce((s, t) => s + t.amount, 0);
     if (total !== 0 && c.taxLine) {
       if (!byTaxLine[c.taxLine]) byTaxLine[c.taxLine] = { income: 0, expense: 0 };
       if (total > 0) byTaxLine[c.taxLine].income += total;
@@ -3474,11 +3797,12 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
     return () => { cancelled = true; };
   }, [tenantId]);
   const [period, setPeriod] = useState("weekly");
-  const totalIncome  = transactions.filter(t => t.amount > 0 && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0);
-  const totalExpense = Math.abs(transactions.filter(t => t.amount < 0 && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0));
+  const isLedger = makeLedgerFilter(categories, transactions);
+  const totalIncome  = transactions.filter(t => t.amount > 0 && isLedger(t)).reduce((s,t) => s+t.amount, 0);
+  const totalExpense = Math.abs(transactions.filter(t => t.amount < 0 && isLedger(t)).reduce((s,t) => s+t.amount, 0));
   const netIncome    = totalIncome - totalExpense;
   const netMargin    = totalIncome > 0 ? (netIncome/totalIncome)*100 : 0;
-  const getCat = (id) => Math.abs(transactions.filter(t => t.category === id && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0));
+  const getCat = (id) => Math.abs(transactions.filter(t => t.category === id && isLedger(t)).reduce((s,t) => s+t.amount, 0));
   const foodCost = getCat("1"), labor = getCat("2"), rent = getCat("3");
   const marketing = getCat("4"), insurance = getCat("6");
   const foodCostPct  = totalIncome > 0 ? (foodCost/totalIncome)*100 : 0;
@@ -3812,8 +4136,9 @@ function Projects({ transactions, projects, setProjects, saveProject, deleteProj
   const [form, setForm] = useState(empty);
 
   // Financials
-  const totalIncomePeriod = transactions.filter(t => t.amount > 0 && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0);
-  const totalExpense      = Math.abs(transactions.filter(t => t.amount < 0 && isRevenueRelevant(t)).reduce((s,t) => s+t.amount, 0));
+  const isLedger = makeLedgerFilter(categories, transactions);
+  const totalIncomePeriod = transactions.filter(t => t.amount > 0 && isLedger(t)).reduce((s,t) => s+t.amount, 0);
+  const totalExpense      = Math.abs(transactions.filter(t => t.amount < 0 && isLedger(t)).reduce((s,t) => s+t.amount, 0));
   const net               = totalIncomePeriod - totalExpense;
   const monthlyFree       = Math.max(net * 0.3, 0); // 30% of net for projects
   const totalInvestment   = projects.reduce((s,p) => s + (parseFloat(p.investment)||0), 0);
@@ -6264,7 +6589,7 @@ export default function App() {
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
-      case "pl":           return <PLReport transactions={filteredByAccrual} categories={categories} dateRange={dateRange} setTransactions={setTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} showToast={showToast} />;
+      case "pl":           return <PLReport transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} setTransactions={setTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} payrollRuns={payrollRuns} tenantId={TENANT_ID} showToast={showToast} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;

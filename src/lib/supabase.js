@@ -62,6 +62,8 @@ export async function upsertTransactions(rows, tenantId) {
     tags: Array.isArray(t.tags) ? t.tags : [],
     source: t.source || 'manual',
     notes: t.notes || '',
+    // PR4: split children reference their bank-side parent. Null for normal rows.
+    parent_id: t.parent_id || t.parentId || null,
   }))
   const { data, error } = await supabase.from('r7_ledger_transactions').upsert(mapped, { onConflict: 'id' }).select('id')
   if (error) {
@@ -73,6 +75,72 @@ export async function upsertTransactions(rows, tenantId) {
 
 export async function deleteTransaction(id) {
   const { error } = await supabase.from('r7_ledger_transactions').delete().eq('id', id)
+  return !error
+}
+
+// ─── SPLIT TRANSACTIONS (PR4) ─────────────────────────────────────────────────
+// A bank transaction can be split into multiple sub-rows that share the same
+// underlying cash movement but classify their portions differently. Example:
+// PAYROLL ACH $5,000 → wages $4,000 (Labor) + tips $1,000 (Tip Pass-Through).
+//
+// Storage model:
+//   - The parent stays in r7_ledger_transactions with its original amount and
+//     a NULL parent_id. It's the audit record of the actual bank line.
+//   - Children are new r7_ledger_transactions rows with parent_id = parent.id.
+//     They sum to the parent's amount (signed) and carry the real category_id.
+//   - Frontend's makeLedgerFilter excludes parents that have at least one
+//     child, so the parent contributes $0 to P&L roll-ups while children
+//     contribute their amounts. Total stays correct, classification gets
+//     better.
+//
+// ON DELETE CASCADE on parent_id means deleting the parent removes children
+// automatically — preserves the invariant "sum of visible rows = ledger total".
+
+export async function splitTransaction(parentId, children, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return { ok: true, demo: true }
+
+  // Build child rows. Each child gets a deterministic id derived from the
+  // parent so re-saving the same split is idempotent.
+  const now = Date.now()
+  const mapped = children.map((c, i) => ({
+    id: c.id || `split_${parentId}_${now}_${i}`,
+    tenant_id: tid,
+    date: c.date,
+    description: c.description,
+    amount: parseFloat(c.amount),
+    category_id: ((c.category && c.category !== UNCATEGORIZED) ? c.category : c.category_id) || null,
+    account_id: c.account_id || c.accountId || null,
+    account: c.account || 'Split',
+    reconciled: c.reconciled || false,
+    tags: Array.isArray(c.tags) ? c.tags : [],
+    source: c.source || 'split',
+    notes: c.notes || '',
+    parent_id: parentId,
+  }))
+
+  const { data, error } = await supabase
+    .from('r7_ledger_transactions')
+    .upsert(mapped, { onConflict: 'id' })
+    .select('id')
+
+  if (error) {
+    console.error('splitTransaction', error, { firstRow: mapped[0] })
+    return { ok: false, error: error.message || String(error) }
+  }
+  return { ok: true, saved: (data || []).length }
+}
+
+// Remove every split child of a parent, restoring the parent as a normal row
+// that contributes its full amount to P&L. ON DELETE CASCADE would handle
+// this automatically if the parent were deleted, but here we want to keep
+// the parent and just drop the children.
+export async function unsplitTransaction(parentId) {
+  const { error } = await supabase
+    .from('r7_ledger_transactions')
+    .delete()
+    .eq('parent_id', parentId)
+  if (error) console.error('unsplitTransaction', error)
   return !error
 }
 
