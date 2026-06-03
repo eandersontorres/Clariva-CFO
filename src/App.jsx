@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -3451,6 +3451,317 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
 }
 
 
+// ─── PERFORMANCE ──────────────────────────────────────────────────────────────
+// Reads the consolidated Kitchen performance summary endpoint and renders
+// four reports natively in the CFO theme:
+//   - Usage Report — purchased value by inventory category in the window
+//   - Theoretical Usage — recipe ingredients × sales (what SHOULD have been
+//     used), vs actual purchased value
+//   - Production Use — what completed production orders pulled from inventory
+//   - Menu Analysis — per-recipe sales, cost, margin and cost%
+//
+// The math lives in restauran7/api/performance-summary.js — Kitchen owns the
+// recipe/inventory model so the source of truth stays single. CFO only
+// re-renders the JSON. See lib/supabase.js fetchPerformanceSummary().
+function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [tab, setTab] = useState("usage"); // usage | theoretical | production | menu
+  const [rangePreset, setRangePreset] = useState("monthly"); // weekly | monthly | custom
+
+  const applyPreset = (preset) => {
+    setRangePreset(preset);
+    if (!setDateRange) return;
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    if (preset === "weekly") {
+      const start = new Date(today);
+      start.setDate(start.getDate() - 6);
+      setDateRange({ start: start.toISOString().slice(0, 10), end: todayStr });
+    } else if (preset === "monthly") {
+      const start = new Date(today.getFullYear(), today.getMonth(), 1);
+      const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      setDateRange({ start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) });
+    }
+  };
+
+  useEffect(() => {
+    if (!tenantId || tenantId === "demo") return;
+    if (!dateRange?.start || !dateRange?.end) return;
+    let cancelled = false;
+    setLoading(true);
+    setErr("");
+    fetchPerformanceSummary(tenantId, dateRange)
+      .then(json => { if (!cancelled) setData(json); })
+      .catch(e => { if (!cancelled) { setErr(e.message || String(e)); showToast?.(e.message || "Performance fetch failed", "error"); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [tenantId, dateRange?.start, dateRange?.end]);
+
+  const pctTone = (pct, target) => {
+    if (pct == null) return "var(--text3)";
+    if (pct <= target) return "var(--accent)";
+    if (pct <= target * 1.15) return "var(--yellow)";
+    return "var(--red)";
+  };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Performance</div>
+          <div className="page-subtitle">
+            {dateRange?.start} → {dateRange?.end} · TorresBee · powered by Clariva Kitchen
+            {data?.period_net_sales != null && <> · Net sales {fmt(data.period_net_sales)}</>}
+          </div>
+        </div>
+        <div className="flex gap-8">
+          {[
+            { id: "weekly",  label: "Weekly" },
+            { id: "monthly", label: "Monthly" },
+            { id: "custom",  label: "Custom" },
+          ].map(p => (
+            <button
+              key={p.id}
+              className="btn btn-sm"
+              onClick={() => applyPreset(p.id)}
+              style={{
+                background: rangePreset === p.id ? "var(--accentBg)" : "transparent",
+                color: rangePreset === p.id ? "var(--accent)" : "var(--text3)",
+                border: "1px solid " + (rangePreset === p.id ? "var(--accentBorder)" : "var(--border)"),
+                fontSize: 11,
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab switcher */}
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 20 }}>
+        {[
+          { id: "usage",       label: "📊 Usage Report" },
+          { id: "theoretical", label: "⚗️ Theoretical Usage" },
+          { id: "production",  label: "🏭 Production Use" },
+          { id: "menu",        label: "🍽 Menu Analysis" },
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            style={{
+              background: "none", border: "none", padding: "10px 18px",
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
+              color: tab === t.id ? "var(--accent)" : "var(--text3)",
+              borderBottom: tab === t.id ? "2px solid var(--accent)" : "2px solid transparent",
+              fontFamily: "var(--font-sans)",
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {loading && (
+        <div className="empty" style={{ padding: 60 }}>
+          <div className="empty-icon">⏳</div>
+          <div className="empty-title">Loading from Clariva Kitchen…</div>
+        </div>
+      )}
+
+      {err && !loading && (
+        <div className="card" style={{ padding: 20, color: "var(--red)" }}>
+          <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, marginBottom: 6 }}>Could not load Performance</div>
+          <div style={{ fontSize: 12, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{err}</div>
+        </div>
+      )}
+
+      {!loading && !err && data && (
+        <>
+          {/* Counts strip */}
+          <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(5, 1fr)", marginBottom: 16 }}>
+            <KpiTile label="Items" value={data.counts.items} />
+            <KpiTile label="Recipes" value={data.counts.recipes} />
+            <KpiTile label="Purchases" value={data.counts.purchases} />
+            <KpiTile label="Orders" value={data.counts.orders} />
+            <KpiTile label="Production Orders" value={data.counts.prod_orders} />
+          </div>
+
+          {tab === "usage" && (
+            <PerformanceTable
+              title="Usage Report — purchased value by category"
+              note="Sum of vendor invoices in the window grouped by inventory category. Used as a proxy for 'consumed' when snapshots aren't paired. Cost% compares to net sales."
+              total={data.usage_report.totals.purchased_value}
+              totalLabel="Total purchased"
+              pct={data.usage_report.totals.cost_pct_of_revenue}
+              pctTone={pctTone(data.usage_report.totals.cost_pct_of_revenue, 35)}
+              rows={data.usage_report.by_category}
+              columns={[
+                { key: "cat_name",        label: "Category" },
+                { key: "item_count",      label: "Items",      align: "right" },
+                { key: "purchased_value", label: "Purchased",  align: "right", format: "money" },
+                { key: "pct",             label: "% of sales", align: "right", format: "pct",
+                  derive: (r) => data.period_net_sales > 0 ? (r.purchased_value / data.period_net_sales * 100) : null },
+              ]}
+            />
+          )}
+
+          {tab === "theoretical" && (
+            <PerformanceTable
+              title="Theoretical Usage — what recipes × sales SHOULD have used"
+              note="Computed from active recipes × times sold (Square line items). Compare against actual purchased value to spot over-portioning or waste. Positive diff = inventory dropped more than recipes predicted."
+              total={data.theoretical_usage.totals.theoretical_value}
+              totalLabel="Total theoretical"
+              pct={data.theoretical_usage.totals.cost_pct_of_revenue}
+              pctTone={pctTone(data.theoretical_usage.totals.cost_pct_of_revenue, 32)}
+              rows={data.theoretical_usage.by_category}
+              columns={[
+                { key: "cat_name",          label: "Category" },
+                { key: "actual_value",      label: "Actual",       align: "right", format: "money" },
+                { key: "theoretical_value", label: "Theoretical",  align: "right", format: "money" },
+                { key: "diff_value",        label: "Diff",         align: "right", format: "moneyDiff" },
+              ]}
+            />
+          )}
+
+          {tab === "production" && (
+            <PerformanceTable
+              title={`Production Use — what ${data.production_use.totals.po_count} POs pulled from inventory`}
+              note="Value of items consumed by completed production orders in the window. Tracks the back-of-house: batches, preps, dough/sauce production, etc."
+              total={data.production_use.totals.value}
+              totalLabel="Total consumed"
+              pct={null}
+              rows={data.production_use.by_category}
+              columns={[
+                { key: "cat_name", label: "Category" },
+                { key: "qty",      label: "Qty (recipe units)", align: "right", format: "qty" },
+                { key: "value",    label: "Value",              align: "right", format: "money" },
+              ]}
+            />
+          )}
+
+          {tab === "menu" && (
+            <PerformanceTable
+              title={`Menu Analysis — top items by revenue (${data.menu_analysis.totals.recipes_with_sales} items)`}
+              note="Sales-by-item with ingredient cost from recipes. Margin = revenue − cost. Cost% over 35% (food benchmark) is highlighted. Top 100 shown."
+              total={data.menu_analysis.totals.revenue}
+              totalLabel="Total revenue"
+              pct={data.menu_analysis.totals.cost_pct}
+              pctTone={pctTone(data.menu_analysis.totals.cost_pct, 32)}
+              extraTotals={[
+                { label: "Cost", value: data.menu_analysis.totals.cost, format: "money" },
+                { label: "Margin", value: data.menu_analysis.totals.margin, format: "money" },
+                { label: "Units sold", value: data.menu_analysis.totals.sold, format: "qty" },
+              ]}
+              rows={data.menu_analysis.by_recipe}
+              columns={[
+                { key: "recipe_name", label: "Recipe" },
+                { key: "category",    label: "Category" },
+                { key: "sold",        label: "Sold",     align: "right", format: "qty" },
+                { key: "revenue",     label: "Revenue",  align: "right", format: "money" },
+                { key: "cost",        label: "Cost",     align: "right", format: "money" },
+                { key: "margin",      label: "Margin",   align: "right", format: "money" },
+                { key: "cost_pct",    label: "Cost %",   align: "right", format: "pct" },
+              ]}
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function KpiTile({ label, value }) {
+  return (
+    <div className="kpi-card">
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value" style={{ fontSize: 22 }}>{value}</div>
+    </div>
+  );
+}
+
+function PerformanceTable({ title, note, total, totalLabel, pct, pctTone, rows = [], columns = [], extraTotals = [] }) {
+  const formatCell = (val, format) => {
+    if (val == null || val === "") return "—";
+    if (format === "money") return fmt(parseFloat(val));
+    if (format === "moneyDiff") {
+      const n = parseFloat(val);
+      const color = n > 0.01 ? "var(--red)" : n < -0.01 ? "var(--accent)" : "var(--text3)";
+      return <span style={{ color }}>{n >= 0 ? "+" : ""}{fmt(n)}</span>;
+    }
+    if (format === "qty") return Number(val).toLocaleString();
+    if (format === "pct") {
+      const n = parseFloat(val);
+      const color = n > 35 ? "var(--red)" : n > 28 ? "var(--yellow)" : "var(--accent)";
+      return <span style={{ color }}>{n.toFixed(1)}%</span>;
+    }
+    return val;
+  };
+
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 11, color: "var(--text3)", lineHeight: 1.5 }}>{note}</div>
+      </div>
+      <div style={{ display: "flex", gap: 24, padding: "12px 18px", background: "var(--surface2)", flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>{totalLabel}</div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, color: "var(--accent)" }}>{fmt(total)}</div>
+        </div>
+        {pct != null && (
+          <div>
+            <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>% of sales</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, color: pctTone || "var(--text)" }}>{pct.toFixed(1)}%</div>
+          </div>
+        )}
+        {extraTotals.map((e, i) => (
+          <div key={i}>
+            <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>{e.label}</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 18 }}>
+              {e.format === "qty" ? Number(e.value).toLocaleString() : fmt(parseFloat(e.value))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="table-wrap">
+        {rows.length === 0 ? (
+          <div className="empty" style={{ padding: 30 }}>
+            <div className="empty-icon">📭</div>
+            <div className="empty-title">No data for this window</div>
+            <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Try a wider date range or sync Kitchen data first</div>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                {columns.map(c => (
+                  <th key={c.key} style={{ textAlign: c.align || "left" }}>{c.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i}>
+                  {columns.map(c => {
+                    const raw = c.derive ? c.derive(row) : row[c.key];
+                    return (
+                      <td key={c.key} className={c.format === "money" || c.format === "qty" || c.format === "pct" || c.format === "moneyDiff" ? "mono" : ""} style={{ textAlign: c.align || "left" }}>
+                        {formatCell(raw, c.format)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── BILLS & PAYMENTS (Accounts Payable) ─────────────────────────────────────
 function Bills({ transactions, setTransactions, bills, setBills, saveBill, deleteB, categories, dateRange, showToast, saveTransactions }) {
   // bills/setBills come from parent App state
@@ -6598,6 +6909,7 @@ export default function App() {
     { id: "transactions", label: "Transactions", icon: "transactions", badge: uncat > 0 ? uncat : null },
     { id: "categories", label: "Chart of Accounts", icon: "categories" },
     { id: "pl", label: "Profit & Loss", icon: "pl" },
+    { id: "performance", label: "Performance", icon: "insights" },
     { id: "cashflow", label: "Cash Flow", icon: "cashflow" },
     { id: "budget", label: "Budget", icon: "budget" },
     { id: "bills", label: "Bills & Payments", icon: "bills", badge: null },
@@ -6619,6 +6931,7 @@ export default function App() {
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} setTransactions={setTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} payrollRuns={payrollRuns} tenantId={TENANT_ID} showToast={showToast} />;
+      case "performance":  return <Performance tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
