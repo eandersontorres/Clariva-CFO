@@ -2005,7 +2005,7 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
 // rows under "Revenue - Dining" the operator sees "SQUARE SALES (26) $103k"
 // at the top and can expand only the vendor they care about. For categories
 // with one vendor, the experience collapses gracefully to a single group.
-function PLCategoryDetails({ txns, signNegative }) {
+function PLCategoryDetails({ txns, signNegative, onDelete }) {
   const [expandedVendors, setExpandedVendors] = useState(() => new Set());
   if (!txns || txns.length === 0) {
     return (
@@ -2020,10 +2020,25 @@ function PLCategoryDetails({ txns, signNegative }) {
   const groups = new Map();
   for (const t of txns) {
     const key = normalizeVendorKey(t.description) || "(other)";
-    if (!groups.has(key)) groups.set(key, { key, total: 0, items: [] });
+    if (!groups.has(key)) groups.set(key, { key, total: 0, items: [], dupIds: new Set() });
     const g = groups.get(key);
     g.total += Math.abs(parseFloat(t.amount || 0));
     g.items.push(t);
+  }
+  // Within each vendor group, flag rows that share BOTH amount and date with
+  // another row in the same group. Bank ID masking (IXXXXX vs I26050189231)
+  // is the most common cause — same charge slipped past the import dedup
+  // because the descriptions differ in the masked digits.
+  for (const g of groups.values()) {
+    const byKey = new Map();
+    for (const t of g.items) {
+      const k = `${t.date}|${Math.abs(parseFloat(t.amount || 0)).toFixed(2)}`;
+      if (!byKey.has(k)) byKey.set(k, []);
+      byKey.get(k).push(t.id);
+    }
+    for (const ids of byKey.values()) {
+      if (ids.length > 1) ids.forEach(id => g.dupIds.add(id));
+    }
   }
   const sortedGroups = [...groups.values()].sort((a, b) => b.total - a.total);
 
@@ -2048,6 +2063,11 @@ function PLCategoryDetails({ txns, signNegative }) {
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text3)", width: 10 }}>{open ? "▾" : "▸"}</span>
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text2)", letterSpacing: 0.3 }}>{g.key}</span>
                 <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>· {g.items.length} txn</span>
+                {g.dupIds.size > 0 && (
+                  <span title="Same date and amount appears more than once — likely double-import" style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--yellow)", border: "1px solid var(--yellow)40", background: "transparent", padding: "1px 5px", borderRadius: 3, letterSpacing: 0.3 }}>
+                    🔁 {g.dupIds.size} dup?
+                  </span>
+                )}
               </div>
               <span className="mono" style={{ fontSize: 11, color: signNegative ? "var(--red)" : "var(--accent)" }}>
                 {signNegative ? `(${fmt(g.total)})` : fmt(g.total)}
@@ -2062,6 +2082,7 @@ function PLCategoryDetails({ txns, signNegative }) {
                     <th style={{ textAlign: "left",  padding: "4px 8px" }}>Source</th>
                     <th style={{ textAlign: "left",  padding: "4px 8px" }}>Account</th>
                     <th style={{ textAlign: "right", padding: "4px 0 4px 8px", whiteSpace: "nowrap" }}>Amount</th>
+                    {onDelete && <th style={{ width: 22 }}></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -2070,9 +2091,13 @@ function PLCategoryDetails({ txns, signNegative }) {
                     .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
                     .map(t => {
                     const amt = Math.abs(parseFloat(t.amount || 0));
+                    const isDup = g.dupIds.has(t.id);
                     return (
-                      <tr key={t.id} style={{ borderTop: "1px solid var(--border)" }}>
-                        <td className="mono" style={{ padding: "3px 8px 3px 0", color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
+                      <tr key={t.id} style={{ borderTop: "1px solid var(--border)", background: isDup ? "var(--yellow)10" : "transparent" }}>
+                        <td className="mono" style={{ padding: "3px 8px 3px 0", color: "var(--text3)", whiteSpace: "nowrap" }}>
+                          {isDup && <span title="Same date and amount as another row in this vendor — likely duplicate" style={{ color: "var(--yellow)", marginRight: 4 }}>🔁</span>}
+                          {fmtDate(t.date)}
+                        </td>
                         <td style={{ padding: "3px 8px", color: "var(--text2)" }}>{String(t.description || "").slice(0, 70)}</td>
                         <td style={{ padding: "3px 8px" }}>
                           <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--text3)", padding: "1px 5px", border: "1px solid var(--border)", borderRadius: 3 }}>
@@ -2083,6 +2108,17 @@ function PLCategoryDetails({ txns, signNegative }) {
                         <td className="mono" style={{ padding: "3px 0 3px 8px", textAlign: "right", color: signNegative ? "var(--red)" : "var(--accent)", whiteSpace: "nowrap" }}>
                           {signNegative ? `(${fmt(amt)})` : fmt(amt)}
                         </td>
+                        {onDelete && (
+                          <td style={{ padding: "3px 0 3px 6px", width: 22, textAlign: "right" }}>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onDelete(t.id); }}
+                              title="Delete this transaction"
+                              style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text3)", padding: "1px 5px", borderRadius: 3, cursor: "pointer", fontSize: 10, lineHeight: 1, fontFamily: "var(--font-mono)" }}
+                            >
+                              ×
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -2097,7 +2133,29 @@ function PLCategoryDetails({ txns, signNegative }) {
 }
 
 // ─── P&L REPORT ───────────────────────────────────────────────────────────────
-function PLReport({ transactions, categories, dateRange = {} }) {
+function PLReport({ transactions, categories, dateRange = {}, setTransactions, deleteTxn, showToast }) {
+  // Inline delete from the drill-down. Same pattern Transactions uses:
+  // optimistically drop from local state, fire deleteTxn (no-op in demo),
+  // surface success via toast. The drill-down auto-refreshes because totals
+  // recompute from the new transactions array on every render.
+  const handleDeleteTxn = async (id) => {
+    const t = transactions.find(x => x.id === id);
+    if (!t) return;
+    if (typeof window !== "undefined") {
+      const sure = window.confirm(`Delete this transaction?\n\n${t.date} · ${t.description}\n${fmt(parseFloat(t.amount))}`);
+      if (!sure) return;
+    }
+    if (setTransactions) setTransactions(prev => prev.filter(x => x.id !== id));
+    if (deleteTxn) {
+      try {
+        await deleteTxn(id);
+        showToast?.("Transaction deleted", "success");
+      } catch (err) {
+        showToast?.("Delete failed: " + (err.message || err), "error");
+      }
+    }
+  };
+
   const [period, setPeriod] = useState("monthly");
   const [expanded, setExpanded] = useState({ income: true, expense: true });
   // Per-category drill-down: clicking a row expands a small table with every
@@ -2176,7 +2234,7 @@ function PLReport({ transactions, categories, dateRange = {} }) {
                     </div>
                     <span className="mono" style={{ color: "var(--accent)" }}>{fmt(amt)}</span>
                   </div>
-                  {open && <PLCategoryDetails txns={txns} signNegative={false} />}
+                  {open && <PLCategoryDetails txns={txns} signNegative={false} onDelete={handleDeleteTxn} />}
                 </Fragment>
               );
             })}
@@ -2208,7 +2266,7 @@ function PLReport({ transactions, categories, dateRange = {} }) {
                     </div>
                     <span className="mono" style={{ color: "var(--red)" }}>({fmt(amt)})</span>
                   </div>
-                  {open && <PLCategoryDetails txns={txns} signNegative={true} />}
+                  {open && <PLCategoryDetails txns={txns} signNegative={true} onDelete={handleDeleteTxn} />}
                 </Fragment>
               );
             })}
@@ -2246,7 +2304,7 @@ function PLReport({ transactions, categories, dateRange = {} }) {
                     </div>
                     <span className="mono" style={{ color: "var(--red)" }}>({fmt(amt)})</span>
                   </div>
-                  {open && <PLCategoryDetails txns={txns} signNegative={true} />}
+                  {open && <PLCategoryDetails txns={txns} signNegative={true} onDelete={handleDeleteTxn} />}
                 </Fragment>
               );
             })}
@@ -6206,7 +6264,7 @@ export default function App() {
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
-      case "pl":           return <PLReport transactions={filteredByAccrual} categories={categories} dateRange={dateRange} />;
+      case "pl":           return <PLReport transactions={filteredByAccrual} categories={categories} dateRange={dateRange} setTransactions={setTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} showToast={showToast} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
