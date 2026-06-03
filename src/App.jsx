@@ -2510,6 +2510,84 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
   const totalOpex = expenseCats.filter(c => c.taxLine !== "COGS").reduce((s, c) => s + Math.abs(Math.min(0, getAmount(c.id))), 0);
   const netIncome = grossProfit - totalOpex;
 
+  // ── Source reconciliation ──────────────────────────────────────────────
+  // Three independent views of the same month, side by side:
+  //   - LEDGER = what's currently in the CFO database (sum of categorized txns)
+  //   - SOURCE = what the operational system says is true (Square Net Sales
+  //     for revenue, Paystub for labor) — single source of truth
+  //   - BANK   = what actually moved through the bank account for that line
+  //     (sum of Paychex ACH-style txns for labor)
+  // Drift between LEDGER and SOURCE = manual reclasses still needed.
+  // Drift between SOURCE and BANK = expected (tips passthrough + tax remits).
+  const sources = useMemo(() => {
+    const inRange = (d) => d >= (dateRange.start || "") && d <= (dateRange.end || "9999-12-31");
+    // Square revenue source: sum of source='square_sale_gross' in the window.
+    // After PR5 ran cleanly, this is Square Net Sales (items + non-tip service
+    // charges − discounts − returns). Before PR5 it still has tax embedded —
+    // we tag the drift below.
+    const sqSaleSum = transactions
+      .filter(t => t.source === "square_sale_gross" && inRange(t.date))
+      .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
+
+    // Paystub labor source: every payroll run whose period overlaps the
+    // window. Pro-rata by overlap days so a 2-week run that straddles
+    // month-end contributes proportionally. Source of truth: paystub_meta
+    // (true_labor_cost is wages + employer match, what Schedule C wants).
+    const dayMs = 86400000;
+    const winStart = new Date(dateRange.start || "1970-01-01").getTime();
+    const winEnd   = new Date(dateRange.end   || "9999-12-31").getTime();
+    let paystubLabor = 0;
+    let paystubTips = 0;
+    let paystubReimb = 0;
+    let paystubBankDebit = 0;
+    let paystubRunsUsed = 0;
+    for (const r of (payrollRuns || [])) {
+      const t = r.totals || {};
+      if (!t.true_labor_cost && !t.wages_subtotal) continue; // not a paystub-fed run
+      const ps = new Date(r.period_start).getTime();
+      const pe = new Date(r.period_end).getTime();
+      const overlapStart = Math.max(ps, winStart);
+      const overlapEnd   = Math.min(pe, winEnd);
+      if (overlapEnd < overlapStart) continue;
+      const total = (pe - ps) / dayMs + 1;
+      const overlap = (overlapEnd - overlapStart) / dayMs + 1;
+      const ratio = total > 0 ? overlap / total : 1;
+      paystubLabor      += (t.true_labor_cost      || 0) * ratio;
+      paystubTips       += (t.tips_charged         || 0) * ratio;
+      paystubReimb      += (t.reimb_non_tax        || 0) * ratio;
+      paystubBankDebit  += (t.total_bank_debit     || 0) * ratio;
+      paystubRunsUsed++;
+    }
+
+    // Labor ledger: every txn in any expense category whose name matches
+    // "payroll|labor|wage" — same heuristic the KPI tiles use now.
+    const laborCat = categories.find(c => /payroll|labor|wage/i.test(c.name || ""));
+    const laborLedger = laborCat
+      ? Math.abs(transactions.filter(t => t.category === laborCat.id && isLedger(t)).reduce((s, t) => s + parseFloat(t.amount || 0), 0))
+      : 0;
+
+    // Bank-side labor: same category but only txns that look like a bank ACH
+    // (source=csv or pdf, amount < 0, description matching payroll/paychex).
+    const laborBank = transactions
+      .filter(t => parseFloat(t.amount) < 0
+        && (t.source === "csv" || t.source === "pdf" || t.source === "ofx")
+        && /paychex|payroll|adp|gusto/i.test(t.description || "")
+        && inRange(t.date))
+      .reduce((s, t) => s + Math.abs(parseFloat(t.amount || 0)), 0);
+
+    return {
+      revenueLedger: totalIncome,
+      revenueSource: Math.round(sqSaleSum * 100) / 100,
+      laborLedger:   Math.round(laborLedger * 100) / 100,
+      laborSource:   Math.round(paystubLabor * 100) / 100,
+      laborBank:     Math.round(laborBank * 100) / 100,
+      paystubTips:   Math.round(paystubTips * 100) / 100,
+      paystubReimb:  Math.round(paystubReimb * 100) / 100,
+      paystubBankDebit: Math.round(paystubBankDebit * 100) / 100,
+      paystubRunsUsed,
+    };
+  }, [transactions, categories, payrollRuns, dateRange.start, dateRange.end, totalIncome, isLedger]);
+
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
 
   return (
@@ -2672,6 +2750,67 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
         </div>
       </div>
 
+      {/* ── Source reconciliation — paystub + Square vs ledger + bank ── */}
+      {(sources.paystubRunsUsed > 0 || sources.revenueSource > 0) && (
+        <div className="card mt-16" style={{ padding: 0, border: "1px solid var(--accentBorder)" }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 14 }}>📋 Source Truth Reconciliation</div>
+              <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4, lineHeight: 1.5 }}>
+                Cross-check the ledger against the operational source of truth: Square for revenue, paystub for labor.
+                Drift &gt; small dollars usually means a manual reclass (Split) is still pending.
+              </div>
+            </div>
+            <span className="tag" style={{ fontSize: 10, color: "var(--accent)", border: "1px solid var(--accentBorder)", background: "var(--accentBg)" }}>
+              {sources.paystubRunsUsed} paystub{sources.paystubRunsUsed === 1 ? "" : "s"} in window
+            </span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Line</th>
+                  <th style={{ textAlign: "right" }}>Ledger (current)</th>
+                  <th style={{ textAlign: "right" }}>Source of truth</th>
+                  <th style={{ textAlign: "right" }}>Bank-side</th>
+                  <th style={{ textAlign: "right" }}>Δ ledger vs source</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <SourceRow
+                  label="Revenue"
+                  ledger={sources.revenueLedger}
+                  source={sources.revenueSource}
+                  sourceTag="Square"
+                  bank={null}
+                  note="Source = sum of square_sale_gross. Drift typically = aggregator double-count and/or tax embedded before PR5 re-run."
+                />
+                <SourceRow
+                  label="Labor (wages + employer match)"
+                  ledger={sources.laborLedger}
+                  source={sources.laborSource}
+                  sourceTag="Paystub"
+                  bank={sources.laborBank}
+                  note={sources.paystubRunsUsed > 0
+                    ? `Source = sum of paystub true_labor_cost. Bank = Paychex ACH (~$${(sources.paystubBankDebit).toFixed(0)} expected, includes tips $${sources.paystubTips.toFixed(0)} + reimb $${sources.paystubReimb.toFixed(0)} that should be split out).`
+                    : "No paystub data in window — import a paystub PDF in Payroll screen to populate."}
+                />
+              </tbody>
+            </table>
+          </div>
+          {sources.paystubRunsUsed > 0 && Math.abs(sources.laborLedger - sources.laborSource) > 100 && (
+            <div style={{ padding: "10px 18px", background: "var(--yellowBg)", borderTop: "1px solid var(--yellow)40", fontSize: 11, color: "var(--text2)" }}>
+              💡 Labor drift {fmt(sources.laborLedger - sources.laborSource)}. The Paychex ACH (~{fmt(sources.paystubBankDebit)}) is still booked entirely as Labor.
+              Open <strong>Transactions</strong>, find the Paychex row, click <strong>Split (⫶)</strong> — the modal will pre-fill from this paystub:
+              <span style={{ marginLeft: 6, fontFamily: "var(--font-mono)" }}>
+                Labor {fmt(sources.laborSource)} · Tip Pass-Through {fmt(sources.paystubTips)} · Reimb {fmt(sources.paystubReimb)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {splittingTxn && (
         <SplitModal
           txn={splittingTxn}
@@ -2683,6 +2822,40 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
         />
       )}
     </div>
+  );
+}
+
+// Render a single line of the Source reconciliation table. Drift is colored
+// by magnitude — under $50 = green (matches), $50-500 = neutral, >$500 = red.
+function SourceRow({ label, ledger, source, sourceTag, bank, note }) {
+  const drift = source != null ? (ledger - source) : null;
+  const driftColor = drift == null
+    ? "var(--text3)"
+    : Math.abs(drift) < 50
+      ? "var(--accent)"
+      : Math.abs(drift) < 500
+        ? "var(--yellow)"
+        : "var(--red)";
+  return (
+    <tr>
+      <td style={{ fontFamily: "var(--font-sans)", fontWeight: 600 }}>{label}</td>
+      <td className="mono text-right" style={{ color: "var(--text2)" }}>{fmt(ledger)}</td>
+      <td className="mono text-right">
+        {source != null ? (
+          <>
+            <span>{fmt(source)}</span>
+            <span style={{ fontSize: 9, color: "var(--text3)", fontFamily: "var(--font-mono)", marginLeft: 6, padding: "1px 4px", border: "1px solid var(--border)", borderRadius: 3 }}>{sourceTag}</span>
+          </>
+        ) : <span style={{ color: "var(--text3)" }}>—</span>}
+      </td>
+      <td className="mono text-right" style={{ color: "var(--text2)" }}>
+        {bank != null ? fmt(bank) : <span style={{ color: "var(--text3)" }}>—</span>}
+      </td>
+      <td className="mono text-right" style={{ color: driftColor, fontWeight: 600 }}>
+        {drift != null ? (drift >= 0 ? "+" : "") + fmt(drift) : "—"}
+      </td>
+      <td style={{ fontSize: 11, color: "var(--text3)", lineHeight: 1.5 }}>{note}</td>
+    </tr>
   );
 }
 
