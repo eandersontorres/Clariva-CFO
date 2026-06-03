@@ -2644,13 +2644,22 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 28, fontWeight: 500, color: netIncome >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(netIncome)}</div>
           </div>
 
-          {/* Quick stats */}
+          {/* Quick stats — resolve category IDs by name instead of the old
+              hardcoded "2"/"3" (those were numeric ids back when the chart
+              of accounts was seeded with integer keys; the migration to
+              UUIDs broke the lookup and Labor%/Rent% silently rendered 0). */}
+          {(() => {
+            const laborCat   = categories.find(c => /payroll|labor|wage/i.test(c.name || ""));
+            const rentCat    = categories.find(c => /rent/i.test(c.name || ""));
+            const laborAmt   = laborCat ? Math.abs(getAmount(laborCat.id)) : 0;
+            const rentAmt    = rentCat  ? Math.abs(getAmount(rentCat.id))  : 0;
+            return (
           <div className="mt-16" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             {[
               { label: "Food Cost %", value: totalIncome > 0 ? ((totalCOGS / totalIncome) * 100).toFixed(1) + "%" : "—", ok: totalIncome > 0 && (totalCOGS / totalIncome) < 0.35 },
-              { label: "Labor %", value: totalIncome > 0 ? ((Math.abs(getAmount("2")) / totalIncome) * 100).toFixed(1) + "%" : "—", ok: totalIncome > 0 && Math.abs(getAmount("2")) / totalIncome < 0.30 },
-              { label: "Rent %", value: totalIncome > 0 ? ((Math.abs(getAmount("3")) / totalIncome) * 100).toFixed(1) + "%" : "—", ok: true },
-              { label: "Prime Cost %", value: totalIncome > 0 ? (((totalCOGS + Math.abs(getAmount("2"))) / totalIncome) * 100).toFixed(1) + "%" : "—", ok: totalIncome > 0 && (totalCOGS + Math.abs(getAmount("2"))) / totalIncome < 0.60 },
+              { label: "Labor %",     value: totalIncome > 0 ? ((laborAmt / totalIncome) * 100).toFixed(1) + "%" : "—", ok: totalIncome > 0 && (laborAmt / totalIncome) < 0.30 },
+              { label: "Rent %",      value: totalIncome > 0 ? ((rentAmt / totalIncome) * 100).toFixed(1) + "%"  : "—", ok: true },
+              { label: "Prime Cost %",value: totalIncome > 0 ? (((totalCOGS + laborAmt) / totalIncome) * 100).toFixed(1) + "%" : "—", ok: totalIncome > 0 && ((totalCOGS + laborAmt) / totalIncome) < 0.60 },
             ].map(s => (
               <div key={s.label} className="card card-sm" style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginBottom: 4 }}>{s.label}</div>
@@ -2658,6 +2667,8 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
               </div>
             ))}
           </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -3811,9 +3822,18 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
   const totalExpense = Math.abs(transactions.filter(t => t.amount < 0 && isLedger(t)).reduce((s,t) => s+t.amount, 0));
   const netIncome    = totalIncome - totalExpense;
   const netMargin    = totalIncome > 0 ? (netIncome/totalIncome)*100 : 0;
-  const getCat = (id) => Math.abs(transactions.filter(t => t.category === id && isLedger(t)).reduce((s,t) => s+t.amount, 0));
-  const foodCost = getCat("1"), labor = getCat("2"), rent = getCat("3");
-  const marketing = getCat("4"), insurance = getCat("6");
+  const getCat = (id) => id ? Math.abs(transactions.filter(t => t.category === id && isLedger(t)).reduce((s,t) => s+t.amount, 0)) : 0;
+  // Resolve categories by name match instead of the legacy integer ids
+  // ("1","2","3"...). Those were the original seed keys; once the chart of
+  // accounts migrated to UUIDs the lookups silently returned 0 for every
+  // KPI tile. The /(food|beverage|cogs)/ and /(payroll|labor|wage)/
+  // patterns also match the migration's renaming attempts.
+  const findCatId = (re) => (categories.find(c => re.test(c.name || "")) || {}).id;
+  const foodCost = getCat(findCatId(/food|beverage|cogs/i));
+  const labor    = getCat(findCatId(/payroll|labor|wage/i));
+  const rent     = getCat(findCatId(/rent/i));
+  const marketing= getCat(findCatId(/marketing|advertis/i));
+  const insurance= getCat(findCatId(/insurance/i));
   const foodCostPct  = totalIncome > 0 ? (foodCost/totalIncome)*100 : 0;
   const laborPct     = totalIncome > 0 ? (labor/totalIncome)*100 : 0;
   const primeCost    = foodCostPct + laborPct;
