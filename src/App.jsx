@@ -1996,12 +1996,17 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
   );
 }
 
-// Compact drill-down table rendered inline beneath each P&L category row.
-// Reuses the page's font/color tokens so it visually nests inside the section
-// rather than feeling like a separate widget. Showing source as a tiny tag
-// helps the operator immediately see "this came from Square sales" vs CSV
-// import vs Kitchen sync — useful when one category has mixed origins.
+// Drill-down rendered inline beneath each P&L category row. Two-level deep:
+//   L1 — vendor groups (by normalizeVendorKey of description), each with a
+//        count + total. Click expands its individual transactions.
+//   L2 — the raw transactions for that vendor (date, description, source,
+//        account, amount).
+// Vendor grouping is what makes a category readable: instead of staring at 26
+// rows under "Revenue - Dining" the operator sees "SQUARE SALES (26) $103k"
+// at the top and can expand only the vendor they care about. For categories
+// with one vendor, the experience collapses gracefully to a single group.
 function PLCategoryDetails({ txns, signNegative }) {
+  const [expandedVendors, setExpandedVendors] = useState(() => new Set());
   if (!txns || txns.length === 0) {
     return (
       <div style={{ padding: "8px 14px 12px 42px", fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>
@@ -2009,39 +2014,84 @@ function PLCategoryDetails({ txns, signNegative }) {
       </div>
     );
   }
+
+  // Group by normalized vendor key. Empty key (very short / numeric only
+  // descriptions) gets lumped into "(other)" so it still surfaces.
+  const groups = new Map();
+  for (const t of txns) {
+    const key = normalizeVendorKey(t.description) || "(other)";
+    if (!groups.has(key)) groups.set(key, { key, total: 0, items: [] });
+    const g = groups.get(key);
+    g.total += Math.abs(parseFloat(t.amount || 0));
+    g.items.push(t);
+  }
+  const sortedGroups = [...groups.values()].sort((a, b) => b.total - a.total);
+
+  const toggleVendor = (key) => setExpandedVendors(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+
   return (
     <div style={{ padding: "4px 14px 12px 32px", background: "var(--surface2)" }}>
-      <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ color: "var(--text3)", fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
-            <th style={{ textAlign: "left",  padding: "5px 8px 5px 0", whiteSpace: "nowrap" }}>Date</th>
-            <th style={{ textAlign: "left",  padding: "5px 8px" }}>Description</th>
-            <th style={{ textAlign: "left",  padding: "5px 8px" }}>Source</th>
-            <th style={{ textAlign: "left",  padding: "5px 8px" }}>Account</th>
-            <th style={{ textAlign: "right", padding: "5px 0 5px 8px", whiteSpace: "nowrap" }}>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {txns.map(t => {
-            const amt = Math.abs(parseFloat(t.amount || 0));
-            return (
-              <tr key={t.id} style={{ borderTop: "1px solid var(--border)" }}>
-                <td className="mono" style={{ padding: "4px 8px 4px 0", color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
-                <td style={{ padding: "4px 8px", color: "var(--text2)" }}>{String(t.description || "").slice(0, 70)}</td>
-                <td style={{ padding: "4px 8px" }}>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--text3)", padding: "1px 5px", border: "1px solid var(--border)", borderRadius: 3 }}>
-                    {t.source || "manual"}
-                  </span>
-                </td>
-                <td className="mono" style={{ padding: "4px 8px", color: "var(--text3)", fontSize: 10 }}>{t.account || "—"}</td>
-                <td className="mono" style={{ padding: "4px 0 4px 8px", textAlign: "right", color: signNegative ? "var(--red)" : "var(--accent)", whiteSpace: "nowrap" }}>
-                  {signNegative ? `(${fmt(amt)})` : fmt(amt)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {sortedGroups.map(g => {
+        const open = expandedVendors.has(g.key);
+        return (
+          <div key={g.key} style={{ marginBottom: 4 }}>
+            <div
+              onClick={() => toggleVendor(g.key)}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 8px", cursor: "pointer", borderRadius: 3, background: open ? "var(--surface3)" : "transparent" }}
+              title="Click to expand transactions"
+            >
+              <div className="flex items-center gap-8">
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text3)", width: 10 }}>{open ? "▾" : "▸"}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text2)", letterSpacing: 0.3 }}>{g.key}</span>
+                <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>· {g.items.length} txn</span>
+              </div>
+              <span className="mono" style={{ fontSize: 11, color: signNegative ? "var(--red)" : "var(--accent)" }}>
+                {signNegative ? `(${fmt(g.total)})` : fmt(g.total)}
+              </span>
+            </div>
+            {open && (
+              <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse", marginTop: 2, marginBottom: 6, marginLeft: 18 }}>
+                <thead>
+                  <tr style={{ color: "var(--text3)", fontFamily: "var(--font-mono)", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    <th style={{ textAlign: "left",  padding: "4px 8px 4px 0", whiteSpace: "nowrap" }}>Date</th>
+                    <th style={{ textAlign: "left",  padding: "4px 8px" }}>Description</th>
+                    <th style={{ textAlign: "left",  padding: "4px 8px" }}>Source</th>
+                    <th style={{ textAlign: "left",  padding: "4px 8px" }}>Account</th>
+                    <th style={{ textAlign: "right", padding: "4px 0 4px 8px", whiteSpace: "nowrap" }}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {g.items
+                    .slice()
+                    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+                    .map(t => {
+                    const amt = Math.abs(parseFloat(t.amount || 0));
+                    return (
+                      <tr key={t.id} style={{ borderTop: "1px solid var(--border)" }}>
+                        <td className="mono" style={{ padding: "3px 8px 3px 0", color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
+                        <td style={{ padding: "3px 8px", color: "var(--text2)" }}>{String(t.description || "").slice(0, 70)}</td>
+                        <td style={{ padding: "3px 8px" }}>
+                          <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--text3)", padding: "1px 5px", border: "1px solid var(--border)", borderRadius: 3 }}>
+                            {t.source || "manual"}
+                          </span>
+                        </td>
+                        <td className="mono" style={{ padding: "3px 8px", color: "var(--text3)", fontSize: 10 }}>{t.account || "—"}</td>
+                        <td className="mono" style={{ padding: "3px 0 3px 8px", textAlign: "right", color: signNegative ? "var(--red)" : "var(--accent)", whiteSpace: "nowrap" }}>
+                          {signNegative ? `(${fmt(amt)})` : fmt(amt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
