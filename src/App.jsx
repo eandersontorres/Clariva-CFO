@@ -2590,6 +2590,74 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
 
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
 
+  // Export the P&L to CSV. Mirrors the on-screen structure: a Period header,
+  // then Income / COGS / OpEx blocks with one row per category, then totals,
+  // then the Source reconciliation block. Importable directly into Sheets or
+  // pasted into a TaxAct/QuickBooks worksheet for accountant review.
+  const exportPL = () => {
+    const esc = (v) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [];
+    lines.push(`Profit & Loss — TorresBee`);
+    lines.push(`Period,${dateRange.start || ""} to ${dateRange.end || ""}`);
+    lines.push(`View,${period}`);
+    lines.push(`Generated,${new Date().toISOString().slice(0, 19).replace("T", " ")}`);
+    lines.push("");
+    lines.push("Section,Category,Tax Line,Amount");
+
+    incomeCats.forEach(c => {
+      const amt = Math.max(0, getAmount(c.id));
+      if (amt > 0) lines.push(["Income", c.name, c.taxLine || "", amt.toFixed(2)].map(esc).join(","));
+    });
+    lines.push(["Income", "TOTAL", "", totalIncome.toFixed(2)].map(esc).join(","));
+    lines.push("");
+
+    expenseCats.filter(c => c.taxLine === "COGS").forEach(c => {
+      const amt = Math.abs(Math.min(0, getAmount(c.id)));
+      if (amt > 0) lines.push(["COGS", c.name, c.taxLine || "", `-${amt.toFixed(2)}`].map(esc).join(","));
+    });
+    lines.push(["COGS", "TOTAL", "", `-${totalCOGS.toFixed(2)}`].map(esc).join(","));
+    lines.push(["Subtotal", "Gross Profit", "", grossProfit.toFixed(2)].map(esc).join(","));
+    lines.push("");
+
+    expenseCats.filter(c => c.taxLine !== "COGS").forEach(c => {
+      const amt = Math.abs(Math.min(0, getAmount(c.id)));
+      if (amt > 0) lines.push(["OpEx", c.name, c.taxLine || "", `-${amt.toFixed(2)}`].map(esc).join(","));
+    });
+    lines.push(["OpEx", "TOTAL", "", `-${totalOpex.toFixed(2)}`].map(esc).join(","));
+    lines.push("");
+    lines.push(["Net", "Net Income", "", netIncome.toFixed(2)].map(esc).join(","));
+    lines.push(["Net", "Net Margin", "", (totalIncome > 0 ? ((netIncome / totalIncome) * 100).toFixed(2) : "0") + "%"].map(esc).join(","));
+
+    if (sources?.paystubRunsUsed > 0 || sources?.revenueSource > 0) {
+      lines.push("");
+      lines.push("Source Reconciliation");
+      lines.push("Line,Ledger,Source of truth,Source tag,Bank,Drift (ledger - source)");
+      lines.push(["Revenue", sources.revenueLedger.toFixed(2), sources.revenueSource.toFixed(2), "Square", "", (sources.revenueLedger - sources.revenueSource).toFixed(2)].map(esc).join(","));
+      lines.push([
+        "Labor",
+        sources.laborLedger.toFixed(2),
+        sources.laborSource.toFixed(2),
+        "Paystub",
+        sources.laborBank.toFixed(2),
+        (sources.laborLedger - sources.laborSource).toFixed(2),
+      ].map(esc).join(","));
+    }
+
+    const csv = "﻿" + lines.join("\r\n"); // BOM so Excel detects UTF-8
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pl_${dateRange.start || "start"}_to_${dateRange.end || "end"}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+    showToast?.("P&L exported", "success");
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -2603,7 +2671,7 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
               <div key={p} className={`tab ${period === p ? "active" : ""}`} onClick={() => setPeriod(p)} style={{ fontSize: 12 }}>{p.charAt(0).toUpperCase() + p.slice(1)}</div>
             ))}
           </div>
-          <button className="btn btn-outline btn-sm"><Icon name="download" size={13} /> Export</button>
+          <button className="btn btn-outline btn-sm" onClick={exportPL}><Icon name="download" size={13} /> Export CSV</button>
         </div>
       </div>
 
