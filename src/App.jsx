@@ -2279,13 +2279,18 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
         <button className="btn btn-primary btn-sm" onClick={openAdd}><Icon name="plus" size={13} /> New Category</button>
       </div>
 
-      <div className="grid-2">
-        {["income", "expense"].map(type => (
-          <div key={type}>
-            <div style={{ fontFamily: "var(--font-sans)", fontSize: 12, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>
-              {type === "income" ? "💰 Income" : "💸 Expenses"}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+        {[
+          { id: "income",   label: "💰 Income",                        hint: "Hits P&L as revenue" },
+          { id: "expense",  label: "💸 Expenses",                      hint: "Hits P&L as cost" },
+          { id: "transfer", label: "🔁 Transfer / Pass-through",        hint: "Filtered out of P&L — sales tax payable, tips payable, internal transfers, settlement clearing" },
+        ].map(group => (
+          <div key={group.id}>
+            <div style={{ fontFamily: "var(--font-sans)", fontSize: 12, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
+              {group.label}
             </div>
-            {categories.filter(c => c.type === type).map(c => (
+            <div style={{ fontSize: 10, color: "var(--text3)", marginBottom: 10, lineHeight: 1.4 }}>{group.hint}</div>
+            {categories.filter(c => c.type === group.id).map(c => (
               <div key={c.id} className="card card-sm flex items-center gap-12" style={{ marginBottom: 8 }}>
                 <div className="swatch" style={{ background: c.color, width: 14, height: 14, borderRadius: 4 }} />
                 <div style={{ flex: 1 }}>
@@ -2298,6 +2303,11 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
                 {c.id !== UNCATEGORIZED && <button className="btn btn-ghost" style={{ padding: "4px 6px", color: "var(--red)" }} onClick={() => remove(c.id)}><Icon name="trash" size={13} /></button>}
               </div>
             ))}
+            {categories.filter(c => c.type === group.id).length === 0 && (
+              <div style={{ fontSize: 11, color: "var(--text3)", fontStyle: "italic", padding: "12px 0" }}>
+                No categories of this type yet.
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -2318,8 +2328,9 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
                 <div className="form-group">
                   <label className="label">Type</label>
                   <select className="input" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
-                    <option value="income">Income</option>
-                    <option value="expense">Expense</option>
+                    <option value="income">Income (hits P&L as revenue)</option>
+                    <option value="expense">Expense (hits P&L as cost)</option>
+                    <option value="transfer">Transfer / Pass-through (filtered from P&L)</option>
                   </select>
                 </div>
                 <div className="form-group">
