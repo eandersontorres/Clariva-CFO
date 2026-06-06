@@ -1934,6 +1934,25 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     });
   };
 
+  // Toggle the 'non_recurring' tag on a transaction. P&L picks up the tag
+  // and surfaces an "Adjusted EBITDA" card adding back every tagged row,
+  // so the operator can see the forward-looking potential without the
+  // one-off expense (final loan payment, equipment one-time setup, etc).
+  const toggleNonRecurring = (id) => {
+    setTransactions(prev => {
+      const updated = prev.map(t => {
+        if (t.id !== id) return t;
+        const tags = Array.isArray(t.tags) ? t.tags : [];
+        const next = tags.includes("non_recurring")
+          ? tags.filter(x => x !== "non_recurring")
+          : [...tags, "non_recurring"];
+        return { ...t, tags: next };
+      });
+      if (saveTransactions) { const changed = updated.filter(t => t.id === id); saveTransactions(changed); }
+      return updated;
+    });
+  };
+
   const removeTransaction = async (id) => {
     if (!window.confirm("Delete this transaction? It will be removed from the ledger permanently.")) return;
     setTransactions(prev => prev.filter(t => t.id !== id));
@@ -2095,6 +2114,26 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                           opacity: t.prior_period ? 1 : 0.45,
                         }}
                       >↩</button>
+                      {(() => {
+                        const isNR = Array.isArray(t.tags) && t.tags.includes("non_recurring");
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => toggleNonRecurring(t.id)}
+                            title={isNR
+                              ? "Marked as non-recurring (one-off) — added back to Adjusted EBITDA on the P&L. Click to clear."
+                              : "Flag as non-recurring (one-off, e.g. final loan payment, equipment setup). Added back to Adjusted EBITDA — doesn't change Net Income."}
+                            style={{
+                              fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 6px",
+                              borderRadius: 4, cursor: "pointer", lineHeight: 1,
+                              background: isNR ? "var(--blueBg)" : "transparent",
+                              color: isNR ? "var(--blue)" : "var(--text3)",
+                              border: isNR ? "1px solid var(--blue)40" : "1px solid transparent",
+                              opacity: isNR ? 1 : 0.45,
+                            }}
+                          >🔁</button>
+                        );
+                      })()}
                       {transferPairs.has(t.id) && <span title="Internal transfer between your own accounts — excluded from income/expense totals" style={{ fontSize: 10, fontFamily: "var(--font-mono)", padding: "2px 6px", borderRadius: 4, background: "var(--blueBg)", color: "var(--blue)", border: "1px solid var(--blue)40" }}>↔ Internal</span>}
                       {t.autoCategorized && <span className="auto-cat-badge" title="Auto-categorized from history — change to confirm">✨</span>}
                       <select className={`cat-select${t.autoCategorized ? " auto-cat" : ""}`} value={t.category} onChange={e => updateCategory(t.id, e.target.value)}>
@@ -2708,6 +2747,25 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
     return { interest, incomeTax, depreciation, amortization, ebit, ebitda };
   }, [categories, transactions, netIncome]);
 
+  // Adjusted EBITDA — adds back every transaction tagged 'non_recurring'.
+  // The operator marks one-off rows on the Transactions screen (🔁 button);
+  // the P&L picks them up and surfaces the forward-looking potential here.
+  const addBacks = useMemo(() => {
+    const items = transactions.filter(t => Array.isArray(t.tags) && t.tags.includes("non_recurring") && isLedger(t));
+    const totalAbs = items.reduce((s, t) => s + Math.abs(parseFloat(t.amount || 0)), 0);
+    // Only add back EXPENSE side (negative rows). Positive non-recurring
+    // (e.g. one-off catering windfall) would inflate Adjusted EBITDA in a
+    // misleading direction, so subtract those instead. Standard add-back
+    // convention: bring the figure back to a "normalized" run-rate.
+    const totalSigned = items.reduce((s, t) => {
+      const amt = parseFloat(t.amount || 0);
+      return s + (amt < 0 ? Math.abs(amt) : -amt);
+    }, 0);
+    const adjustedEbitda = profitBreakdown.ebitda + totalSigned;
+    const adjustedEbitdaMarginPct = totalIncome > 0 ? (adjustedEbitda / totalIncome) * 100 : 0;
+    return { items, totalAbs, totalSigned, adjustedEbitda, adjustedEbitdaMarginPct };
+  }, [transactions, isLedger, profitBreakdown.ebitda, totalIncome]);
+
   const opsScore = useMemo(() => {
     if (totalIncome <= 0) return null;
     const laborCat = categories.find(c => /payroll|labor|wage/i.test(c.name || ""));
@@ -3019,6 +3077,43 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
           {!(profitBreakdown.interest > 0 || profitBreakdown.depreciation > 0 || profitBreakdown.amortization > 0 || profitBreakdown.incomeTax > 0) && netIncome !== 0 && (
             <div className="mt-12" style={{ background: "var(--surface2)", borderRadius: 6, padding: "10px 14px", fontSize: 11, color: "var(--text3)", lineHeight: 1.5 }}>
               💡 To show <strong>EBIT</strong> and <strong>EBITDA</strong>, tag categories with one of the names <em>Interest</em>, <em>Income Tax</em>, <em>Depreciation</em>, or <em>Amortization</em> (or set their tax_line equivalent). EBIT = Net Income + Interest + Income Tax. EBITDA = EBIT + Depreciation + Amortization.
+            </div>
+          )}
+
+          {/* ── Adjusted EBITDA — forward-looking, with one-off add-backs ── */}
+          {addBacks.items.length > 0 && (
+            <div className="mt-12" style={{ background: "var(--accentBg)", borderRadius: 6, border: "1px solid var(--accentBorder)", padding: "12px 16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>Adjusted EBITDA</div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>forward-looking run-rate</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 22, color: "var(--accent)" }}>{fmt(addBacks.adjustedEbitda)}</div>
+                  <div style={{ fontSize: 11, color: "var(--accent)", fontFamily: "var(--font-mono)" }}>Margin: {addBacks.adjustedEbitdaMarginPct.toFixed(1)}%</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginBottom: 6 }}>
+                EBITDA {fmt(profitBreakdown.ebitda)} + {addBacks.items.length} non-recurring add-back{addBacks.items.length === 1 ? "" : "s"} ({fmt(addBacks.totalSigned)})
+              </div>
+              <div style={{ display: "grid", gap: 4, paddingTop: 8, borderTop: "1px solid var(--accentBorder)" }}>
+                {addBacks.items.slice(0, 8).map(t => (
+                  <div key={t.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+                    <span style={{ color: "var(--text2)" }}>
+                      <span style={{ fontFamily: "var(--font-mono)", color: "var(--text3)", marginRight: 8 }}>{fmtDate(t.date)}</span>
+                      {(t.description || "").slice(0, 60)}
+                    </span>
+                    <span className="mono" style={{ color: parseFloat(t.amount) < 0 ? "var(--accent)" : "var(--red)" }}>
+                      {parseFloat(t.amount) < 0 ? "+" : "−"}{fmt(Math.abs(parseFloat(t.amount)))}
+                    </span>
+                  </div>
+                ))}
+                {addBacks.items.length > 8 && (
+                  <div style={{ fontSize: 11, color: "var(--text3)", textAlign: "center", marginTop: 4 }}>
+                    + {addBacks.items.length - 8} more — see Transactions
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
