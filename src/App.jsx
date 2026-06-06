@@ -2685,6 +2685,29 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
   // against restaurant industry benchmarks (American restaurants —
   // adjust thresholds in the future for other concept types). Weighted
   // sum gives a single "is this month good or bad" number.
+  // EBIT / EBITDA — pull-back from Net Income, used both in the P&L block
+  // and in the Operations Score below.
+  // Detection rules (loose — any of these match a category):
+  //   - Interest:     name /interest/i OR tax_line='Interest'
+  //   - Income Tax:   name /income tax|federal tax|state tax/i (NOT sales tax)
+  //                    OR tax_line='Income Tax'
+  //   - Depreciation: name /depreciation/i OR tax_line='Depreciation'
+  //   - Amortization: name /amortization/i OR tax_line='Amortization'
+  // Any of these missing → contributes 0 (don't inflate EBITDA by accident).
+  const profitBreakdown = useMemo(() => {
+    const findAmt = (predicate) => {
+      const c = categories.find(predicate);
+      return c ? Math.abs(getAmount(c.id)) : 0;
+    };
+    const interest     = findAmt(c => /interest/i.test(c.name || "") || c.taxLine === "Interest");
+    const incomeTax    = findAmt(c => (/income\s*tax|federal\s*tax|state\s*income\s*tax/i.test(c.name || "") && !/sales/i.test(c.name || "")) || c.taxLine === "Income Tax");
+    const depreciation = findAmt(c => /depreciation/i.test(c.name || "") || c.taxLine === "Depreciation");
+    const amortization = findAmt(c => /amortization/i.test(c.name || "") || c.taxLine === "Amortization");
+    const ebit   = netIncome + interest + incomeTax;
+    const ebitda = ebit + depreciation + amortization;
+    return { interest, incomeTax, depreciation, amortization, ebit, ebitda };
+  }, [categories, transactions, netIncome]);
+
   const opsScore = useMemo(() => {
     if (totalIncome <= 0) return null;
     const laborCat = categories.find(c => /payroll|labor|wage/i.test(c.name || ""));
@@ -2694,6 +2717,7 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
     const primePct = foodCostPct + laborPct;
     const netMarginPct = (netIncome / totalIncome) * 100;
     const grossMarginPct = (grossProfit / totalIncome) * 100;
+    const ebitdaMarginPct = (profitBreakdown.ebitda / totalIncome) * 100;
 
     // Normalize each metric to 0-100. Linear ramp between excellent and
     // critical thresholds; clipped at the ends. "Higher is better" for
@@ -2710,11 +2734,11 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
     };
 
     const subScores = [
-      { key: "net_margin",    label: "Net Margin",     value: netMarginPct,   target: "≥15%", actual: netMarginPct.toFixed(1) + "%", weight: 0.30, score: norm(netMarginPct, 15, 0, false) },
-      { key: "prime_cost",    label: "Prime Cost",     value: primePct,       target: "≤55%", actual: primePct.toFixed(1) + "%",     weight: 0.25, score: norm(primePct, 55, 70, true) },
-      { key: "food_cost",     label: "Food Cost",      value: foodCostPct,    target: "≤28%", actual: foodCostPct.toFixed(1) + "%",  weight: 0.20, score: norm(foodCostPct, 28, 40, true) },
-      { key: "labor_cost",    label: "Labor Cost",     value: laborPct,       target: "≤25%", actual: laborPct.toFixed(1) + "%",     weight: 0.20, score: norm(laborPct, 25, 40, true) },
-      { key: "gross_margin",  label: "Gross Margin",   value: grossMarginPct, target: "≥75%", actual: grossMarginPct.toFixed(1) + "%", weight: 0.05, score: norm(grossMarginPct, 75, 55, false) },
+      { key: "net_margin",     label: "Net Margin",     value: netMarginPct,    target: "≥15%", actual: netMarginPct.toFixed(1) + "%",    weight: 0.25, score: norm(netMarginPct, 15, 0, false) },
+      { key: "ebitda_margin",  label: "EBITDA Margin",  value: ebitdaMarginPct, target: "≥20%", actual: ebitdaMarginPct.toFixed(1) + "%", weight: 0.15, score: norm(ebitdaMarginPct, 20, 5, false) },
+      { key: "prime_cost",     label: "Prime Cost",     value: primePct,        target: "≤55%", actual: primePct.toFixed(1) + "%",        weight: 0.25, score: norm(primePct, 55, 70, true) },
+      { key: "food_cost",      label: "Food Cost",      value: foodCostPct,     target: "≤28%", actual: foodCostPct.toFixed(1) + "%",     weight: 0.20, score: norm(foodCostPct, 28, 40, true) },
+      { key: "labor_cost",     label: "Labor Cost",     value: laborPct,        target: "≤25%", actual: laborPct.toFixed(1) + "%",        weight: 0.15, score: norm(laborPct, 25, 40, true) },
     ];
 
     const total = Math.round(subScores.reduce((s, k) => s + k.score * k.weight, 0));
@@ -2959,6 +2983,44 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
             </div>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 28, fontWeight: 500, color: netIncome >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(netIncome)}</div>
           </div>
+
+          {/* EBIT + EBITDA — operational profitability before financing /
+              non-cash items. Helps owners compare apples-to-apples vs
+              other restaurants and value the business if they sell. */}
+          {(profitBreakdown.interest > 0 || profitBreakdown.depreciation > 0 || profitBreakdown.amortization > 0 || profitBreakdown.incomeTax > 0) && (
+            <div className="mt-12" style={{ background: "var(--surface2)", borderRadius: 6, padding: "12px 16px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>EBIT</div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, color: profitBreakdown.ebit >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(profitBreakdown.ebit)}</div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
+                    Margin: {totalIncome > 0 ? ((profitBreakdown.ebit / totalIncome) * 100).toFixed(1) : 0}%
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>EBITDA</div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, color: profitBreakdown.ebitda >= 0 ? "var(--accent)" : "var(--red)" }}>{fmt(profitBreakdown.ebitda)}</div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
+                    Margin: {totalIncome > 0 ? ((profitBreakdown.ebitda / totalIncome) * 100).toFixed(1) : 0}%
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)", fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", lineHeight: 1.6 }}>
+                Net Income {fmt(netIncome)}
+                {profitBreakdown.interest > 0    && <> · + Interest {fmt(profitBreakdown.interest)}</>}
+                {profitBreakdown.incomeTax > 0   && <> · + Income Tax {fmt(profitBreakdown.incomeTax)}</>}
+                {" "}= EBIT
+                {profitBreakdown.depreciation > 0 && <> · + Depreciation {fmt(profitBreakdown.depreciation)}</>}
+                {profitBreakdown.amortization > 0 && <> · + Amortization {fmt(profitBreakdown.amortization)}</>}
+                {" "}= EBITDA
+              </div>
+            </div>
+          )}
+          {!(profitBreakdown.interest > 0 || profitBreakdown.depreciation > 0 || profitBreakdown.amortization > 0 || profitBreakdown.incomeTax > 0) && netIncome !== 0 && (
+            <div className="mt-12" style={{ background: "var(--surface2)", borderRadius: 6, padding: "10px 14px", fontSize: 11, color: "var(--text3)", lineHeight: 1.5 }}>
+              💡 To show <strong>EBIT</strong> and <strong>EBITDA</strong>, tag categories with one of the names <em>Interest</em>, <em>Income Tax</em>, <em>Depreciation</em>, or <em>Amortization</em> (or set their tax_line equivalent). EBIT = Net Income + Interest + Income Tax. EBITDA = EBIT + Depreciation + Amortization.
+            </div>
+          )}
 
           {/* Quick stats — resolve category IDs by name instead of the old
               hardcoded "2"/"3" (those were numeric ids back when the chart
