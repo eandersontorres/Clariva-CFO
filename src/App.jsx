@@ -657,7 +657,14 @@ function accrualDate(t) {
 // mirror something already counted elsewhere (internal transfers, Square
 // deposits whose gross is already booked via square_sale_gross). They must
 // be excluded from income/expense roll-ups to avoid double-counting.
-const NON_REVENUE_SOURCES = new Set(["internal_transfer", "square_settlement"]);
+// Sources that represent bank-side clearing/settlement of revenue already
+// booked from the operational source. Filtered out of every P&L roll-up
+// (income, expense, KPIs) so the same dollar isn't counted twice.
+//   - square_settlement     → Square POS deposits (Square Net Sales is the truth)
+//   - aggregator_settlement → DoorDash/UberEats/GrubHub/Wix net deposits
+//                              (gross is already in Square Net Sales as Other tender)
+//   - internal_transfer     → bank-to-bank moves between own accounts
+const NON_REVENUE_SOURCES = new Set(["internal_transfer", "square_settlement", "aggregator_settlement"]);
 function isRevenueRelevant(t) {
   return t && !NON_REVENUE_SOURCES.has(t.source);
 }
