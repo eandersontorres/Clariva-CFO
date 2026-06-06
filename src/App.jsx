@@ -6473,6 +6473,42 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
 
   const statusColor = { draft: "var(--text2)", approved: "var(--blue)", submitted: "var(--yellow)", reconciled: "var(--accent)", cancelled: "var(--text3)" };
 
+  // Background auto-reconciler. Whenever transactions or runs change (statement
+  // import, realtime push, etc), scan every paystub-fed run and see if its
+  // Paychex ACH has appeared in the ledger. Exactly one unambiguous candidate
+  // = silent split + toast notification. Guards against re-running on the same
+  // parent twice with a session-level Set; that survives prop churn but resets
+  // on a hard refresh, which is fine because a refresh re-loads the ledger and
+  // the parent will already have its children (skipped by findPaychexCandidates).
+  const autoReconciledRef = useRef(new Set());
+  useEffect(() => {
+    if (!runs?.length || !transactions?.length) return;
+    let active = true;
+    (async () => {
+      for (const run of runs) {
+        if (!active) return;
+        const t = run.totals || {};
+        if (!t.total_bank_debit) continue;
+        if (autoReconciledRef.current.has(run.id)) continue;
+        const candidates = findPaychexCandidates(t);
+        if (candidates.length !== 1) continue;
+        autoReconciledRef.current.add(run.id);
+        const sugg = t.paystub_meta?.split_suggestion || {
+          labor: t.true_labor_cost,
+          tip_pass_through: t.tips_charged,
+          exp_reimbursement: t.reimb_non_tax,
+        };
+        const res = await autoSplitPaychex(t, sugg);
+        if (!active) return;
+        if (res.matched === 1 && !res.error) {
+          showToast?.(`Auto-reconciled Paychex ACH ${fmt(res.parent.amount)} for ${run.period_start} → ${run.period_end}`, "success");
+        }
+      }
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runs, transactions.length]);
+
   // Retry the auto-split for the currently-selected run. Useful when the
   // paystub was saved first and the bank ACH only arrived later — clicking
   // this button re-runs the same matcher and split as savePaystubAsRun.
