@@ -219,7 +219,7 @@ export default async function handler(req, res) {
           category_id: revenueCatId,
           account: "Square POS",
           reconciled: true,
-          source: "square_sale_gross",
+          source: "square_net_sales",
           notes: [
             day.discount_cents > 0 ? `Discounts: -$${(day.discount_cents / 100).toFixed(2)}` : null,
             day.return_cents > 0 ? `Returns: -$${(day.return_cents / 100).toFixed(2)}` : null,
@@ -304,7 +304,10 @@ export default async function handler(req, res) {
       .gt("amount", 0);
     const isSquareDeposit = (desc) => /\bsquare\b|sq\*square|^sq\s|^sq\b/i.test(desc || "");
     const reTagIds = (candidates || [])
-      .filter(c => isSquareDeposit(c.description) && c.source !== "square_sale_gross" && c.source !== "square_settlement")
+      .filter(c => isSquareDeposit(c.description)
+        && c.source !== "square_net_sales"
+        && c.source !== "square_sale_gross" // legacy rows from before the source rename
+        && c.source !== "square_settlement")
       .map(c => c.id);
     let settlements_retagged = 0;
     if (reTagIds.length > 0) {

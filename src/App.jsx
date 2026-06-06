@@ -2521,12 +2521,13 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
   // Drift between SOURCE and BANK = expected (tips passthrough + tax remits).
   const sources = useMemo(() => {
     const inRange = (d) => d >= (dateRange.start || "") && d <= (dateRange.end || "9999-12-31");
-    // Square revenue source: sum of source='square_sale_gross' in the window.
-    // After PR5 ran cleanly, this is Square Net Sales (items + non-tip service
-    // charges − discounts − returns). Before PR5 it still has tax embedded —
-    // we tag the drift below.
+    // Square revenue source: sum of source='square_net_sales' (PR5 renamed
+    // from 'square_sale_gross' once the Orders-API breakdown stopped lumping
+    // tax + tip into the value). Old rows that haven't been re-synced yet
+    // still carry the legacy source name — accept both so the panel keeps
+    // working during the migration window.
     const sqSaleSum = transactions
-      .filter(t => t.source === "square_sale_gross" && inRange(t.date))
+      .filter(t => (t.source === "square_net_sales" || t.source === "square_sale_gross") && inRange(t.date))
       .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
 
     // Paystub labor source: every payroll run whose period overlaps the
@@ -2852,7 +2853,7 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
                   source={sources.revenueSource}
                   sourceTag="Square"
                   bank={null}
-                  note="Source = sum of square_sale_gross. Drift typically = aggregator double-count and/or tax embedded before PR5 re-run."
+                  note="Source = sum of square_net_sales (items + non-tip service charges − discounts − returns). Drift typically = aggregator double-count and/or legacy rows still tagged square_sale_gross."
                 />
                 <SourceRow
                   label="Labor (wages + employer match)"
