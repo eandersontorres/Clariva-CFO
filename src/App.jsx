@@ -2680,6 +2680,53 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
 
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
 
+  // ── Operations Score ──────────────────────────────────────────────────
+  // Composite 0-100 health index for the period. Each KPI is normalized
+  // against restaurant industry benchmarks (American restaurants —
+  // adjust thresholds in the future for other concept types). Weighted
+  // sum gives a single "is this month good or bad" number.
+  const opsScore = useMemo(() => {
+    if (totalIncome <= 0) return null;
+    const laborCat = categories.find(c => /payroll|labor|wage/i.test(c.name || ""));
+    const laborAmt = laborCat ? Math.abs(getAmount(laborCat.id)) : 0;
+    const foodCostPct = (totalCOGS / totalIncome) * 100;
+    const laborPct = (laborAmt / totalIncome) * 100;
+    const primePct = foodCostPct + laborPct;
+    const netMarginPct = (netIncome / totalIncome) * 100;
+    const grossMarginPct = (grossProfit / totalIncome) * 100;
+
+    // Normalize each metric to 0-100. Linear ramp between excellent and
+    // critical thresholds; clipped at the ends. "Higher is better" for
+    // margins, "lower is better" for cost ratios.
+    const norm = (value, excellent, critical, lowerIsBetter = false) => {
+      if (lowerIsBetter) {
+        if (value <= excellent) return 100;
+        if (value >= critical) return 0;
+        return Math.round(100 - ((value - excellent) / (critical - excellent)) * 100);
+      }
+      if (value >= excellent) return 100;
+      if (value <= critical) return 0;
+      return Math.round(((value - critical) / (excellent - critical)) * 100);
+    };
+
+    const subScores = [
+      { key: "net_margin",    label: "Net Margin",     value: netMarginPct,   target: "≥15%", actual: netMarginPct.toFixed(1) + "%", weight: 0.30, score: norm(netMarginPct, 15, 0, false) },
+      { key: "prime_cost",    label: "Prime Cost",     value: primePct,       target: "≤55%", actual: primePct.toFixed(1) + "%",     weight: 0.25, score: norm(primePct, 55, 70, true) },
+      { key: "food_cost",     label: "Food Cost",      value: foodCostPct,    target: "≤28%", actual: foodCostPct.toFixed(1) + "%",  weight: 0.20, score: norm(foodCostPct, 28, 40, true) },
+      { key: "labor_cost",    label: "Labor Cost",     value: laborPct,       target: "≤25%", actual: laborPct.toFixed(1) + "%",     weight: 0.20, score: norm(laborPct, 25, 40, true) },
+      { key: "gross_margin",  label: "Gross Margin",   value: grossMarginPct, target: "≥75%", actual: grossMarginPct.toFixed(1) + "%", weight: 0.05, score: norm(grossMarginPct, 75, 55, false) },
+    ];
+
+    const total = Math.round(subScores.reduce((s, k) => s + k.score * k.weight, 0));
+    let band, tone;
+    if (total >= 80)      { band = "Excellent"; tone = "var(--accent)"; }
+    else if (total >= 60) { band = "Healthy";   tone = "var(--accent)"; }
+    else if (total >= 40) { band = "Watch";     tone = "var(--yellow)"; }
+    else                  { band = "Critical";  tone = "var(--red)"; }
+
+    return { total, band, tone, subScores, foodCostPct, laborPct, primePct, netMarginPct, grossMarginPct };
+  }, [transactions, categories, totalIncome, totalCOGS, netIncome, grossProfit]);
+
   // Export the P&L to CSV. Mirrors the on-screen structure: a Period header,
   // then Income / COGS / OpEx blocks with one row per category, then totals,
   // then the Source reconciliation block. Importable directly into Sheets or
@@ -2764,6 +2811,39 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
           <button className="btn btn-outline btn-sm" onClick={exportPL}><Icon name="download" size={13} /> Export CSV</button>
         </div>
       </div>
+
+      {opsScore && (
+        <div className="card" style={{ padding: 0, marginBottom: 20, border: `1px solid ${opsScore.tone}40` }}>
+          <div style={{ display: "flex", padding: "16px 20px", gap: 24, alignItems: "center" }}>
+            <div style={{ minWidth: 140, textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Operations Score</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 48, fontWeight: 500, color: opsScore.tone, lineHeight: 1 }}>{opsScore.total}</div>
+              <div style={{ fontSize: 11, color: opsScore.tone, fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 1, marginTop: 4 }}>{opsScore.band}</div>
+            </div>
+            <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+              {opsScore.subScores.map(k => {
+                const color = k.score >= 80 ? "var(--accent)" : k.score >= 40 ? "var(--yellow)" : "var(--red)";
+                return (
+                  <div key={k.key} style={{ background: "var(--surface2)", padding: "10px 12px", borderRadius: 6 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontFamily: "var(--font-sans)", fontWeight: 600, color: "var(--text2)" }}>{k.label}</span>
+                      <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: color }}>{k.score}/100</span>
+                    </div>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, color: color }}>{k.actual}</div>
+                    <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>target {k.target} · weight {(k.weight * 100).toFixed(0)}%</div>
+                    <div style={{ marginTop: 6, height: 3, background: "var(--border)", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ width: k.score + "%", height: "100%", background: color, transition: "width 0.3s ease" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ padding: "8px 20px", borderTop: "1px solid var(--border)", background: "var(--surface2)", fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", lineHeight: 1.6 }}>
+            Restaurant industry benchmarks (US). Score band: <span style={{ color: "var(--accent)" }}>80-100 Excellent</span> · <span style={{ color: "var(--accent)" }}>60-79 Healthy</span> · <span style={{ color: "var(--yellow)" }}>40-59 Watch</span> · <span style={{ color: "var(--red)" }}>0-39 Critical</span>
+          </div>
+        </div>
+      )}
 
       <div className="grid-2">
         <div>
