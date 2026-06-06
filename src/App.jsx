@@ -1626,7 +1626,40 @@ function SplitModal({ txn, categories, payrollRuns = [], onClose, onSave, transa
 }
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, deleteTxn, categories, recurring, bankAccounts, tenantId, dateRange, setDateRange, showToast }) {
+function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, deleteTxn, categories, recurring, bankAccounts, tenantId, dateRange, setDateRange, showToast, payrollRuns = [] }) {
+  // Split modal state — opens when the operator clicks ⫶ on a row.
+  const [splittingTxn, setSplittingTxn] = useState(null);
+  const handleOpenSplit = (id) => {
+    const t = transactions.find(x => x.id === id) || (allTransactions || []).find(x => x.id === id);
+    if (t) setSplittingTxn(t);
+  };
+  const handleSaveSplit = async (childrenPayload, oldChildIds) => {
+    if (oldChildIds?.length > 0 && tenantId && tenantId !== "demo") {
+      for (const cid of oldChildIds) {
+        try { await deleteTransaction(cid); } catch (e) { console.error("split: delete old child", cid, e); }
+      }
+    }
+    const res = await splitTransaction(splittingTxn.id, childrenPayload, tenantId);
+    if (!res.ok) throw new Error(res.error || "Failed to save split");
+    showToast?.(`Split saved · ${childrenPayload.length} rows`, "success");
+    if (setTransactions) {
+      setTransactions(prev => {
+        const stale = new Set(oldChildIds || []);
+        const filtered = prev.filter(t => !stale.has(t.id));
+        const newChildren = childrenPayload.map((c, i) => ({
+          id: c.id || `split_${splittingTxn.id}_${Date.now()}_${i}`,
+          tenant_id: tenantId,
+          date: c.date, description: c.description,
+          amount: parseFloat(c.amount),
+          category: c.category, category_id: c.category,
+          account_id: c.account_id || null, account: c.account || "Split",
+          source: "split", parent_id: splittingTxn.id,
+          reconciled: false, tags: [], notes: "",
+        }));
+        return [...filtered, ...newChildren];
+      });
+    }
+  };
   const [filter, setFilter] = useState("uncat");
   const [accountFilter, setAccountFilter] = useState("all");
   const [kitchenInvoices, setKitchenInvoices] = useState([]);
@@ -2096,7 +2129,15 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                     </div>
                   </td>
                   <td className={t.amount >= 0 ? "amount-pos text-right" : "amount-neg text-right"}>{fmt(t.amount)}</td>
-                  <td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ padding: "4px 6px", color: "var(--text3)", marginRight: 2 }}
+                      title="Split this transaction into multiple categories (e.g. Paychex ACH → Labor + Tip Pass-Through + Reimb)"
+                      onClick={() => handleOpenSplit(t.id)}
+                    >
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, lineHeight: 1 }}>⫶</span>
+                    </button>
                     <button className="btn btn-ghost" style={{ padding: "4px 6px", color: "var(--red)" }} title="Delete transaction" onClick={() => removeTransaction(t.id)}>
                       <Icon name="trash" size={13} />
                     </button>
@@ -2107,6 +2148,17 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           </table>
         </div>
       </div>
+
+      {splittingTxn && (
+        <SplitModal
+          txn={splittingTxn}
+          categories={categories}
+          payrollRuns={payrollRuns}
+          transactions={allTransactions || transactions}
+          onClose={() => setSplittingTxn(null)}
+          onSave={handleSaveSplit}
+        />
+      )}
     </div>
   );
 }
@@ -7582,7 +7634,7 @@ export default function App() {
       case "payroll":      return <Payroll runs={payrollRuns} shifts={laborShifts} tipsDaily={tipsDaily} transactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} onChange={() => loadAll(false)} showToast={showToast} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
-      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
+      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} payrollRuns={payrollRuns} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} setTransactions={setTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} payrollRuns={payrollRuns} tenantId={TENANT_ID} showToast={showToast} />;
       case "performance":  return <Performance tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
