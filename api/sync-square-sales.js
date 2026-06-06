@@ -164,17 +164,24 @@ export default async function handler(req, res) {
         d.items_cents += cents(li.gross_sales_money);
       }
 
-      // Service charges. AUTO_GRATUITY (and anything with "tip" in the
-      // name) is passthrough — it flows to Tips Payable. Everything else
-      // (delivery fee, courier tip surcharge added by 3rd party platforms,
-      // custom service charges) counts as revenue alongside Items.
+      // Service charges. ALL of them count as revenue per Square's Sales
+      // Summary definition (which is what Anderson uses for the IRS Schedule
+      // C top line). Auto-gratuity is a *mandatory* service charge that the
+      // restaurant collects and then pays out to staff as part of payroll
+      // wages (it appears in the paystub's "Tips Charged" column — the
+      // restaurant is the entity of record, so it's revenue then expense,
+      // not passthrough). Voluntary tips are tracked separately on the
+      // order.tip_money field and DO go to Tips Payable.
+      //
+      // We still track auto_grat separately so the response surfaces it for
+      // reconciliation against the paystub, but it lives in non_tip_sc_cents
+      // for the Net Sales math.
       for (const sc of order.service_charges || []) {
-        const isTip = sc.type === "AUTO_GRATUITY"
-          || /grat|tip/i.test(sc.name || "")
-          || /grat|tip/i.test(sc.type || "");
         const amt = cents(sc.amount_money);
-        if (isTip) d.auto_grat_cents += amt;
-        else d.non_tip_sc_cents += amt;
+        d.non_tip_sc_cents += amt;
+        const isAutoGrat = sc.type === "AUTO_GRATUITY"
+          || /auto.?grat|gratu/i.test(sc.name || "");
+        if (isAutoGrat) d.auto_grat_cents += amt;
       }
 
       // Top-level totals from the order.
@@ -199,15 +206,17 @@ export default async function handler(req, res) {
     }
 
     // ─── Build ledger rows ──────────────────────────────────────────────
-    // Per Schedule C semantics:
-    //   Net Sales = items + non_tip_service_charges − discounts − returns
-    // Then tax and tips/grat are their own buckets.
+    // Net Sales — matches Square Sales Summary's "Net sales" line exactly:
+    //   Items + ALL service charges (incl. auto-gratuity) − discounts − returns
+    // Auto-gratuity is restaurant revenue (then paid out via payroll, where
+    // it shows up as "Tips Charged" in the paystub). Voluntary tips on
+    // order.tip_money go to Tips Payable as passthrough.
     const rowsToWrite = [];
     let skipped_tax = 0;
     let skipped_tip = 0;
     for (const day of Object.values(byDay)) {
       const netSalesCents = day.items_cents + day.non_tip_sc_cents - day.discount_cents - day.return_cents;
-      const tipsTotalCents = day.tip_cents + day.auto_grat_cents;
+      const tipsTotalCents = day.tip_cents; // voluntary tips only — auto-grat is in Net Sales above
 
       if (netSalesCents !== 0) {
         rowsToWrite.push({
