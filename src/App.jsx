@@ -657,7 +657,11 @@ function accrualDate(t) {
 // mirror something already counted elsewhere (internal transfers, Square
 // deposits whose gross is already booked via square_sale_gross). They must
 // be excluded from income/expense roll-ups to avoid double-counting.
-const NON_REVENUE_SOURCES = new Set(["internal_transfer", "square_settlement"]);
+// 'payroll_settlement' = Paychex/ADP/Gusto ACH rows (PAYROLL + TAXES) that
+// have been replaced by paystub shadow entries. They stay in the ledger as
+// the bank-side audit trail but don't contribute to P&L — the paystub
+// shadows carry the actual labor/tips/reimb classification.
+const NON_REVENUE_SOURCES = new Set(["internal_transfer", "square_settlement", "payroll_settlement"]);
 function isRevenueRelevant(t) {
   return t && !NON_REVENUE_SOURCES.has(t.source);
 }
@@ -6226,101 +6230,153 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
     }
   };
 
-  // Find a bank-side Paychex/ADP/Gusto ACH that matches a paystub envelope:
-  // negative amount within $50 of total_bank_debit, description matching the
-  // common payroll providers, date within ±7 days of the check date, and not
-  // already split. Returns 0 / 1 / N candidates.
-  const findPaychexCandidates = (t) => {
-    if (!t?.total_bank_debit || !t?.check_date) return [];
+  // Find every Paychex/ADP/Gusto ACH within ±7 days of the paystub check date.
+  // Paychex splits a single pay period into 2-3 bank rows:
+  //   - PAYROLL ACH  (direct deposits to employees)
+  //   - TAXES ACH    (employee withholdings + employer match remittance)
+  //   - EIB INVOICE  (Paychex service fee)
+  // We classify each one by description keyword so the auto-reconciler can
+  // route them differently.
+  const findPaychexRowsInWindow = (t) => {
+    if (!t?.check_date) return { payroll: [], taxes: [], eib: [], all: [] };
     const checkMs = new Date(t.check_date).getTime();
     const dayMs = 86400000;
-    const childIds = new Set(transactions.filter(x => x.parent_id).map(x => x.parent_id));
-    return transactions.filter(x => {
+    const all = transactions.filter(x => {
       const amt = parseFloat(x.amount);
       if (isNaN(amt) || amt >= 0) return false;
       const desc = (x.description || "").toLowerCase();
       if (!/paychex|payroll|adp|gusto/.test(desc)) return false;
-      if (Math.abs(Math.abs(amt) - t.total_bank_debit) > 50) return false;
       const xMs = new Date(x.date).getTime();
       if (Math.abs(xMs - checkMs) > 7 * dayMs) return false;
-      if (childIds.has(x.id)) return false; // already split
+      if (x.source === "payroll_settlement") return false; // already reconciled
       return true;
     });
+    const payroll = [], taxes = [], eib = [];
+    for (const row of all) {
+      const desc = (row.description || "").toLowerCase();
+      if (/eib|invoice/.test(desc)) eib.push(row);
+      else if (/tps|taxes/.test(desc)) taxes.push(row);
+      else payroll.push(row);
+    }
+    return { payroll, taxes, eib, all };
   };
 
-  // After saving a paystub, try to find the matching Paychex ACH bank txn and
-  // split it automatically using the paystub's pre-computed split_suggestion.
-  // The split removes tips + reimbursements from Labor so the P&L reflects
-  // true_labor_cost ($14k) instead of the inflated bank debit ($24k).
-  const autoSplitPaychex = async (t, splitSugg) => {
-    const candidates = findPaychexCandidates(t);
-    if (candidates.length === 0) {
-      return { matched: 0 };
+  // Reconcile a paystub against the bank: the Paychex PAYROLL + TAXES rows
+  // get re-tagged as `payroll_settlement` (filtered out of P&L by
+  // makeLedgerFilter), the Paychex EIB INVOICE rows get reclassified into
+  // Office & Supplies, and we materialize 3 shadow rows on the check date
+  // carrying the paystub's true labor / tips / reimb amounts. The shadows
+  // are what the P&L sums for the period.
+  //
+  // Net effect: bank-side rows stay as audit trail, P&L reflects paystub
+  // truth ($14k labor instead of bank-inflated $24k that included tip
+  // pass-through and reimbursements).
+  const autoReconcilePaystub = async (t, run) => {
+    const grouped = findPaychexRowsInWindow(t);
+    if (grouped.all.length === 0) return { matched: 0 };
+
+    const settlementIds = [...grouped.payroll, ...grouped.taxes].map(r => r.id);
+    const eibIds = grouped.eib.map(r => r.id);
+
+    const laborCat = categories.find(c => c.type === "expense" && /payroll|labor|wage/i.test(c.name || ""));
+    const tipCat   = categories.find(c => c.type === "transfer" && /tip/i.test(c.name || ""));
+    const reimbCat = categories.find(c => c.type === "expense" && /reimb/i.test(c.name || ""))
+                  || categories.find(c => c.type === "expense" && /office|supplies/i.test(c.name || ""));
+    const officeCat = categories.find(c => c.type === "expense" && /office|supplies|service.*fee|software/i.test(c.name || ""));
+
+    // 1) Settle PAYROLL + TAXES rows
+    if (settlementIds.length > 0 && tenantId && tenantId !== "demo") {
+      const { error } = await supabase
+        .from("r7_ledger_transactions")
+        .update({ source: "payroll_settlement" })
+        .in("id", settlementIds);
+      if (error) return { matched: grouped.all.length, error: "settle: " + error.message };
     }
-    if (candidates.length > 1) {
-      return { matched: candidates.length, ambiguous: true };
+
+    // 2) Reclassify EIB rows to Office & Supplies
+    if (eibIds.length > 0 && officeCat && tenantId && tenantId !== "demo") {
+      const { error } = await supabase
+        .from("r7_ledger_transactions")
+        .update({ category_id: officeCat.id })
+        .in("id", eibIds);
+      if (error) console.warn("reclassify EIB:", error.message);
     }
-    const parent = candidates[0];
-    const parentAmt = parseFloat(parent.amount); // negative
-    const sign = parentAmt < 0 ? -1 : 1;
-    const laborCat  = categories.find(c => c.type === "expense" && /payroll|labor|wage/i.test(c.name || ""));
-    const tipCat    = categories.find(c => c.type === "transfer" && /tip/i.test(c.name || ""));
-    const reimbCat  = categories.find(c => c.type === "expense" && /reimb/i.test(c.name || ""))
-                   || categories.find(c => c.type === "expense" && /office|supplies/i.test(c.name || ""));
-    // Children sum has to equal parent exactly — round to cents and absorb the
-    // residue in the largest line (Labor) to avoid the modal/save validator
-    // tripping over $0.01 drift.
-    const labor   = Math.round((splitSugg.labor || 0) * 100) / 100;
-    const tip     = Math.round((splitSugg.tip_pass_through || 0) * 100) / 100;
-    const reimb   = Math.round((splitSugg.exp_reimbursement || 0) * 100) / 100;
-    const targetAbs = Math.abs(parentAmt);
-    const sumAbs = labor + tip + reimb;
-    const residue = Math.round((targetAbs - sumAbs) * 100) / 100;
-    const laborAdj = Math.round((labor + residue) * 100) / 100;
 
-    const children = [
-      { description: "Wages + employer match (paystub)",      category: laborCat?.id || null, amount: sign * laborAdj },
-      { description: "Tips pass-through (paystub)",            category: tipCat?.id || null,    amount: sign * tip },
-      { description: "Expense reimbursement (paystub)",        category: reimbCat?.id || null, amount: sign * reimb },
-    ]
-      .filter(c => c.amount !== 0)
-      .map((c, i) => ({
-        ...c,
-        date: parent.date,
-        account_id: parent.account_id || null,
-        account: parent.account || "Split",
-        source: "split",
-      }));
+    // 3) Create shadow rows on the check_date with paystub truth
+    const shadowDate = t.check_date || run.pay_date || run.period_end;
+    const periodLabel = `${run.period_start} → ${run.period_end}`;
+    const shadows = [
+      {
+        id: `paystub_labor_${run.id}`,
+        date: shadowDate,
+        description: `Payroll labor (wages + employer match) — paystub ${periodLabel}`,
+        amount: -Math.abs(parseFloat(t.true_labor_cost) || 0),
+        category_id: laborCat?.id || null,
+        source: "paystub_shadow",
+        account: "Paystub",
+        reconciled: true,
+        tags: ["paystub", run.id],
+        notes: `From paystub run ${run.id}. Hourly ${t.hourly_earnings || 0} + OT ${t.overtime_earnings || 0} + employer match ${t.employer_match_total || 0}.`,
+      },
+      {
+        id: `paystub_tips_${run.id}`,
+        date: shadowDate,
+        description: `Tips pass-through — paystub ${periodLabel}`,
+        amount: -Math.abs(parseFloat(t.tips_charged) || 0),
+        category_id: tipCat?.id || null,
+        source: "paystub_shadow",
+        account: "Paystub",
+        reconciled: true,
+        tags: ["paystub", run.id],
+        notes: `From paystub run ${run.id}. Passthrough to staff, excluded from P&L via Tip Pass-Through (transfer category).`,
+      },
+      {
+        id: `paystub_reimb_${run.id}`,
+        date: shadowDate,
+        description: `Expense reimbursement — paystub ${periodLabel}`,
+        amount: -Math.abs(parseFloat(t.reimb_non_tax) || 0),
+        category_id: reimbCat?.id || null,
+        source: "paystub_shadow",
+        account: "Paystub",
+        reconciled: true,
+        tags: ["paystub", run.id],
+        notes: `From paystub run ${run.id}. Non-taxable expense reimbursements paid through payroll.`,
+      },
+    ].filter(s => s.amount !== 0);
 
-    const splitRes = await splitTransaction(parent.id, children, tenantId);
-    if (!splitRes.ok) return { matched: 1, error: splitRes.error };
+    const upRes = await upsertTransactions(shadows, tenantId);
+    if (!upRes.ok) return { matched: grouped.all.length, error: "shadow upsert: " + (upRes.error || "unknown") };
 
-    // Optimistic local update — push the new children + drop the parent's
-    // contribution from totals by treating it as the split parent (the
-    // ledger filter already excludes any row with at least one child).
+    // Optimistic local update — push the shadow rows and patch the bank rows
+    // to their new source/category so the screen updates without waiting for
+    // the realtime echo.
     if (setTransactions) {
-      const now = Date.now();
-      setTransactions(prev => [
-        ...prev,
-        ...children.map((c, i) => ({
-          id: `split_${parent.id}_${now}_${i}`,
-          tenant_id: tenantId,
-          date: c.date,
-          description: c.description,
-          amount: c.amount,
-          category: c.category,
-          category_id: c.category,
-          account: c.account,
-          source: "split",
-          parent_id: parent.id,
-          reconciled: false,
-          tags: [],
-          notes: "",
-        })),
-      ]);
+      const settledSet = new Set(settlementIds);
+      const eibSet = new Set(eibIds);
+      setTransactions(prev => {
+        const patched = prev.map(x => {
+          if (settledSet.has(x.id)) return { ...x, source: "payroll_settlement" };
+          if (eibSet.has(x.id) && officeCat) return { ...x, category: officeCat.id, category_id: officeCat.id };
+          return x;
+        });
+        // De-dupe shadow ids (idempotent re-runs)
+        const shadowIds = new Set(shadows.map(s => s.id));
+        const withoutOld = patched.filter(x => !shadowIds.has(x.id));
+        return [...withoutOld, ...shadows.map(s => ({ ...s, category: s.category_id, tenant_id: tenantId }))];
+      });
     }
-    return { matched: 1, parent, children, missingCats: { labor: !laborCat, tip: !tipCat, reimb: !reimbCat } };
+
+    return {
+      matched: grouped.all.length,
+      settled: settlementIds.length,
+      eib_reclassified: eibIds.length,
+      shadows_created: shadows.length,
+      missingCats: { labor: !laborCat, tip: !tipCat, reimb: !reimbCat, office: !officeCat },
+    };
   };
+
+  // Backward-compatible alias for the older call sites still using the v1 name.
+  const autoSplitPaychex = autoReconcilePaystub;
 
   const savePaystubAsRun = async () => {
     if (!paystubPreview) return;
@@ -6365,20 +6421,22 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
       ? `Run ${t.period_start} → ${t.period_end} updated with paystub data`
       : `Run created · gross ${fmt(t.wages_subtotal + t.tips_charged)} · net ${fmt(t.net_pay)}`;
 
-    // Auto-split the Paychex ACH if it's already in the ledger.
-    const autoRes = await autoSplitPaychex(t, paystubPreview.split_suggestion || {});
+    // Auto-reconcile the Paychex ACHs if they're already in the ledger.
+    const savedRun = saved.data || runRow;
+    const autoRes = await autoReconcilePaystub(t, savedRun);
     let extra = "";
-    if (autoRes.matched === 1 && !autoRes.error) {
-      extra = ` · auto-split Paychex ACH into Labor/Tips/Reimb`;
-      if (autoRes.missingCats?.labor)  extra += " ⚠️ Labor cat missing";
-      if (autoRes.missingCats?.tip)    extra += " ⚠️ Tip Pass-Through cat missing";
-      if (autoRes.missingCats?.reimb)  extra += " ⚠️ Reimbursement cat missing";
-    } else if (autoRes.matched === 1 && autoRes.error) {
-      extra = ` · ⚠️ auto-split failed: ${autoRes.error}`;
-    } else if (autoRes.matched > 1) {
-      extra = ` · ⚠️ ${autoRes.matched} Paychex candidates — split manually in Transactions`;
+    if (autoRes.matched > 0 && !autoRes.error) {
+      extra = ` · settled ${autoRes.settled} ACH${autoRes.settled === 1 ? "" : "s"} · ${autoRes.shadows_created} shadow rows created`;
+      if (autoRes.eib_reclassified > 0) extra += ` · ${autoRes.eib_reclassified} EIB → Office`;
+      const warn = [];
+      if (autoRes.missingCats?.labor) warn.push("Labor cat");
+      if (autoRes.missingCats?.tip)   warn.push("Tip Pass-Through cat");
+      if (autoRes.missingCats?.reimb) warn.push("Reimb cat");
+      if (warn.length) extra += ` · ⚠️ missing: ${warn.join(", ")}`;
+    } else if (autoRes.error) {
+      extra = ` · ⚠️ reconcile failed: ${autoRes.error}`;
     } else {
-      extra = ` · Paychex ACH not in ledger yet — will need manual Split on import`;
+      extra = ` · Paychex ACH not in ledger yet — re-run from Payroll detail after import`;
     }
     showToast(baseMsg + extra, autoRes.error ? "error" : "success");
     setPaystubPreview(null);
@@ -6488,20 +6546,15 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
       for (const run of runs) {
         if (!active) return;
         const t = run.totals || {};
-        if (!t.total_bank_debit) continue;
+        if (!t.true_labor_cost && !t.wages_subtotal) continue; // not a paystub-fed run
         if (autoReconciledRef.current.has(run.id)) continue;
-        const candidates = findPaychexCandidates(t);
-        if (candidates.length !== 1) continue;
+        const grouped = findPaychexRowsInWindow(t);
+        if (grouped.all.length === 0) continue;
         autoReconciledRef.current.add(run.id);
-        const sugg = t.paystub_meta?.split_suggestion || {
-          labor: t.true_labor_cost,
-          tip_pass_through: t.tips_charged,
-          exp_reimbursement: t.reimb_non_tax,
-        };
-        const res = await autoSplitPaychex(t, sugg);
+        const res = await autoReconcilePaystub(t, run);
         if (!active) return;
-        if (res.matched === 1 && !res.error) {
-          showToast?.(`Auto-reconciled Paychex ACH ${fmt(res.parent.amount)} for ${run.period_start} → ${run.period_end}`, "success");
+        if (res.matched > 0 && !res.error) {
+          showToast?.(`Auto-reconciled paystub ${run.period_start} → ${run.period_end} · ${res.settled} ACH settled · ${res.shadows_created} shadows created`, "success");
         }
       }
     })();
@@ -6515,29 +6568,23 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
   const retryAutoSplit = async () => {
     if (!selected) return;
     const t = selected.totals || {};
-    if (!t.total_bank_debit) {
+    if (!t.true_labor_cost && !t.wages_subtotal) {
       showToast("This run has no paystub data — import a paystub PDF first", "error");
       return;
     }
-    const sugg = t.paystub_meta?.split_suggestion || {
-      labor: t.true_labor_cost,
-      tip_pass_through: t.tips_charged,
-      exp_reimbursement: t.reimb_non_tax,
-    };
-    const res = await autoSplitPaychex(t, sugg);
+    autoReconciledRef.current.delete(selected.id); // allow retry
+    const res = await autoReconcilePaystub(t, selected);
     if (res.matched === 0) {
-      showToast("No Paychex ACH found in the ledger for this period", "info");
-    } else if (res.matched > 1) {
-      showToast(`Found ${res.matched} Paychex candidates — split manually in Transactions`, "info");
+      showToast("No Paychex ACH found within ±7 days of the check date", "info");
     } else if (res.error) {
-      showToast("Auto-split failed: " + res.error, "error");
+      showToast("Reconcile failed: " + res.error, "error");
     } else {
       const tags = [];
       if (res.missingCats?.labor)  tags.push("Labor cat missing");
       if (res.missingCats?.tip)    tags.push("Tip Pass-Through cat missing");
       if (res.missingCats?.reimb)  tags.push("Reimb cat missing");
       const warn = tags.length ? " · ⚠️ " + tags.join(", ") : "";
-      showToast(`Paychex ACH ${fmt(res.parent.amount)} split into Labor/Tips/Reimb` + warn, "success");
+      showToast(`Paystub reconciled · ${res.settled} ACH${res.settled === 1 ? "" : "s"} settled · ${res.shadows_created} shadow rows` + warn, "success");
     }
   };
 
