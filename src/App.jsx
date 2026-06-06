@@ -657,11 +657,7 @@ function accrualDate(t) {
 // mirror something already counted elsewhere (internal transfers, Square
 // deposits whose gross is already booked via square_sale_gross). They must
 // be excluded from income/expense roll-ups to avoid double-counting.
-// 'payroll_settlement' = Paychex/ADP/Gusto ACH rows (PAYROLL + TAXES) that
-// have been replaced by paystub shadow entries. They stay in the ledger as
-// the bank-side audit trail but don't contribute to P&L — the paystub
-// shadows carry the actual labor/tips/reimb classification.
-const NON_REVENUE_SOURCES = new Set(["internal_transfer", "square_settlement", "payroll_settlement"]);
+const NON_REVENUE_SOURCES = new Set(["internal_transfer", "square_settlement"]);
 function isRevenueRelevant(t) {
   return t && !NON_REVENUE_SOURCES.has(t.source);
 }
@@ -6421,24 +6417,12 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
       ? `Run ${t.period_start} → ${t.period_end} updated with paystub data`
       : `Run created · gross ${fmt(t.wages_subtotal + t.tips_charged)} · net ${fmt(t.net_pay)}`;
 
-    // Auto-reconcile the Paychex ACHs if they're already in the ledger.
-    const savedRun = saved.data || runRow;
-    const autoRes = await autoReconcilePaystub(t, savedRun);
-    let extra = "";
-    if (autoRes.matched > 0 && !autoRes.error) {
-      extra = ` · settled ${autoRes.settled} ACH${autoRes.settled === 1 ? "" : "s"} · ${autoRes.shadows_created} shadow rows created`;
-      if (autoRes.eib_reclassified > 0) extra += ` · ${autoRes.eib_reclassified} EIB → Office`;
-      const warn = [];
-      if (autoRes.missingCats?.labor) warn.push("Labor cat");
-      if (autoRes.missingCats?.tip)   warn.push("Tip Pass-Through cat");
-      if (autoRes.missingCats?.reimb) warn.push("Reimb cat");
-      if (warn.length) extra += ` · ⚠️ missing: ${warn.join(", ")}`;
-    } else if (autoRes.error) {
-      extra = ` · ⚠️ reconcile failed: ${autoRes.error}`;
-    } else {
-      extra = ` · Paychex ACH not in ledger yet — re-run from Payroll detail after import`;
-    }
-    showToast(baseMsg + extra, autoRes.error ? "error" : "success");
+    // Reset A — paystub saves to r7_payroll_runs but does NOT touch the
+    // ledger. The operator can still trigger the reconciliation on demand
+    // from the run detail (🔀 button), but the default is leave-alone so the
+    // P&L stays a clean cash-basis view of the bank ledger. Source comparison
+    // happens at Schedule C time using the paystub PDFs directly.
+    showToast(baseMsg, "success");
     setPaystubPreview(null);
   };
 
@@ -6539,28 +6523,11 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
   // on a hard refresh, which is fine because a refresh re-loads the ledger and
   // the parent will already have its children (skipped by findPaychexCandidates).
   const autoReconciledRef = useRef(new Set());
-  useEffect(() => {
-    if (!runs?.length || !transactions?.length) return;
-    let active = true;
-    (async () => {
-      for (const run of runs) {
-        if (!active) return;
-        const t = run.totals || {};
-        if (!t.true_labor_cost && !t.wages_subtotal) continue; // not a paystub-fed run
-        if (autoReconciledRef.current.has(run.id)) continue;
-        const grouped = findPaychexRowsInWindow(t);
-        if (grouped.all.length === 0) continue;
-        autoReconciledRef.current.add(run.id);
-        const res = await autoReconcilePaystub(t, run);
-        if (!active) return;
-        if (res.matched > 0 && !res.error) {
-          showToast?.(`Auto-reconciled paystub ${run.period_start} → ${run.period_end} · ${res.settled} ACH settled · ${res.shadows_created} shadows created`, "success");
-        }
-      }
-    })();
-    return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runs, transactions.length]);
+  // Background auto-reconciler removed by Anderson's "Reset A" decision.
+  // The paystub still imports into r7_payroll_runs, but the ledger stays
+  // bank-driven — no shadows are created, no Paychex rows get re-tagged.
+  // The 🔀 button on the run detail page is the only path that touches the
+  // ledger, and only when explicitly clicked.
 
   // Retry the auto-split for the currently-selected run. Useful when the
   // paystub was saved first and the bank ACH only arrived later — clicking
