@@ -2510,6 +2510,36 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
     if (t) setSplittingTxn(t);
   };
 
+  // Manual adjustment modal — for closing the gap between ledger and an
+  // external source (Square Sales Summary PDF, paystub web, etc) without
+  // leaving the P&L. Opens with the row's category pre-selected.
+  const [adjusting, setAdjusting] = useState(null); // { categoryHint, suggestedDescription, suggestedAmount }
+  const handleSaveAdjustment = async (form) => {
+    const cat = categories.find(c => c.id === form.category) || categories.find(c => c.name === form.category);
+    const row = {
+      id: form.id || `adj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      date: form.date,
+      description: form.description,
+      amount: parseFloat(form.amount),
+      category: cat?.id || null,
+      category_id: cat?.id || null,
+      account: form.account || "Manual adjustment",
+      reconciled: true,
+      source: "manual_adjustment",
+      tags: ["adjustment"],
+      notes: form.notes || "",
+    };
+    if (setTransactions) setTransactions(prev => [row, ...prev.filter(t => t.id !== row.id)]);
+    const res = await upsertTransactions([row], tenantId);
+    if (!res.ok) {
+      showToast?.("Save failed: " + (res.error || "unknown"), "error");
+      return false;
+    }
+    showToast?.(`Adjustment saved · ${fmt(row.amount)} in ${cat?.name || "Uncategorized"}`, "success");
+    setAdjusting(null);
+    return true;
+  };
+
   // Inline delete from the drill-down. Same pattern Transactions uses:
   // optimistically drop from local state, fire deleteTxn (no-op in demo),
   // surface success via toast. The drill-down auto-refreshes because totals
@@ -2903,6 +2933,7 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
                   <th style={{ textAlign: "right" }}>Bank-side</th>
                   <th style={{ textAlign: "right" }}>Δ ledger vs source</th>
                   <th>Notes</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -2913,6 +2944,11 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
                   sourceTag="Square"
                   bank={null}
                   note="Source = sum of square_net_sales (items + non-tip service charges − discounts − returns). Drift typically = aggregator double-count and/or legacy rows still tagged square_sale_gross."
+                  onAdjust={() => setAdjusting({
+                    categoryHint: "Revenue - Dining",
+                    suggestedDescription: `Revenue adjustment to match Square Sales Summary`,
+                    suggestedAmount: 0,
+                  })}
                 />
                 <SourceRow
                   label="Labor (wages + employer match)"
@@ -2923,6 +2959,11 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
                   note={sources.paystubRunsUsed > 0
                     ? `Source = sum of paystub true_labor_cost. Bank = Paychex ACH (~$${(sources.paystubBankDebit).toFixed(0)} expected, includes tips $${sources.paystubTips.toFixed(0)} + reimb $${sources.paystubReimb.toFixed(0)} that should be split out).`
                     : "No paystub data in window — import a paystub PDF in Payroll screen to populate."}
+                  onAdjust={() => setAdjusting({
+                    categoryHint: "Payroll",
+                    suggestedDescription: `Labor adjustment to match paystub source`,
+                    suggestedAmount: sources.laborSource - sources.laborLedger,
+                  })}
                 />
               </tbody>
             </table>
@@ -2949,13 +2990,147 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
           onSave={handleSaveSplit}
         />
       )}
+
+      {adjusting && (
+        <AdjustmentModal
+          categories={categories}
+          dateRange={dateRange}
+          hint={adjusting}
+          onClose={() => setAdjusting(null)}
+          onSave={handleSaveAdjustment}
+        />
+      )}
+    </div>
+  );
+}
+
+// Manual Adjustment modal — minimal form to insert a single
+// source='manual_adjustment' row. Used from the Source Reconciliation
+// panel when the ledger needs nudged to match an external authoritative
+// number (Square Sales Summary, paystub web, etc).
+function AdjustmentModal({ categories, dateRange = {}, hint = {}, onClose, onSave }) {
+  const lastDay = dateRange.end || new Date().toISOString().slice(0, 10);
+  const initialCat = categories.find(c => c.name === hint.categoryHint);
+  const [form, setForm] = useState({
+    category: initialCat?.id || "",
+    date: lastDay,
+    amount: hint.suggestedAmount ? String(Number(hint.suggestedAmount).toFixed(2)) : "",
+    description: hint.suggestedDescription || "Manual adjustment",
+    notes: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const incomeCats = categories.filter(c => c.type === "income");
+  const expenseCats = categories.filter(c => c.type === "expense");
+  const transferCats = categories.filter(c => c.type === "transfer");
+
+  const handleSave = async () => {
+    if (!form.category) return;
+    if (!form.amount || isNaN(parseFloat(form.amount))) return;
+    setSaving(true);
+    try { await onSave(form); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">Add adjustment</div>
+            <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4, fontFamily: "var(--font-mono)" }}>
+              Inserts a manual_adjustment row in the ledger. Use negative amount to reduce a category total.
+            </div>
+          </div>
+        </div>
+        <div className="modal-body" style={{ display: "grid", gap: 14 }}>
+          <label style={{ display: "block" }}>
+            <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Category</div>
+            <select
+              value={form.category}
+              onChange={(e) => setForm(f => ({ ...f, category: e.target.value }))}
+              style={{ width: "100%", background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)", padding: "8px 10px", borderRadius: 4, fontSize: 12 }}
+            >
+              <option value="">— select —</option>
+              <optgroup label="Income">
+                {incomeCats.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+              </optgroup>
+              <optgroup label="Expense">
+                {expenseCats.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+              </optgroup>
+              {transferCats.length > 0 && (
+                <optgroup label="Transfer / Pass-through">
+                  {transferCats.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                </optgroup>
+              )}
+            </select>
+          </label>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <label style={{ display: "block" }}>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Date</div>
+              <input
+                type="date"
+                value={form.date}
+                onChange={(e) => setForm(f => ({ ...f, date: e.target.value }))}
+                style={{ width: "100%", background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)", padding: "8px 10px", borderRadius: 4, fontSize: 12 }}
+              />
+            </label>
+            <label style={{ display: "block" }}>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Amount</div>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="-1234.56"
+                value={form.amount}
+                onChange={(e) => setForm(f => ({ ...f, amount: e.target.value }))}
+                style={{ width: "100%", background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)", padding: "8px 10px", borderRadius: 4, fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right" }}
+              />
+            </label>
+          </div>
+
+          <label style={{ display: "block" }}>
+            <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Description</div>
+            <input
+              type="text"
+              value={form.description}
+              onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))}
+              style={{ width: "100%", background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)", padding: "8px 10px", borderRadius: 4, fontSize: 12 }}
+            />
+          </label>
+
+          <label style={{ display: "block" }}>
+            <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Notes (optional)</div>
+            <textarea
+              value={form.notes}
+              onChange={(e) => setForm(f => ({ ...f, notes: e.target.value }))}
+              rows={2}
+              placeholder="e.g. matches Square Sales Summary May 2026"
+              style={{ width: "100%", background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)", padding: "8px 10px", borderRadius: 4, fontSize: 12, resize: "vertical" }}
+            />
+          </label>
+
+          {form.amount && !isNaN(parseFloat(form.amount)) && (
+            <div style={{ padding: "8px 12px", background: "var(--surface2)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+              Effect: {parseFloat(form.amount) < 0 ? "reduces" : "increases"} category total by{" "}
+              <strong style={{ color: parseFloat(form.amount) < 0 ? "var(--red)" : "var(--accent)" }}>
+                {fmt(Math.abs(parseFloat(form.amount)))}
+              </strong>
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-outline" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving || !form.category || !form.amount}>
+            {saving ? "Saving…" : "Save adjustment"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 // Render a single line of the Source reconciliation table. Drift is colored
 // by magnitude — under $50 = green (matches), $50-500 = neutral, >$500 = red.
-function SourceRow({ label, ledger, source, sourceTag, bank, note }) {
+function SourceRow({ label, ledger, source, sourceTag, bank, note, onAdjust }) {
   const drift = source != null ? (ledger - source) : null;
   const driftColor = drift == null
     ? "var(--text3)"
@@ -2983,6 +3158,22 @@ function SourceRow({ label, ledger, source, sourceTag, bank, note }) {
         {drift != null ? (drift >= 0 ? "+" : "") + fmt(drift) : "—"}
       </td>
       <td style={{ fontSize: 11, color: "var(--text3)", lineHeight: 1.5 }}>{note}</td>
+      <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+        {onAdjust && (
+          <button
+            onClick={onAdjust}
+            title="Add a manual adjustment to this category (e.g. force ledger to match the source)"
+            style={{
+              background: "transparent", border: "1px solid var(--border)",
+              color: "var(--text3)", padding: "4px 10px", borderRadius: 4,
+              cursor: "pointer", fontSize: 11, fontFamily: "var(--font-mono)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            + Adjust
+          </button>
+        )}
+      </td>
     </tr>
   );
 }
