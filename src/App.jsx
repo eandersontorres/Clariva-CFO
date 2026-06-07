@@ -3937,6 +3937,13 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     if (!statementPreview?.payouts?.length) return;
     const platform = statementPreview.platform;
     const filename = statementPreview.filename || "";
+    const platformLabel = {
+      doordash: "DoorDash", ubereats: "UberEats",
+      grubhub: "GrubHub",   wix: "Wix Restaurants",
+      other: "Aggregator",
+    }[platform] || platform;
+
+    // 1) Save the payout rows themselves (repository of statement data)
     const rows = statementPreview.payouts.map((p, i) => ({
       id: p.payout_id
         ? `${platform}_${p.payout_id}`
@@ -3962,7 +3969,79 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
       showToast("Save failed: " + (res.error || "unknown"), "error");
       return;
     }
-    showToast(`${rows.length} ${platform} payout${rows.length === 1 ? "" : "s"} saved`, "success");
+
+    // 2) Create per-payout ledger entries so the P&L reflects the breakdown.
+    // Each cost bucket lands in its real category:
+    //   commission  → Delivery Commissions (expense)
+    //   marketing   → Marketing (expense)
+    //   other_fees  → Delivery Commissions (lumped — usually misc platform fees)
+    // Gross sales are NOT booked because the orders are already in
+    // sq_sale_<date> via Square's "Other tender" line — adding here would
+    // double-count. Refunds + tax are passthrough (the platform settles tax
+    // as Marketplace Facilitator).
+    const findCat = (re, type = "expense") =>
+      (categories.find(c => c.type === type && re.test(c.name || "")) || {}).id;
+    const commCat   = findCat(/delivery\s*commission|aggregator\s*commission/i)
+                   || findCat(/commission|fee/i);
+    const mktCat    = findCat(/marketing|advertis/i);
+    const adjustments = [];
+    for (let i = 0; i < statementPreview.payouts.length; i++) {
+      const p = statementPreview.payouts[i];
+      const payoutKey = p.payout_id || `${p.arrival_date || "unknown"}_${i}`;
+      const baseId = `agg_${platform}_${payoutKey}`;
+      const baseAccount = platformLabel;
+      const baseNotes = `From ${platformLabel} statement ${filename}. Gross $${(+p.gross_sales || 0).toFixed(2)} → Net payout $${(+p.net_payout || 0).toFixed(2)}.`;
+
+      const commTotal = (+p.commission || 0) + (+p.other_fees || 0);
+      if (commTotal > 0 && commCat) {
+        adjustments.push({
+          id: `${baseId}_commission`,
+          date: p.arrival_date,
+          description: `${platformLabel} commission — payout ${payoutKey}`,
+          amount: -Math.round(commTotal * 100) / 100,
+          category: commCat, category_id: commCat,
+          account: baseAccount, source: "aggregator_breakdown",
+          reconciled: true, tags: ["aggregator", platform],
+          notes: baseNotes,
+        });
+      }
+      if ((+p.marketing_fee || 0) > 0 && mktCat) {
+        adjustments.push({
+          id: `${baseId}_marketing`,
+          date: p.arrival_date,
+          description: `${platformLabel} marketing fee — payout ${payoutKey}`,
+          amount: -Math.round((+p.marketing_fee) * 100) / 100,
+          category: mktCat, category_id: mktCat,
+          account: baseAccount, source: "aggregator_breakdown",
+          reconciled: true, tags: ["aggregator", platform],
+          notes: baseNotes,
+        });
+      }
+    }
+
+    if (adjustments.length > 0) {
+      const adjRes = await upsertTransactions(adjustments, tenantId);
+      if (adjRes.ok) {
+        // Optimistic local update so P&L reflects immediately
+        if (setTransactions) {
+          setTransactions(prev => {
+            const ids = new Set(adjustments.map(a => a.id));
+            const filtered = prev.filter(t => !ids.has(t.id));
+            return [...adjustments, ...filtered];
+          });
+        }
+        const missingCat = [];
+        if (!commCat) missingCat.push("Delivery Commissions");
+        if (!mktCat && statementPreview.payouts.some(p => +p.marketing_fee > 0)) missingCat.push("Marketing");
+        const note = missingCat.length ? ` · ⚠️ missing cat: ${missingCat.join(", ")}` : "";
+        showToast(`${rows.length} ${platform} payout${rows.length === 1 ? "" : "s"} saved · ${adjustments.length} ledger entries created${note}`, "success");
+      } else {
+        showToast(`${rows.length} payouts saved BUT ledger entries failed: ${adjRes.error || "unknown"}`, "error");
+      }
+    } else {
+      showToast(`${rows.length} ${platform} payout${rows.length === 1 ? "" : "s"} saved`, "success");
+    }
+
     const fresh = await fetchAggregatorPayouts(tenantId, dateRange);
     setAggregatorPayouts(fresh || []);
     setStatementPreview(null);
