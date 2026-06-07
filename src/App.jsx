@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -3933,6 +3933,51 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     }
   };
 
+  // Inline editor state for aggregator payouts table
+  const [editingPayoutId, setEditingPayoutId] = useState(null);
+  const [editingDate, setEditingDate] = useState("");
+
+  const handleSavePayoutDate = async (payoutId) => {
+    if (!editingDate) { setEditingPayoutId(null); return; }
+    const res = await updateAggregatorPayoutDate(payoutId, editingDate, tenantId);
+    if (!res.ok) {
+      showToast("Update failed: " + (res.error || "unknown"), "error");
+      return;
+    }
+    // Optimistic local update
+    setAggregatorPayouts(prev => prev.map(p => p.id === payoutId ? { ...p, arrival_date: editingDate } : p));
+    if (setTransactions) {
+      const platform = aggregatorPayouts.find(p => p.id === payoutId)?.platform;
+      if (platform) {
+        const payoutKey = String(payoutId).replace(new RegExp("^" + platform + "_"), "");
+        const prefix = `agg_${platform}_${payoutKey}_`;
+        setTransactions(prev => prev.map(t => String(t.id).startsWith(prefix) ? { ...t, date: editingDate } : t));
+      }
+    }
+    showToast("Payout date updated", "success");
+    setEditingPayoutId(null);
+    setEditingDate("");
+  };
+
+  const handleDeletePayout = async (payoutId) => {
+    if (!window.confirm("Delete this payout and its commission/marketing ledger entries? This cannot be undone.")) return;
+    const res = await deleteAggregatorPayout(payoutId, tenantId);
+    if (!res.ok) {
+      showToast("Delete failed: " + (res.error || "unknown"), "error");
+      return;
+    }
+    setAggregatorPayouts(prev => prev.filter(p => p.id !== payoutId));
+    if (setTransactions) {
+      const platform = aggregatorPayouts.find(p => p.id === payoutId)?.platform;
+      if (platform) {
+        const payoutKey = String(payoutId).replace(new RegExp("^" + platform + "_"), "");
+        const prefix = `agg_${platform}_${payoutKey}_`;
+        setTransactions(prev => prev.filter(t => !String(t.id).startsWith(prefix)));
+      }
+    }
+    showToast("Payout deleted", "success");
+  };
+
   const saveAggregatorPayouts = async () => {
     if (!statementPreview?.payouts?.length) return;
     const platform = statementPreview.platform;
@@ -4331,6 +4376,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                   <th style={{ textAlign: "right" }}>Refunds</th>
                   <th style={{ textAlign: "right" }}>Net payout</th>
                   <th style={{ textAlign: "right" }}>Comm %</th>
+                  <th style={{ width: 70 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -4344,9 +4390,35 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                     wix:      "var(--blue)",
                     other:    "var(--text3)",
                   }[p.platform] || "var(--text3)";
+                  const isEditing = editingPayoutId === p.id;
                   return (
                     <tr key={p.id}>
-                      <td className="mono" style={{ color: "var(--text3)" }}>{fmtDate(p.arrival_date)}</td>
+                      <td className="mono" style={{ color: "var(--text3)" }}>
+                        {isEditing ? (
+                          <input
+                            type="date"
+                            value={editingDate}
+                            onChange={(e) => setEditingDate(e.target.value)}
+                            onBlur={() => handleSavePayoutDate(p.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleSavePayoutDate(p.id);
+                              if (e.key === "Escape") { setEditingPayoutId(null); setEditingDate(""); }
+                            }}
+                            autoFocus
+                            style={{ background: "var(--surface2)", border: "1px solid var(--accentBorder)", color: "var(--text)", padding: "3px 6px", borderRadius: 3, fontSize: 11, fontFamily: "var(--font-mono)" }}
+                          />
+                        ) : (
+                          <span
+                            onClick={() => { setEditingPayoutId(p.id); setEditingDate(p.arrival_date); }}
+                            title="Click to edit arrival date"
+                            style={{ cursor: "pointer", padding: "2px 4px", borderRadius: 3 }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = "var(--surface2)"}
+                            onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                          >
+                            {fmtDate(p.arrival_date)}
+                          </span>
+                        )}
+                      </td>
                       <td>
                         <span className="tag" style={{ fontSize: 10, color: platformColor, border: `1px solid ${platformColor}40`, background: "transparent", textTransform: "uppercase" }}>
                           {p.platform}
@@ -4359,6 +4431,15 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                       <td className="mono text-right" style={{ color: "var(--accent)", fontWeight: 600 }}>{fmt(parseFloat(p.net_payout || 0))}</td>
                       <td className="mono text-right" style={{ color: commPct > 30 ? "var(--red)" : commPct > 20 ? "var(--yellow)" : "var(--accent)" }}>
                         {commPct.toFixed(1)}%
+                      </td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <button
+                          onClick={() => handleDeletePayout(p.id)}
+                          title="Delete this payout + its commission/marketing ledger entries"
+                          style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--red)", padding: "2px 6px", borderRadius: 3, cursor: "pointer", fontSize: 11, fontFamily: "var(--font-mono)" }}
+                        >
+                          🗑
+                        </button>
                       </td>
                     </tr>
                   );

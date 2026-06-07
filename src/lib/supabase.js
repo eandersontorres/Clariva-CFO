@@ -416,6 +416,61 @@ export async function fetchAggregatorPayouts(tenantId, { start, end } = {}) {
   return data || []
 }
 
+// Delete an aggregator payout AND its associated ledger entries (commission /
+// marketing rows that were auto-created by saveAggregatorPayouts). Ledger
+// entries are identified by id prefix `agg_<platform>_<payout_key>_`, where
+// payout_key matches the payout row's `id` suffix.
+export async function deleteAggregatorPayout(id, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return { ok: true, demo: true }
+  // 1) Find the payout to determine the ledger id prefix
+  const { data: payoutRow } = await supabase
+    .from('r7_aggregator_payouts').select('id, platform').eq('id', id).maybeSingle()
+  if (!payoutRow) return { ok: false, error: 'payout not found' }
+
+  // 2) Delete ledger entries with matching id prefix (best-effort).
+  //    The id format used by saveAggregatorPayouts is:
+  //    agg_<platform>_<payout_id>_commission  | _marketing
+  // payoutKey = the payout row id without the platform prefix
+  const payoutKey = String(id).replace(new RegExp('^' + payoutRow.platform + '_'), '')
+  const ledgerPrefix = `agg_${payoutRow.platform}_${payoutKey}_`
+  await supabase
+    .from('r7_ledger_transactions')
+    .delete()
+    .eq('tenant_id', tid)
+    .like('id', ledgerPrefix + '%')
+
+  // 3) Delete the payout row
+  const { error } = await supabase.from('r7_aggregator_payouts').delete().eq('id', id)
+  if (error) { console.error('deleteAggregatorPayout', error); return { ok: false, error: error.message } }
+  return { ok: true }
+}
+
+// Update the arrival_date of a payout AND of its associated ledger entries
+// so the P&L reflects the date change.
+export async function updateAggregatorPayoutDate(id, newDate, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return { ok: true, demo: true }
+  const { data: payoutRow } = await supabase
+    .from('r7_aggregator_payouts').select('id, platform').eq('id', id).maybeSingle()
+  if (!payoutRow) return { ok: false, error: 'payout not found' }
+  const payoutKey = String(id).replace(new RegExp('^' + payoutRow.platform + '_'), '')
+  const ledgerPrefix = `agg_${payoutRow.platform}_${payoutKey}_`
+  // Update payout
+  const { error: pErr } = await supabase
+    .from('r7_aggregator_payouts')
+    .update({ arrival_date: newDate })
+    .eq('id', id)
+  if (pErr) { console.error('updateAggregatorPayoutDate payout', pErr); return { ok: false, error: pErr.message } }
+  // Update ledger entries
+  await supabase
+    .from('r7_ledger_transactions')
+    .update({ date: newDate })
+    .eq('tenant_id', tid)
+    .like('id', ledgerPrefix + '%')
+  return { ok: true }
+}
+
 export async function upsertAggregatorPayouts(rows, tenantId) {
   if (!rows || rows.length === 0) return { ok: true, saved: 0 }
   const tid = tenantId || TENANT()
