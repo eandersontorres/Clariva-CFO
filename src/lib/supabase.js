@@ -403,6 +403,44 @@ export async function fetchSquarePayouts(tenantId, { start, end } = {}) {
   return data || []
 }
 
+// Aggregator payouts (DoorDash / UberEats / GrubHub / Wix) ingested from
+// monthly statements. Used by the Reconciliation screen to show payout vs
+// bank deposit per platform and to track real commissions instead of
+// estimating them.
+export async function fetchAggregatorPayouts(tenantId, { start, end } = {}) {
+  let q = supabase.from('r7_aggregator_payouts').select('*').eq('tenant_id', tenantId).order('arrival_date', { ascending: false })
+  if (start) q = q.gte('arrival_date', start)
+  if (end)   q = q.lte('arrival_date', end)
+  const { data, error } = await q
+  if (error) { console.error('fetchAggregatorPayouts', error); return [] }
+  return data || []
+}
+
+export async function upsertAggregatorPayouts(rows, tenantId) {
+  if (!rows || rows.length === 0) return { ok: true, saved: 0 }
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return { ok: true, saved: rows.length, demo: true }
+  const mapped = rows.map(r => ({ ...r, tenant_id: tid }))
+  const { data, error } = await supabase.from('r7_aggregator_payouts').upsert(mapped, { onConflict: 'id' }).select('id')
+  if (error) { console.error('upsertAggregatorPayouts', error); return { ok: false, error: error.message } }
+  return { ok: true, saved: (data || []).length }
+}
+
+// Parse a delivery aggregator statement (PDF/CSV) via the Anthropic-backed
+// endpoint. Returns the normalized envelope; caller persists what it wants.
+export async function parseAggregatorStatement({ pdfBase64, csvText, filename, platformHint }) {
+  const res = await fetch('/api/parse-aggregator-statement', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pdfBase64, csvText, filename, platformHint }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
 // Kitchen Performance summary — usage / theoretical / production / menu.
 // The math lives in the Kitchen repo (kitchen.clariva.cloud/api/performance-summary)
 // since that's the system of record for items, recipes, snapshots and production.

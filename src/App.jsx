@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -3854,8 +3854,12 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
 function Reconciliation({ transactions, setTransactions, saveTransactions, categories, tenantId, dateRange, showToast }) {
   const [kitchenInvoices, setKitchenInvoices] = useState([]);
   const [squarePayouts, setSquarePayouts] = useState([]);
+  const [aggregatorPayouts, setAggregatorPayouts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [syncingPayouts, setSyncingPayouts] = useState(false);
+  const [parsingStatement, setParsingStatement] = useState(false);
+  const [statementPreview, setStatementPreview] = useState(null);
+  const aggregatorFileInputRef = useRef(null);
 
   // Pull real invoices from Clariva Kitchen (r7_purchases) for the current window.
   // The mock list this used to render was already stale by the time the screen
@@ -3868,7 +3872,8 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
       fetchKitchenPurchases(tenantId, dateRange),
       fetchKitchenVendors(tenantId),
       fetchSquarePayouts(tenantId, dateRange),
-    ]).then(([purchases, vendors, payouts]) => {
+      fetchAggregatorPayouts(tenantId, dateRange),
+    ]).then(([purchases, vendors, payouts, aggPayouts]) => {
       if (cancelled) return;
       const vendorMap = Object.fromEntries((vendors || []).map(v => [v.id, v.name]));
       const invoices = (purchases || []).map(p => {
@@ -3884,6 +3889,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
       });
       setKitchenInvoices(invoices);
       setSquarePayouts(payouts || []);
+      setAggregatorPayouts(aggPayouts || []);
     }).catch(err => {
       console.error("Reconciliation fetch failed:", err);
     }).finally(() => {
@@ -3891,6 +3897,76 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     });
     return () => { cancelled = true; };
   }, [tenantId, dateRange?.start, dateRange?.end]);
+
+  // Aggregator statement upload — drop a PDF or CSV, AI extracts the per-payout
+  // breakdown, operator confirms in the preview modal, then we upsert to
+  // r7_aggregator_payouts. Same Anthropic flow as the paystub importer.
+  const handleAggregatorFile = async (file) => {
+    if (!file) return;
+    setParsingStatement(true);
+    showToast("Reading aggregator statement with AI... 10-20 seconds", "info");
+    try {
+      const ext = file.name.toLowerCase();
+      let payload;
+      if (ext.endsWith(".pdf")) {
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = e => resolve(String(e.target.result).split(",")[1]);
+          reader.onerror = () => reject(new Error("Read failed"));
+          reader.readAsDataURL(file);
+        });
+        payload = { pdfBase64: base64, filename: file.name };
+      } else if (ext.endsWith(".csv") || ext.endsWith(".tsv") || ext.endsWith(".txt")) {
+        const text = await file.text();
+        payload = { csvText: text, filename: file.name };
+      } else {
+        showToast("Drop a PDF or CSV statement", "error");
+        return;
+      }
+      const result = await parseAggregatorStatement(payload);
+      setStatementPreview(result);
+    } catch (err) {
+      console.error("parseAggregatorStatement", err);
+      showToast("Parse failed: " + err.message, "error");
+    } finally {
+      setParsingStatement(false);
+    }
+  };
+
+  const saveAggregatorPayouts = async () => {
+    if (!statementPreview?.payouts?.length) return;
+    const platform = statementPreview.platform;
+    const filename = statementPreview.filename || "";
+    const rows = statementPreview.payouts.map((p, i) => ({
+      id: p.payout_id
+        ? `${platform}_${p.payout_id}`
+        : `${platform}_${p.arrival_date || "unknown"}_${i}_${Date.now()}`,
+      platform,
+      period_start: statementPreview.period_start || null,
+      period_end:   statementPreview.period_end || null,
+      arrival_date: p.arrival_date || statementPreview.period_end || statementPreview.period_start,
+      gross_sales:   p.gross_sales,
+      commission:    p.commission,
+      marketing_fee: p.marketing_fee,
+      delivery_fee:  p.delivery_fee,
+      refunds:       p.refunds,
+      tax_remitted:  p.tax_remitted,
+      other_fees:    p.other_fees,
+      net_payout:    p.net_payout,
+      source: "manual_upload",
+      filename,
+      raw: p,
+    }));
+    const res = await upsertAggregatorPayouts(rows, tenantId);
+    if (!res.ok) {
+      showToast("Save failed: " + (res.error || "unknown"), "error");
+      return;
+    }
+    showToast(`${rows.length} ${platform} payout${rows.length === 1 ? "" : "s"} saved`, "success");
+    const fresh = await fetchAggregatorPayouts(tenantId, dateRange);
+    setAggregatorPayouts(fresh || []);
+    setStatementPreview(null);
+  };
 
   const handleSyncPayouts = async () => {
     if (!tenantId || tenantId === "demo") return;
@@ -4003,6 +4079,21 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
           <div className="page-subtitle">{dateRange?.start} → {dateRange?.end} · Square payouts ↔ bank deposits · Kitchen invoices ↔ bank transactions</div>
         </div>
         <div className="flex gap-8">
+          <input
+            ref={aggregatorFileInputRef}
+            type="file"
+            accept=".pdf,.csv,.tsv,.txt"
+            style={{ display: "none" }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAggregatorFile(f); e.target.value = ""; }}
+          />
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={parsingStatement || !tenantId || tenantId === "demo"}
+            onClick={() => aggregatorFileInputRef.current?.click()}
+            title="Drop a DoorDash / UberEats / GrubHub / Wix statement (PDF or CSV) — AI extracts gross/commission/fees per payout"
+          >
+            {parsingStatement ? "Reading…" : "📄 Import aggregator statement"}
+          </button>
           <button
             className="btn btn-outline btn-sm"
             onClick={handleSyncPayouts}
@@ -4126,6 +4217,86 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
           </div>
         )}
       </div>
+
+      {/* Aggregator Payouts — DoorDash / UberEats / GrubHub / Wix per-payout
+          breakdown ingested from monthly statements. Each row shows gross
+          vs commission vs net so the real commission rate is visible
+          (instead of the lump estimate we used to do via SQL). */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>
+            Aggregator Payouts (DoorDash / UberEats / GrubHub / Wix)
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>
+            {aggregatorPayouts.length} payout{aggregatorPayouts.length === 1 ? "" : "s"} in window
+          </div>
+        </div>
+        {aggregatorPayouts.length === 0 ? (
+          <div className="empty" style={{ padding: 30 }}>
+            <div className="empty-icon">🛵</div>
+            <div className="empty-title">No aggregator payouts ingested for this window</div>
+            <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>
+              Click <strong>📄 Import aggregator statement</strong> above and drop a DoorDash / UberEats / GrubHub / Wix file (PDF or CSV). AI extracts every payout's breakdown.
+            </div>
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Arrival</th>
+                  <th>Platform</th>
+                  <th style={{ textAlign: "right" }}>Gross</th>
+                  <th style={{ textAlign: "right" }}>Commission</th>
+                  <th style={{ textAlign: "right" }}>Marketing</th>
+                  <th style={{ textAlign: "right" }}>Refunds</th>
+                  <th style={{ textAlign: "right" }}>Net payout</th>
+                  <th style={{ textAlign: "right" }}>Comm %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {aggregatorPayouts.map(p => {
+                  const gross = parseFloat(p.gross_sales || 0);
+                  const commPct = gross > 0 ? (parseFloat(p.commission || 0) / gross * 100) : 0;
+                  const platformColor = {
+                    doordash: "var(--red)",
+                    ubereats: "var(--accent)",
+                    grubhub:  "var(--yellow)",
+                    wix:      "var(--blue)",
+                    other:    "var(--text3)",
+                  }[p.platform] || "var(--text3)";
+                  return (
+                    <tr key={p.id}>
+                      <td className="mono" style={{ color: "var(--text3)" }}>{fmtDate(p.arrival_date)}</td>
+                      <td>
+                        <span className="tag" style={{ fontSize: 10, color: platformColor, border: `1px solid ${platformColor}40`, background: "transparent", textTransform: "uppercase" }}>
+                          {p.platform}
+                        </span>
+                      </td>
+                      <td className="mono text-right" style={{ color: "var(--accent)" }}>{fmt(gross)}</td>
+                      <td className="mono text-right" style={{ color: "var(--red)" }}>−{fmt(parseFloat(p.commission || 0))}</td>
+                      <td className="mono text-right" style={{ color: "var(--red)" }}>{p.marketing_fee > 0 ? "−" + fmt(parseFloat(p.marketing_fee)) : "—"}</td>
+                      <td className="mono text-right" style={{ color: "var(--text3)" }}>{p.refunds > 0 ? "−" + fmt(parseFloat(p.refunds)) : "—"}</td>
+                      <td className="mono text-right" style={{ color: "var(--accent)", fontWeight: 600 }}>{fmt(parseFloat(p.net_payout || 0))}</td>
+                      <td className="mono text-right" style={{ color: commPct > 30 ? "var(--red)" : commPct > 20 ? "var(--yellow)" : "var(--accent)" }}>
+                        {commPct.toFixed(1)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {statementPreview && (
+        <AggregatorPreviewModal
+          data={statementPreview}
+          onClose={() => setStatementPreview(null)}
+          onSave={saveAggregatorPayouts}
+        />
+      )}
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>Invoice ↔ Bank Match</div>
@@ -7322,6 +7493,91 @@ function PaystubPreviewModal({ data, onClose, onSave }) {
         <div className="modal-footer">
           <button className="btn btn-outline" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={onSave}>Save to Payroll Run</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AggregatorPreviewModal({ data, onClose, onSave }) {
+  const platform = data.platform || "other";
+  const payouts = data.payouts || [];
+  const totals = data.totals || {};
+  const platformLabel = {
+    doordash: "DoorDash",
+    ubereats: "UberEats",
+    grubhub:  "GrubHub",
+    wix:      "Wix Restaurants",
+    other:    "Other",
+  }[platform] || platform;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 820 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">{platformLabel} statement extracted</div>
+            <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4, fontFamily: "var(--font-mono)" }}>
+              {data.filename || "statement"} · {payouts.length} payout{payouts.length === 1 ? "" : "s"} · period {data.period_start || "?"} → {data.period_end || "?"}
+            </div>
+          </div>
+        </div>
+        <div className="modal-body">
+          {totals && (
+            <div style={{ background: "var(--surface2)", padding: "12px 14px", borderRadius: 4, marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Totals</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, fontSize: 12 }}>
+                <div><span style={{ color: "var(--text3)" }}>Gross:</span> <strong className="mono" style={{ color: "var(--accent)" }}>{fmt(totals.gross_sales || 0)}</strong></div>
+                <div><span style={{ color: "var(--text3)" }}>Commission:</span> <strong className="mono" style={{ color: "var(--red)" }}>−{fmt(totals.commission || 0)}</strong></div>
+                <div><span style={{ color: "var(--text3)" }}>Marketing:</span> <strong className="mono" style={{ color: "var(--red)" }}>{totals.marketing_fee > 0 ? "−" + fmt(totals.marketing_fee) : "—"}</strong></div>
+                <div><span style={{ color: "var(--text3)" }}>Refunds:</span> <strong className="mono">{totals.refunds > 0 ? "−" + fmt(totals.refunds) : "—"}</strong></div>
+                <div><span style={{ color: "var(--text3)" }}>Delivery fee:</span> <strong className="mono">{totals.delivery_fee > 0 ? "+" + fmt(totals.delivery_fee) : "—"}</strong></div>
+                <div><span style={{ color: "var(--text3)" }}>Tax remitted:</span> <strong className="mono">{totals.tax_remitted > 0 ? fmt(totals.tax_remitted) : "—"}</strong></div>
+                <div><span style={{ color: "var(--text3)" }}>Other fees:</span> <strong className="mono">{totals.other_fees > 0 ? "−" + fmt(totals.other_fees) : "—"}</strong></div>
+                <div><span style={{ color: "var(--text3)" }}>Net payout:</span> <strong className="mono" style={{ color: "var(--accent)" }}>{fmt(totals.net_payout || 0)}</strong></div>
+              </div>
+            </div>
+          )}
+          <div className="table-wrap" style={{ maxHeight: 320, overflowY: "auto" }}>
+            <table style={{ fontSize: 11 }}>
+              <thead>
+                <tr>
+                  <th>Arrival</th>
+                  <th>Payout ID</th>
+                  <th style={{ textAlign: "right" }}>Gross</th>
+                  <th style={{ textAlign: "right" }}>Commission</th>
+                  <th style={{ textAlign: "right" }}>Mkt</th>
+                  <th style={{ textAlign: "right" }}>Refunds</th>
+                  <th style={{ textAlign: "right" }}>Net</th>
+                  <th style={{ textAlign: "right" }}>%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payouts.map((p, i) => {
+                  const g = parseFloat(p.gross_sales || 0);
+                  const pct = g > 0 ? (parseFloat(p.commission || 0) / g * 100) : 0;
+                  return (
+                    <tr key={i}>
+                      <td className="mono" style={{ color: "var(--text3)" }}>{p.arrival_date || "?"}</td>
+                      <td className="mono" style={{ fontSize: 10, color: "var(--text3)" }}>{(p.payout_id || "—").slice(0, 18)}</td>
+                      <td className="mono text-right" style={{ color: "var(--accent)" }}>{fmt(g)}</td>
+                      <td className="mono text-right" style={{ color: "var(--red)" }}>−{fmt(parseFloat(p.commission || 0))}</td>
+                      <td className="mono text-right" style={{ color: "var(--red)" }}>{p.marketing_fee > 0 ? "−" + fmt(parseFloat(p.marketing_fee)) : "—"}</td>
+                      <td className="mono text-right">{p.refunds > 0 ? "−" + fmt(parseFloat(p.refunds)) : "—"}</td>
+                      <td className="mono text-right" style={{ color: "var(--accent)", fontWeight: 600 }}>{fmt(parseFloat(p.net_payout || 0))}</td>
+                      <td className="mono text-right" style={{ color: pct > 30 ? "var(--red)" : pct > 20 ? "var(--yellow)" : "var(--accent)" }}>{pct.toFixed(1)}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-outline" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={onSave} disabled={payouts.length === 0}>
+            Save {payouts.length} payout{payouts.length === 1 ? "" : "s"}
+          </button>
         </div>
       </div>
     </div>
