@@ -4032,8 +4032,8 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     const adjustments = [];
     for (let i = 0; i < statementPreview.payouts.length; i++) {
       const p = statementPreview.payouts[i];
-      const payoutKey = p.payout_id || `${p.arrival_date || "unknown"}_${i}`;
-      const baseId = `agg_${platform}_${payoutKey}`;
+      const payoutRowId = rows[i].id; // matches the upserted r7_aggregator_payouts row exactly
+      const baseId = `agg_${payoutRowId}`;
       const baseAccount = platformLabel;
       const baseNotes = `From ${platformLabel} statement ${filename}. Gross $${(+p.gross_sales || 0).toFixed(2)} → Net payout $${(+p.net_payout || 0).toFixed(2)}.`;
 
