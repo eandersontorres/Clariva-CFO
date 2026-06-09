@@ -1183,17 +1183,63 @@ function loadPlaidLink() {
 // First click (no item stored) opens the Plaid Link popup to authenticate;
 // every click after that just runs an incremental /transactions/sync.
 // Bank of America requires Plaid in production with OAuth (see api/plaid-*.js).
+const PLAID_TOKEN_KEY = "clariva_plaid_link_token";
+
 function BankSyncButton({ tenantId, onSync, showToast }) {
   const [loading, setLoading] = useState(false);
   const [lastSync, setLastSync] = useState(null);
+
+  // OAuth re-entry. OAuth banks (Bank of America) redirect the whole page to the
+  // bank's site, then back to PLAID_REDIRECT_URI with ?oauth_state_id=... . On
+  // that return we must re-create Link with the SAME link_token (stashed in
+  // localStorage before we opened) plus receivedRedirectUri, or the handshake
+  // never finishes. Non-OAuth banks complete inline and never hit this path.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get("oauth_state_id")) return;
+    const link_token = localStorage.getItem(PLAID_TOKEN_KEY);
+    if (!link_token) return;
+    (async () => {
+      try {
+        const Plaid = await loadPlaidLink();
+        const cleanup = () => {
+          localStorage.removeItem(PLAID_TOKEN_KEY);
+          window.history.replaceState({}, "", window.location.pathname);
+        };
+        const handler = Plaid.create({
+          token: link_token,
+          receivedRedirectUri: window.location.href,
+          onSuccess: async (public_token, metadata) => {
+            cleanup();
+            try {
+              await exchangePlaidPublicToken(tenantId, public_token, metadata?.institution?.name || "Bank", metadata?.institution?.institution_id || null);
+              showToast("Bank connected. Pulling transactions...", "info");
+              await syncPlaidTransactions(tenantId);
+              setLastSync(new Date().toLocaleTimeString());
+              if (onSync) onSync();
+              showToast("Bank connected & synced", "success");
+            } catch (e) { showToast("Bank connect failed: " + e.message, "error"); }
+          },
+          onExit: (err) => {
+            cleanup();
+            if (err) showToast("Bank login failed: " + (err.display_message || err.error_message || "cancelled"), "error");
+          },
+        });
+        handler.open();
+      } catch (e) { showToast("Could not resume bank login: " + e.message, "error"); }
+    })();
+  }, []);
 
   const connect = () => new Promise(async (resolve, reject) => {
     try {
       const Plaid = await loadPlaidLink();
       const { link_token } = await createPlaidLinkToken(tenantId);
+      // Stash before opening so an OAuth full-page redirect can resume (above).
+      localStorage.setItem(PLAID_TOKEN_KEY, link_token);
       const handler = Plaid.create({
         token: link_token,
         onSuccess: async (public_token, metadata) => {
+          localStorage.removeItem(PLAID_TOKEN_KEY);
           try {
             await exchangePlaidPublicToken(
               tenantId,
@@ -1205,6 +1251,7 @@ function BankSyncButton({ tenantId, onSync, showToast }) {
           } catch (e) { reject(e); }
         },
         onExit: (err) => {
+          localStorage.removeItem(PLAID_TOKEN_KEY);
           if (err) reject(new Error(err.display_message || err.error_message || "Bank login failed"));
           else reject(new Error("__cancelled__"));
         },
