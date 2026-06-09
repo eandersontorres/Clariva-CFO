@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -1153,6 +1153,104 @@ function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
         <path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>
       </svg>
       {loading ? "Syncing..." : "Sync Marketing"}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
+    </button>
+  );
+}
+
+// Loads Plaid Link's CDN script once and resolves window.Plaid. Kept out of
+// index.html so the bundle doesn't pull it on every page load — only when the
+// user actually clicks "Sync Bank" the first time.
+function loadPlaidLink() {
+  return new Promise((resolve, reject) => {
+    if (window.Plaid) return resolve(window.Plaid);
+    const existing = document.getElementById("plaid-link-script");
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.Plaid));
+      existing.addEventListener("error", () => reject(new Error("Could not load Plaid Link")));
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = "plaid-link-script";
+    s.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+    s.onload = () => resolve(window.Plaid);
+    s.onerror = () => reject(new Error("Could not load Plaid Link"));
+    document.head.appendChild(s);
+  });
+}
+
+// "Sync Bank" — connects a real bank via Plaid and pulls transactions.
+// First click (no item stored) opens the Plaid Link popup to authenticate;
+// every click after that just runs an incremental /transactions/sync.
+// Bank of America requires Plaid in production with OAuth (see api/plaid-*.js).
+function BankSyncButton({ tenantId, onSync, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+
+  const connect = () => new Promise(async (resolve, reject) => {
+    try {
+      const Plaid = await loadPlaidLink();
+      const { link_token } = await createPlaidLinkToken(tenantId);
+      const handler = Plaid.create({
+        token: link_token,
+        onSuccess: async (public_token, metadata) => {
+          try {
+            await exchangePlaidPublicToken(
+              tenantId,
+              public_token,
+              metadata?.institution?.name || "Bank",
+              metadata?.institution?.institution_id || null
+            );
+            resolve();
+          } catch (e) { reject(e); }
+        },
+        onExit: (err) => {
+          if (err) reject(new Error(err.display_message || err.error_message || "Bank login failed"));
+          else reject(new Error("__cancelled__"));
+        },
+      });
+      handler.open();
+    } catch (e) { reject(e); }
+  });
+
+  const sync = async () => {
+    setLoading(true);
+    showToast("Pulling transactions from your bank...", "info");
+    try {
+      let result = await syncPlaidTransactions(tenantId);
+      if (result.not_connected) {
+        showToast("Opening secure bank login...", "info");
+        await connect();
+        showToast("Bank connected. Pulling transactions...", "info");
+        result = await syncPlaidTransactions(tenantId);
+      }
+      setLastSync(new Date().toLocaleTimeString());
+      const errored = (result.institutions || []).filter(i => i.error);
+      if (errored.length > 0) {
+        showToast("Bank sync issue: " + errored.map(i => i.name + " — " + i.error).join("; "), "error");
+      } else {
+        showToast(`Bank sync · ${result.added} new · ${result.modified} updated${result.removed ? " · " + result.removed + " removed" : ""}`, "success");
+      }
+      if (onSync) onSync();
+    } catch (err) {
+      if (err.message !== "__cancelled__") showToast("Bank sync failed: " + err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      className="btn btn-outline btn-sm"
+      onClick={sync}
+      disabled={loading}
+      style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
+      title="Connect a bank (Bank of America, etc.) via Plaid and pull transactions"
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
+        <line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/>
+      </svg>
+      {loading ? "Syncing..." : "Sync Bank"}
       {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
     </button>
   );
@@ -8630,6 +8728,11 @@ export default function App() {
               tenantId={TENANT_ID}
               dateRange={dateRange}
               onSync={handleMarketingSync}
+              showToast={showToast}
+            />
+            <BankSyncButton
+              tenantId={TENANT_ID}
+              onSync={() => loadAll(false)}
               showToast={showToast}
             />
             <button

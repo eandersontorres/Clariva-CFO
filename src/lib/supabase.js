@@ -391,6 +391,48 @@ export async function syncSquareSales(tenantId, range = {}) {
   return await res.json()
 }
 
+// ─── PLAID (bank connection) ──────────────────────────────────────────────────
+// Three thin wrappers over the /api/plaid-* serverless functions. The access
+// token never touches the browser — these only move public tokens and counts.
+export async function createPlaidLinkToken(tenantId) {
+  const res = await fetch('/api/plaid-link-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
+export async function exchangePlaidPublicToken(tenantId, publicToken, institutionName, institutionId) {
+  const res = await fetch('/api/plaid-exchange', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId, public_token: publicToken, institution_name: institutionName, institution_id: institutionId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
+export async function syncPlaidTransactions(tenantId) {
+  const res = await fetch('/api/plaid-sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
 // Square Payouts — the "money hitting the bank" feed. Used by the
 // Reconciliation screen to confirm every Square liquidation actually landed
 // in the bank account (PR1 = visibility, PR2 = auto-match).
