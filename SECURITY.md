@@ -81,7 +81,22 @@ credentials (Vercel env vars and/or Supabase keys), (2) revoke affected Plaid
 items via the Plaid dashboard, (3) assess scope using logs, and (4) notify
 affected parties as required. The security contact above is the escalation point.
 
-## 9. Change Management & Review
+## 9. Data Retention & Deletion
+
+- **Plaid access tokens** are retained only while the bank connection is active.
+  When an item is disconnected or a compromise is suspected, the token is revoked
+  via the Plaid dashboard and the corresponding row is removed from
+  `r7_ledger_plaid_items`.
+- **Transaction and ledger data** is retained while the account is active and for
+  as long as required to support bookkeeping and tax reporting (financial records
+  are generally retained for up to seven years, consistent with IRS guidance).
+- **On account closure or a verified deletion request**, the operator can delete the
+  tenant's ledger data from Supabase and revoke all associated Plaid items, after
+  which the data is no longer retained.
+- This retention and deletion practice is reviewed at least annually together with
+  this policy.
+
+## 10. Change Management & Review
 
 Code changes are version-controlled in Git and deployed via Vercel. This policy
 is reviewed at least annually and whenever the architecture materially changes

@@ -126,7 +126,13 @@ body(pdf,
      "(3) assess scope using logs, and (4) notify affected parties as required. The security "
      "contact above is the escalation point.")
 
-h2(pdf, "9. Change Management & Review")
+h2(pdf, "9. Data Retention & Deletion")
+bullet(pdf, "Plaid access tokens are retained only while the bank connection is active. When an item is disconnected or compromise is suspected, the token is revoked via the Plaid dashboard and the row is removed from r7_ledger_plaid_items.")
+bullet(pdf, "Transaction and ledger data is retained while the account is active and for as long as required to support bookkeeping and tax reporting (financial records are generally retained for up to seven years, consistent with IRS guidance).")
+bullet(pdf, "On account closure or a verified deletion request, the operator can delete the tenant's ledger data from Supabase and revoke all associated Plaid items, after which the data is no longer retained.")
+bullet(pdf, "This retention and deletion practice is reviewed at least annually together with this policy.")
+
+h2(pdf, "10. Change Management & Review")
 body(pdf,
      "Code changes are version-controlled in Git and deployed via Vercel. This policy is reviewed "
      "at least annually and whenever the architecture materially changes (e.g., adding a new data "
