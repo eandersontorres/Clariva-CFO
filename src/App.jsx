@@ -5013,6 +5013,91 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
     if (newBills.length > 0) setBills(prev => [...prev, ...newBills]);
   }, [transactions]);
 
+  // ─── Auto-reconcile bills against real bank activity ───────────────────────
+  // When the real bank debit shows up (Plaid sync, or an imported BoA statement)
+  // we match it to an open bill by amount + vendor + date and mark the bill paid
+  // automatically — no manual "Pay Bill" click needed. For Kitchen-sourced bills
+  // the synthetic invoice shadow is removed so the expense isn't double-counted;
+  // the real bank transaction stays as the system of record.
+  useEffect(() => {
+    // Bank-side outflows that could be a bill payment (exclude the Kitchen
+    // invoice shadow and the synthetic payment rows we create ourselves).
+    const bankOutflows = transactions.filter(t =>
+      t.amount < 0 &&
+      t.source !== "kitchen_purchase" &&
+      t.source !== "bill_payment" &&
+      !String(t.id).startsWith("payment_")
+    );
+    if (bankOutflows.length === 0) return;
+
+    // Txns already tied to a paid bill — never reuse them.
+    const usedTxnIds = new Set(bills.filter(b => b.status === "paid" && b.txnId).map(b => b.txnId));
+
+    const matchBill = (bill) => {
+      const dueTime = new Date(bill.dueDate).getTime();
+      const vTokens = String(bill.vendor || "").toUpperCase().split(/\s+/).filter(w => w.length >= 4);
+      if (vTokens.length === 0) return null; // need a vendor signal to be safe
+      return bankOutflows.find(t => {
+        if (usedTxnIds.has(t.id)) return false;
+        // amount within $1 or 1% (whichever is larger)
+        if (Math.abs(Math.abs(t.amount) - bill.amount) > Math.max(1, bill.amount * 0.01)) return false;
+        // payment lands within ~30 days before the due date and up to 10 after
+        const dt = (new Date(t.date).getTime() - dueTime) / 86400000;
+        if (dt < -30 || dt > 10) return false;
+        const desc = String(t.description || "").toUpperCase();
+        return vTokens.some(w => desc.includes(w));
+      });
+    };
+
+    const paidBills = [];
+    const dropTxnIds = []; // Kitchen invoice shadows to remove
+    const editTxns = [];   // real bank debits to tag with the bill's category
+
+    for (const bill of bills) {
+      if (bill.status === "paid") continue;
+      const m = matchBill(bill);
+      if (!m) continue;
+      usedTxnIds.add(m.id);
+      const method = m.account && m.account !== "Plaid" ? m.account : "Bank Transfer";
+      paidBills.push({
+        ...bill,
+        status: "paid",
+        paidDate: m.date,
+        paidMethod: method,
+        txnId: m.id,
+        notes: (bill.notes ? bill.notes + " · " : "") + "Auto-matched to bank transaction",
+      });
+      if (bill.source === "kitchen" && bill.txnId && bill.txnId !== m.id) dropTxnIds.push(bill.txnId);
+      const needCat = (!m.category || m.category === UNCATEGORIZED) && bill.category && bill.category !== UNCATEGORIZED;
+      if (needCat) editTxns.push({ ...m, category: bill.category, reconciled: true });
+      else if (!m.reconciled) editTxns.push({ ...m, reconciled: true });
+    }
+
+    if (paidBills.length === 0) return;
+
+    const paidById = new Map(paidBills.map(b => [b.id, b]));
+    setBills(prev => prev.map(b => paidById.get(b.id) || b));
+    paidBills.forEach(b => { if (saveBill) saveBill(b); });
+
+    if (dropTxnIds.length || editTxns.length) {
+      const dropSet = new Set(dropTxnIds);
+      const editMap = new Map(editTxns.map(t => [t.id, t]));
+      setTransactions(prev => prev
+        .filter(t => !dropSet.has(t.id))
+        .map(t => editMap.get(t.id) || t)
+      );
+      if (editTxns.length && saveTransactions) saveTransactions(editTxns);
+      dropTxnIds.forEach(id => { deleteTransaction(id).catch(() => {}); });
+    }
+
+    showToast(
+      paidBills.length === 1
+        ? "Bill auto-paid — " + paidBills[0].vendor + " (" + fmt(paidBills[0].amount) + ")"
+        : paidBills.length + " bills auto-reconciled from bank",
+      "success"
+    );
+  }, [transactions, bills]);
+
   const isOverdue = (b) => b.status !== "paid" && b.dueDate < today();
 
   const filtered = bills.filter(b => {
