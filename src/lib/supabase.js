@@ -433,6 +433,61 @@ export async function syncPlaidTransactions(tenantId) {
   return await res.json()
 }
 
+// ─── CLARIVA BANK (Unit embedded banking) ────────────────────────────────────
+// Thin wrappers over the /api/unit-* serverless functions. The Unit org token
+// stays server-side; these only move tenant_id + amounts + counts, never secrets.
+export async function onboardClarivaBank(tenantId, profile) {
+  const res = await fetch('/api/unit-onboard', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId, profile }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
+export async function fetchClarivaBankState(tenantId) {
+  const res = await fetch('/api/unit-accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
+export async function syncClarivaBank(tenantId) {
+  const res = await fetch('/api/unit-sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
+export async function transferClarivaBank(tenantId, fromPurpose, toPurpose, amount, description) {
+  const res = await fetch('/api/unit-transfer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId, from_purpose: fromPurpose, to_purpose: toPurpose, amount, description }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Server error ' + res.status }))
+    throw new Error(err.error || 'Server error ' + res.status)
+  }
+  return await res.json()
+}
+
 // Square Payouts — the "money hitting the bank" feed. Used by the
 // Reconciliation screen to confirm every Square liquidation actually landed
 // in the bank account (PR1 = visibility, PR2 = auto-match).
@@ -624,7 +679,120 @@ export async function fetchLaborShifts(tenantId, { start, end } = {}) {
   if (end)   q = q.lte('start_at', end + 'T23:59:59.999Z')
   const { data, error } = await q.limit(2000)
   if (error) { console.error('fetchLaborShifts', error); return [] }
-  return data
+  // Square-mirror rows get an explicit source tag so they're
+  // distinguishable from POS-native punch shifts downstream.
+  return data.map(s => ({ ...s, source: 'square' }))
+}
+
+// ─── POS-NATIVE PUNCH SHIFTS (bridge: clariva-pos team mgmt #21.3) ───
+// Reads pos_time_punches from Clariva POS and pairs adjacent
+// clock_in/clock_out per staff into shift rows shaped like
+// r7_labor_shifts (start_at, end_at, hours, employee_name, …) so the
+// Labor screen can render them alongside Square shifts. Wage fields
+// are zero until pos_staff carries an hourly_rate column — surface
+// the rows as "uncosted POS punches" in the UI when that day comes.
+// See docs/2026-05-team-management.md in clariva-pos for the contract.
+export async function fetchPosPunchShifts(tenantId, { start, end } = {}) {
+  let pq = supabase
+    .from('pos_time_punches')
+    .select('id, staff_id, kind, at')
+    .eq('tenant_id', tenantId)
+    .in('kind', ['clock_in', 'clock_out'])
+    .order('at', { ascending: true })
+  if (start) pq = pq.gte('at', start)
+  if (end)   pq = pq.lte('at', end + 'T23:59:59.999Z')
+  const { data: punches, error: pErr } = await pq.limit(5000)
+  if (pErr) {
+    // Table may not exist on a tenant whose POS isn't deployed yet — silent.
+    if (pErr.code !== '42P01') console.error('fetchPosPunchShifts', pErr)
+    return []
+  }
+  if (!punches || punches.length === 0) return []
+
+  // Hydrate staff names in one round trip. pos_staff lives in the same
+  // Supabase project (Kitchen-shared) so we read directly.
+  const staffIds = [...new Set(punches.map(p => p.staff_id).filter(Boolean))]
+  const nameByStaff = new Map()
+  if (staffIds.length > 0) {
+    const { data: staff, error: sErr } = await supabase
+      .from('pos_staff')
+      .select('id, name')
+      .in('id', staffIds)
+    if (sErr) {
+      if (sErr.code !== '42P01') console.error('fetchPosPunchShifts staff', sErr)
+    } else {
+      for (const s of staff || []) nameByStaff.set(s.id, s.name)
+    }
+  }
+
+  // Pair clock_in → next clock_out per staff. Open shifts (no matching
+  // clock_out yet) get end_at = now() and a flag so the UI can dim them.
+  const byStaff = new Map()
+  for (const p of punches) {
+    const arr = byStaff.get(p.staff_id) || []
+    arr.push(p)
+    byStaff.set(p.staff_id, arr)
+  }
+  const now = new Date()
+  const shifts = []
+  for (const [staffId, rows] of byStaff) {
+    let openAt = null
+    let openPunchId = null
+    for (const r of rows) {
+      const t = new Date(r.at)
+      if (r.kind === 'clock_in') {
+        openAt = t
+        openPunchId = r.id
+      } else if (r.kind === 'clock_out' && openAt) {
+        const hours = Math.max(0, (t - openAt) / 3600000)
+        shifts.push({
+          id: 'pos_' + openPunchId,
+          tenant_id: tenantId,
+          team_member_id: staffId,
+          square_employee_id: null,
+          employee_name: nameByStaff.get(staffId) || staffId.slice(0, 8),
+          start_at: openAt.toISOString(),
+          end_at: t.toISOString(),
+          hours: Number(hours.toFixed(4)),
+          wage_hourly: 0,
+          wage_total: 0,
+          tax_burden_rate: 0,
+          fully_loaded_cost: 0,
+          breaks_minutes: 0,
+          status: 'closed',
+          source: 'pos_punch',
+          open: false,
+        })
+        openAt = null
+        openPunchId = null
+      }
+    }
+    // Open shift: clock_in without matching clock_out before window end.
+    if (openAt) {
+      const hours = Math.max(0, (now - openAt) / 3600000)
+      shifts.push({
+        id: 'pos_' + openPunchId,
+        tenant_id: tenantId,
+        team_member_id: staffId,
+        square_employee_id: null,
+        employee_name: nameByStaff.get(staffId) || staffId.slice(0, 8),
+        start_at: openAt.toISOString(),
+        end_at: null,
+        hours: Number(hours.toFixed(4)),
+        wage_hourly: 0,
+        wage_total: 0,
+        tax_burden_rate: 0,
+        fully_loaded_cost: 0,
+        breaks_minutes: 0,
+        status: 'open',
+        source: 'pos_punch',
+        open: true,
+      })
+    }
+  }
+  // Descending by start_at to match Square mirror sort.
+  shifts.sort((a, b) => new Date(b.start_at) - new Date(a.start_at))
+  return shifts
 }
 
 export async function syncSquareLabor(tenantId, range = {}) {
