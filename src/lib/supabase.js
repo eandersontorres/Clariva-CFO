@@ -709,21 +709,33 @@ export async function fetchPosPunchShifts(tenantId, { start, end } = {}) {
   }
   if (!punches || punches.length === 0) return []
 
-  // Hydrate staff names in one round trip. pos_staff lives in the same
-  // Supabase project (Kitchen-shared) so we read directly.
+  // Hydrate staff names + hourly rate in one round trip. pos_staff lives
+  // in the same Supabase project (Kitchen-shared) so we read directly.
+  // hourly_rate_cents (migration 0034) is NULL until manager sets it via
+  // /team — until then the shift renders as "uncosted" (wage_total = 0).
   const staffIds = [...new Set(punches.map(p => p.staff_id).filter(Boolean))]
   const nameByStaff = new Map()
+  const rateByStaff = new Map()
   if (staffIds.length > 0) {
     const { data: staff, error: sErr } = await supabase
       .from('pos_staff')
-      .select('id, name')
+      .select('id, name, hourly_rate_cents')
       .in('id', staffIds)
     if (sErr) {
       if (sErr.code !== '42P01') console.error('fetchPosPunchShifts staff', sErr)
     } else {
-      for (const s of staff || []) nameByStaff.set(s.id, s.name)
+      for (const s of staff || []) {
+        nameByStaff.set(s.id, s.name)
+        if (s.hourly_rate_cents != null) {
+          rateByStaff.set(s.id, Number(s.hourly_rate_cents) / 100)
+        }
+      }
     }
   }
+  // Same +15% employer-tax-burden default Square uses as the baseline
+  // for fully_loaded_cost. CFO Labor already exposes a per-tenant
+  // override (r7_labor_shifts.tax_burden_rate) we'd surface here later.
+  const taxBurdenDefault = 0.15
 
   // Pair clock_in → next clock_out per staff. Open shifts (no matching
   // clock_out yet) get end_at = now() and a flag so the UI can dim them.
@@ -745,6 +757,8 @@ export async function fetchPosPunchShifts(tenantId, { start, end } = {}) {
         openPunchId = r.id
       } else if (r.kind === 'clock_out' && openAt) {
         const hours = Math.max(0, (t - openAt) / 3600000)
+        const wageHourly = rateByStaff.get(staffId) ?? 0
+        const wageTotal = wageHourly * hours
         shifts.push({
           id: 'pos_' + openPunchId,
           tenant_id: tenantId,
@@ -754,14 +768,15 @@ export async function fetchPosPunchShifts(tenantId, { start, end } = {}) {
           start_at: openAt.toISOString(),
           end_at: t.toISOString(),
           hours: Number(hours.toFixed(4)),
-          wage_hourly: 0,
-          wage_total: 0,
-          tax_burden_rate: 0,
-          fully_loaded_cost: 0,
+          wage_hourly: wageHourly,
+          wage_total: Number(wageTotal.toFixed(2)),
+          tax_burden_rate: wageHourly > 0 ? taxBurdenDefault : 0,
+          fully_loaded_cost: wageHourly > 0 ? Number((wageTotal * (1 + taxBurdenDefault)).toFixed(2)) : 0,
           breaks_minutes: 0,
           status: 'closed',
           source: 'pos_punch',
           open: false,
+          uncosted: wageHourly === 0,
         })
         openAt = null
         openPunchId = null
@@ -770,6 +785,8 @@ export async function fetchPosPunchShifts(tenantId, { start, end } = {}) {
     // Open shift: clock_in without matching clock_out before window end.
     if (openAt) {
       const hours = Math.max(0, (now - openAt) / 3600000)
+      const wageHourly = rateByStaff.get(staffId) ?? 0
+      const wageTotal = wageHourly * hours
       shifts.push({
         id: 'pos_' + openPunchId,
         tenant_id: tenantId,
@@ -779,14 +796,15 @@ export async function fetchPosPunchShifts(tenantId, { start, end } = {}) {
         start_at: openAt.toISOString(),
         end_at: null,
         hours: Number(hours.toFixed(4)),
-        wage_hourly: 0,
-        wage_total: 0,
-        tax_burden_rate: 0,
-        fully_loaded_cost: 0,
+        wage_hourly: wageHourly,
+        wage_total: Number(wageTotal.toFixed(2)),
+        tax_burden_rate: wageHourly > 0 ? taxBurdenDefault : 0,
+        fully_loaded_cost: wageHourly > 0 ? Number((wageTotal * (1 + taxBurdenDefault)).toFixed(2)) : 0,
         breaks_minutes: 0,
         status: 'open',
         source: 'pos_punch',
         open: true,
+        uncosted: wageHourly === 0,
       })
     }
   }
