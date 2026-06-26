@@ -69,10 +69,37 @@ const PFC_PRIMARY_TO_NAME = {
   GENERAL_MERCHANDISE: "Restaurant Supplies",
 };
 
+// Merchant-name overrides — checked BEFORE the PFC map because the merchant name
+// is sharper than Plaid's generic bucket (e.g. PAYCHEX -> Payroll, which Plaid
+// files under a generic transfer). Substring match on the uppercased merchant;
+// most specific patterns first (e.g. "GOOGLE ADS" before "GOOGLE").
+const MERCHANT_RULES = [
+  ["PAYCHEX", "Payroll"],
+  ["GOOGLE ADS", "Marketing"],
+  ["FACEBOOK", "Marketing"],
+  ["META PLATFORMS", "Marketing"],
+  ["MICROSOFT", "Subscription"],
+  ["ADOBE", "Subscription"],
+  ["WIX", "Subscription"],
+  ["ANTHROPIC", "Subscription"],
+  ["CLAUDE.AI", "Subscription"],
+  ["CLAUDE AI", "Subscription"],
+  ["SUPABASE", "Subscription"],
+  ["GOOGLE", "Subscription"],            // non-ads Google (Workspace, etc.)
+  ["ECOLAB", "Restaurant Supplies"],
+  ["360TRAINING", "Training"],
+  ["CINTAS", "Cintas"],
+  ["PUBLIC STORAGE", "Rent & Utilities"],
+];
+
 // Returns a category_id for an expense (outflow) txn, or null. Income/transfer
 // rows (ledger amount >= 0) are intentionally left uncategorized.
 function suggestCategoryId(t, nameToId) {
   if (-Number(t.amount) >= 0) return null; // only outflows
+  const desc = String(t.merchant_name || t.name || "").toUpperCase();
+  for (const [pat, acct] of MERCHANT_RULES) {
+    if (desc.includes(pat)) { const id = nameToId[acct.toLowerCase()]; if (id) return id; }
+  }
   const pfc = t.personal_finance_category || {};
   const name = (pfc.detailed && PFC_DETAILED_TO_NAME[pfc.detailed]) ||
                (pfc.primary && PFC_PRIMARY_TO_NAME[pfc.primary]) || null;
