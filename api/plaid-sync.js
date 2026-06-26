@@ -8,8 +8,10 @@
 // (debit/expense) and NEGATIVE for money entering (credit/income). This app uses
 // the opposite (positive = income), so we flip: ledger_amount = -plaid.amount.
 //
-// Transactions land UNCATEGORIZED (category_id = null), exactly like a CSV/PDF
-// import, so the existing auto-categorization + Bookkeeper workflow takes over.
+// Expense transactions are auto-categorized from Plaid's personal_finance_category
+// (mapped to the tenant's Chart of Accounts by name). Income/transfer rows are
+// left UNCATEGORIZED to avoid double-counting POS revenue already modeled from
+// Square. A user-set category is never overwritten on re-sync.
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -18,6 +20,64 @@ const PLAID_HOSTS = {
   development: "https://development.plaid.com",
   production: "https://production.plaid.com",
 };
+
+const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+
+// Plaid personal_finance_category -> tenant Chart of Accounts NAME (case-insensitive).
+// `detailed` is checked first (sharper), then `primary`. Names that don't exist in
+// the tenant's COA simply fall back to uncategorized. EXPENSE side only.
+const PFC_DETAILED_TO_NAME = {
+  FOOD_AND_DRINK_GROCERIES: "Food & Beverage",
+  FOOD_AND_DRINK_RESTAURANT: "Food & Beverage",
+  FOOD_AND_DRINK_BEER_WINE_AND_LIQUOR: "Food & Beverage",
+  GENERAL_SERVICES_ACCOUNTING_AND_FINANCIAL_PLANNING: "Accounting service",
+  GENERAL_SERVICES_CONSULTING_AND_LEGAL: "Accounting service",
+  GENERAL_SERVICES_INSURANCE: "Insurance",
+  GENERAL_SERVICES_ADVERTISING_AND_MARKETING: "Marketing",
+  GENERAL_SERVICES_AUTOMOTIVE: "Repairs & Maint.",
+  GENERAL_MERCHANDISE_OFFICE_SUPPLIES: "Office & Supplies",
+  GENERAL_MERCHANDISE_ONLINE_MARKETPLACES: "Restaurant Supplies",
+  RENT_AND_UTILITIES_RENT: "Rent & Utilities",
+  RENT_AND_UTILITIES_GAS_AND_ELECTRICITY: "Rent & Utilities",
+  RENT_AND_UTILITIES_WATER: "Rent & Utilities",
+  RENT_AND_UTILITIES_INTERNET_AND_CABLE: "Rent & Utilities",
+  RENT_AND_UTILITIES_TELEPHONE: "Rent & Utilities",
+  RENT_AND_UTILITIES_SEWAGE_AND_WASTE_MANAGEMENT: "Rent & Utilities",
+  TRANSPORTATION_GAS: "Fuel",
+  TRANSPORTATION_PARKING: "Fuel",
+  TRANSPORTATION_TOLLS: "Fuel",
+  BANK_FEES_ATM_FEES: "Bank Charge",
+  BANK_FEES_INSUFFICIENT_FUNDS: "Bank Charge",
+  BANK_FEES_OVERDRAFT_FEES: "Bank Charge",
+  BANK_FEES_FOREIGN_TRANSACTION_FEES: "Bank Charge",
+  BANK_FEES_INTEREST_CHARGE: "Interest Expense",
+  HOME_IMPROVEMENT_HARDWARE: "Repairs & Maint.",
+  HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE: "Repairs & Maint.",
+  LOAN_PAYMENTS_CAR_PAYMENT: "Car Kia",
+  LOAN_PAYMENTS_PERSONAL_LOAN_PAYMENT: "Loan",
+  LOAN_PAYMENTS_MORTGAGE_PAYMENT: "Loan",
+  LOAN_PAYMENTS_OTHER_PAYMENT: "Loan",
+  GOVERNMENT_AND_NON_PROFIT_TAX_PAYMENT: "Annual Texas Tax",
+};
+const PFC_PRIMARY_TO_NAME = {
+  FOOD_AND_DRINK: "Food & Beverage",
+  RENT_AND_UTILITIES: "Rent & Utilities",
+  BANK_FEES: "Bank Charge",
+  TRANSPORTATION: "Fuel",
+  LOAN_PAYMENTS: "Loan",
+  HOME_IMPROVEMENT: "Repairs & Maint.",
+  GENERAL_MERCHANDISE: "Restaurant Supplies",
+};
+
+// Returns a category_id for an expense (outflow) txn, or null. Income/transfer
+// rows (ledger amount >= 0) are intentionally left uncategorized.
+function suggestCategoryId(t, nameToId) {
+  if (-Number(t.amount) >= 0) return null; // only outflows
+  const pfc = t.personal_finance_category || {};
+  const name = (pfc.detailed && PFC_DETAILED_TO_NAME[pfc.detailed]) ||
+               (pfc.primary && PFC_PRIMARY_TO_NAME[pfc.primary]) || null;
+  return name ? (nameToId[name.toLowerCase()] || null) : null;
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -49,6 +109,15 @@ export default async function handler(req, res) {
       // The button uses this flag to know it must open Plaid Link first.
       return res.status(200).json({ not_connected: true, added: 0, modified: 0, removed: 0 });
     }
+
+    // Chart of Accounts: map account NAME -> id so we can categorize from Plaid's
+    // personal_finance_category without hardcoding tenant-specific ids.
+    const { data: accounts } = await supabase
+      .from("r7_ledger_accounts")
+      .select("id, name")
+      .eq("tenant_id", tenant_id);
+    const nameToId = {};
+    for (const a of accounts || []) nameToId[String(a.name).toLowerCase()] = a.id;
 
     let totalAdded = 0, totalModified = 0, totalRemoved = 0;
     const institutions = [];
@@ -97,7 +166,7 @@ export default async function handler(req, res) {
         date: t.date || t.authorized_date,
         description: String(t.merchant_name || t.name || "TRANSACTION").toUpperCase().trim().slice(0, 80),
         amount: -Number(t.amount),                 // flip Plaid's sign -> app convention
-        category_id: null,                         // land uncategorized, like an import
+        category_id: suggestCategoryId(t, nameToId), // auto-categorize expenses from Plaid PFC
         account: acctName[t.account_id] || item.institution_name || "Plaid",
         account_id: null,
         reconciled: false,
@@ -108,10 +177,24 @@ export default async function handler(req, res) {
 
       const rows = [...added, ...modified].map(toRow);
       if (rows.length > 0) {
-        const { error: upErr } = await supabase
-          .from("r7_ledger_transactions")
-          .upsert(rows, { onConflict: "id" });
-        if (upErr) return res.status(500).json({ error: "upsert plaid txns: " + upErr.message });
+        // Never overwrite a category the user (or a prior sync) already set:
+        // fetch existing category_ids and preserve any non-null value.
+        const existingCat = {};
+        for (const idsCh of chunk(rows.map(r => r.id), 200)) {
+          const { data: ex } = await supabase
+            .from("r7_ledger_transactions")
+            .select("id, category_id")
+            .in("id", idsCh);
+          for (const e of ex || []) if (e.category_id) existingCat[e.id] = e.category_id;
+        }
+        for (const r of rows) if (existingCat[r.id]) r.category_id = existingCat[r.id];
+
+        for (const rowsCh of chunk(rows, 200)) {
+          const { error: upErr } = await supabase
+            .from("r7_ledger_transactions")
+            .upsert(rowsCh, { onConflict: "id" });
+          if (upErr) return res.status(500).json({ error: "upsert plaid txns: " + upErr.message });
+        }
       }
       if (removedIds.length > 0) {
         await supabase.from("r7_ledger_transactions")
