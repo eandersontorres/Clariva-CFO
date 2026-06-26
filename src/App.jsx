@@ -6514,6 +6514,11 @@ const ACCOUNT_TYPE_META = {
 
 function calculateAccountBalance(account, transactions) {
   if (!account) return 0;
+  // Plaid-synced accounts (id prefix plaid_acct_) carry the authoritative live
+  // balance in opening_balance, refreshed every sync. We don't add activity on
+  // top because the loaded transactions are limited to the active date range,
+  // which would otherwise make the balance wrong.
+  if (account.id && String(account.id).startsWith("plaid_acct_")) return parseFloat(account.opening_balance) || 0;
   const opening = parseFloat(account.opening_balance) || 0;
   const linked = transactions.filter(t => t.account_id === account.id || (t.account && t.account === account.name));
   const sum = linked.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);

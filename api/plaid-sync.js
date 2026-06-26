@@ -234,6 +234,44 @@ export default async function handler(req, res) {
         .update({ cursor, status: "active", last_error: null, last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", item.id);
 
+      // ── Materialize each Plaid account into the Bank Accounts registry so it
+      //    appears (with its live balance) alongside manually-added accounts.
+      //    Plaid accounts use id prefix plaid_acct_; the frontend shows this
+      //    balance directly instead of opening + (date-range-limited) activity.
+      try {
+        const balRes = await fetch(`${base}/accounts/get`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ client_id: clientId, secret, access_token: item.access_token }),
+        });
+        const balData = await balRes.json();
+        if (balRes.ok && Array.isArray(balData.accounts)) {
+          const asOf = new Date().toISOString().split("T")[0];
+          const acctRows = balData.accounts.map((a) => {
+            const owed = a.type === "credit" || a.type === "loan"; // liabilities shown negative
+            const cur = Number(a.balances?.current ?? 0);
+            return {
+              id: "plaid_acct_" + a.account_id,
+              tenant_id,
+              name: a.mask ? `${a.name} ••${a.mask}` : a.name,
+              type: a.type === "credit" ? "credit" : a.type === "loan" ? "loan" : (a.subtype === "savings" ? "savings" : "checking"),
+              institution: item.institution_name || "Bank",
+              opening_balance: Number((owed ? -cur : cur).toFixed(2)),
+              opening_date: asOf,
+              credit_limit: a.balances?.limit != null ? Number(a.balances.limit) : null,
+              status: "active",
+              notes: "Synced from Plaid · balance as of " + asOf,
+            };
+          });
+          if (acctRows.length) {
+            const { error: accErr } = await supabase
+              .from("r7_ledger_bank_accounts")
+              .upsert(acctRows, { onConflict: "id" });
+            if (accErr) console.error("plaid account upsert:", accErr.message);
+          }
+        }
+      } catch (e) { console.error("plaid account materialize:", e.message); }
+
       totalAdded += added.length;
       totalModified += modified.length;
       totalRemoved += removedIds.length;
