@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardClarivaBank, fetchClarivaBankState, syncClarivaBank, transferClarivaBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -1153,6 +1153,151 @@ function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
         <path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>
       </svg>
       {loading ? "Syncing..." : "Sync Marketing"}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
+    </button>
+  );
+}
+
+// Loads Plaid Link's CDN script once and resolves window.Plaid. Kept out of
+// index.html so the bundle doesn't pull it on every page load — only when the
+// user actually clicks "Sync Bank" the first time.
+function loadPlaidLink() {
+  return new Promise((resolve, reject) => {
+    if (window.Plaid) return resolve(window.Plaid);
+    const existing = document.getElementById("plaid-link-script");
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.Plaid));
+      existing.addEventListener("error", () => reject(new Error("Could not load Plaid Link")));
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = "plaid-link-script";
+    s.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+    s.onload = () => resolve(window.Plaid);
+    s.onerror = () => reject(new Error("Could not load Plaid Link"));
+    document.head.appendChild(s);
+  });
+}
+
+// "Sync Bank" — connects a real bank via Plaid and pulls transactions.
+// First click (no item stored) opens the Plaid Link popup to authenticate;
+// every click after that just runs an incremental /transactions/sync.
+// Bank of America requires Plaid in production with OAuth (see api/plaid-*.js).
+const PLAID_TOKEN_KEY = "clariva_plaid_link_token";
+
+function BankSyncButton({ tenantId, onSync, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+
+  // OAuth re-entry. OAuth banks (Bank of America) redirect the whole page to the
+  // bank's site, then back to PLAID_REDIRECT_URI with ?oauth_state_id=... . On
+  // that return we must re-create Link with the SAME link_token (stashed in
+  // localStorage before we opened) plus receivedRedirectUri, or the handshake
+  // never finishes. Non-OAuth banks complete inline and never hit this path.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get("oauth_state_id")) return;
+    const link_token = localStorage.getItem(PLAID_TOKEN_KEY);
+    if (!link_token) return;
+    (async () => {
+      try {
+        const Plaid = await loadPlaidLink();
+        const cleanup = () => {
+          localStorage.removeItem(PLAID_TOKEN_KEY);
+          window.history.replaceState({}, "", window.location.pathname);
+        };
+        const handler = Plaid.create({
+          token: link_token,
+          receivedRedirectUri: window.location.href,
+          onSuccess: async (public_token, metadata) => {
+            cleanup();
+            try {
+              await exchangePlaidPublicToken(tenantId, public_token, metadata?.institution?.name || "Bank", metadata?.institution?.institution_id || null);
+              showToast("Bank connected. Pulling transactions...", "info");
+              await syncPlaidTransactions(tenantId);
+              setLastSync(new Date().toLocaleTimeString());
+              if (onSync) onSync();
+              showToast("Bank connected & synced", "success");
+            } catch (e) { showToast("Bank connect failed: " + e.message, "error"); }
+          },
+          onExit: (err) => {
+            cleanup();
+            if (err) showToast("Bank login failed: " + (err.display_message || err.error_message || "cancelled"), "error");
+          },
+        });
+        handler.open();
+      } catch (e) { showToast("Could not resume bank login: " + e.message, "error"); }
+    })();
+  }, []);
+
+  const connect = () => new Promise(async (resolve, reject) => {
+    try {
+      const Plaid = await loadPlaidLink();
+      const { link_token } = await createPlaidLinkToken(tenantId);
+      // Stash before opening so an OAuth full-page redirect can resume (above).
+      localStorage.setItem(PLAID_TOKEN_KEY, link_token);
+      const handler = Plaid.create({
+        token: link_token,
+        onSuccess: async (public_token, metadata) => {
+          localStorage.removeItem(PLAID_TOKEN_KEY);
+          try {
+            await exchangePlaidPublicToken(
+              tenantId,
+              public_token,
+              metadata?.institution?.name || "Bank",
+              metadata?.institution?.institution_id || null
+            );
+            resolve();
+          } catch (e) { reject(e); }
+        },
+        onExit: (err) => {
+          localStorage.removeItem(PLAID_TOKEN_KEY);
+          if (err) reject(new Error(err.display_message || err.error_message || "Bank login failed"));
+          else reject(new Error("__cancelled__"));
+        },
+      });
+      handler.open();
+    } catch (e) { reject(e); }
+  });
+
+  const sync = async () => {
+    setLoading(true);
+    showToast("Pulling transactions from your bank...", "info");
+    try {
+      let result = await syncPlaidTransactions(tenantId);
+      if (result.not_connected) {
+        showToast("Opening secure bank login...", "info");
+        await connect();
+        showToast("Bank connected. Pulling transactions...", "info");
+        result = await syncPlaidTransactions(tenantId);
+      }
+      setLastSync(new Date().toLocaleTimeString());
+      const errored = (result.institutions || []).filter(i => i.error);
+      if (errored.length > 0) {
+        showToast("Bank sync issue: " + errored.map(i => i.name + " — " + i.error).join("; "), "error");
+      } else {
+        showToast(`Bank sync · ${result.added} new · ${result.modified} updated${result.removed ? " · " + result.removed + " removed" : ""}`, "success");
+      }
+      if (onSync) onSync();
+    } catch (err) {
+      if (err.message !== "__cancelled__") showToast("Bank sync failed: " + err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      className="btn btn-outline btn-sm"
+      onClick={sync}
+      disabled={loading}
+      style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
+      title="Connect a bank (Bank of America, etc.) via Plaid and pull transactions"
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
+        <line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/>
+      </svg>
+      {loading ? "Syncing..." : "Sync Bank"}
       {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
     </button>
   );
@@ -4868,6 +5013,91 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
     if (newBills.length > 0) setBills(prev => [...prev, ...newBills]);
   }, [transactions]);
 
+  // ─── Auto-reconcile bills against real bank activity ───────────────────────
+  // When the real bank debit shows up (Plaid sync, or an imported BoA statement)
+  // we match it to an open bill by amount + vendor + date and mark the bill paid
+  // automatically — no manual "Pay Bill" click needed. For Kitchen-sourced bills
+  // the synthetic invoice shadow is removed so the expense isn't double-counted;
+  // the real bank transaction stays as the system of record.
+  useEffect(() => {
+    // Bank-side outflows that could be a bill payment (exclude the Kitchen
+    // invoice shadow and the synthetic payment rows we create ourselves).
+    const bankOutflows = transactions.filter(t =>
+      t.amount < 0 &&
+      t.source !== "kitchen_purchase" &&
+      t.source !== "bill_payment" &&
+      !String(t.id).startsWith("payment_")
+    );
+    if (bankOutflows.length === 0) return;
+
+    // Txns already tied to a paid bill — never reuse them.
+    const usedTxnIds = new Set(bills.filter(b => b.status === "paid" && b.txnId).map(b => b.txnId));
+
+    const matchBill = (bill) => {
+      const dueTime = new Date(bill.dueDate).getTime();
+      const vTokens = String(bill.vendor || "").toUpperCase().split(/\s+/).filter(w => w.length >= 4);
+      if (vTokens.length === 0) return null; // need a vendor signal to be safe
+      return bankOutflows.find(t => {
+        if (usedTxnIds.has(t.id)) return false;
+        // amount within $1 or 1% (whichever is larger)
+        if (Math.abs(Math.abs(t.amount) - bill.amount) > Math.max(1, bill.amount * 0.01)) return false;
+        // payment lands within ~30 days before the due date and up to 10 after
+        const dt = (new Date(t.date).getTime() - dueTime) / 86400000;
+        if (dt < -30 || dt > 10) return false;
+        const desc = String(t.description || "").toUpperCase();
+        return vTokens.some(w => desc.includes(w));
+      });
+    };
+
+    const paidBills = [];
+    const dropTxnIds = []; // Kitchen invoice shadows to remove
+    const editTxns = [];   // real bank debits to tag with the bill's category
+
+    for (const bill of bills) {
+      if (bill.status === "paid") continue;
+      const m = matchBill(bill);
+      if (!m) continue;
+      usedTxnIds.add(m.id);
+      const method = m.account && m.account !== "Plaid" ? m.account : "Bank Transfer";
+      paidBills.push({
+        ...bill,
+        status: "paid",
+        paidDate: m.date,
+        paidMethod: method,
+        txnId: m.id,
+        notes: (bill.notes ? bill.notes + " · " : "") + "Auto-matched to bank transaction",
+      });
+      if (bill.source === "kitchen" && bill.txnId && bill.txnId !== m.id) dropTxnIds.push(bill.txnId);
+      const needCat = (!m.category || m.category === UNCATEGORIZED) && bill.category && bill.category !== UNCATEGORIZED;
+      if (needCat) editTxns.push({ ...m, category: bill.category, reconciled: true });
+      else if (!m.reconciled) editTxns.push({ ...m, reconciled: true });
+    }
+
+    if (paidBills.length === 0) return;
+
+    const paidById = new Map(paidBills.map(b => [b.id, b]));
+    setBills(prev => prev.map(b => paidById.get(b.id) || b));
+    paidBills.forEach(b => { if (saveBill) saveBill(b); });
+
+    if (dropTxnIds.length || editTxns.length) {
+      const dropSet = new Set(dropTxnIds);
+      const editMap = new Map(editTxns.map(t => [t.id, t]));
+      setTransactions(prev => prev
+        .filter(t => !dropSet.has(t.id))
+        .map(t => editMap.get(t.id) || t)
+      );
+      if (editTxns.length && saveTransactions) saveTransactions(editTxns);
+      dropTxnIds.forEach(id => { deleteTransaction(id).catch(() => {}); });
+    }
+
+    showToast(
+      paidBills.length === 1
+        ? "Bill auto-paid — " + paidBills[0].vendor + " (" + fmt(paidBills[0].amount) + ")"
+        : paidBills.length + " bills auto-reconciled from bank",
+      "success"
+    );
+  }, [transactions, bills]);
+
   const isOverdue = (b) => b.status !== "paid" && b.dueDate < today();
 
   const filtered = bills.filter(b => {
@@ -7808,6 +8038,15 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
   const variance = actualPayroll - totalLoaded;
   const variancePct = totalLoaded > 0 ? (variance / totalLoaded) * 100 : 0;
 
+  // Source breakdown (bridge from clariva-pos #21.3): each shift carries
+  // source='square' or 'pos_punch'. Surface the split so drift between
+  // the two streams is visible without leaving the screen.
+  const squareShifts = shifts.filter(s => s.source !== 'pos_punch');
+  const posShifts = shifts.filter(s => s.source === 'pos_punch');
+  const squareHours = squareShifts.reduce((a, s) => a + parseFloat(s.hours || 0), 0);
+  const posHours = posShifts.reduce((a, s) => a + parseFloat(s.hours || 0), 0);
+  const hasMixed = squareShifts.length > 0 && posShifts.length > 0;
+
   return (
     <div className="page">
       <div className="page-header">
@@ -7816,6 +8055,16 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
           <div className="page-subtitle">
             {dateRange.start} → {dateRange.end} · From Square Labor · loaded cost = wage × (1 + {(taxBurden * 100).toFixed(1)}% employer tax burden)
           </div>
+          {hasMixed && (
+            <div className="page-subtitle" style={{ marginTop: 6, fontSize: 11, color: "var(--text3)" }}>
+              Source split · Square {squareHours.toFixed(1)}h ({squareShifts.length}) · POS punches {posHours.toFixed(1)}h ({posShifts.length}) · uncosted
+            </div>
+          )}
+          {!hasMixed && posShifts.length > 0 && (
+            <div className="page-subtitle" style={{ marginTop: 6, fontSize: 11, color: "var(--text3)" }}>
+              {posShifts.length} POS punch shift{posShifts.length === 1 ? "" : "s"} · {posHours.toFixed(1)}h · uncosted (pos_staff has no hourly rate yet)
+            </div>
+          )}
         </div>
         <button
           className="btn btn-outline btn-sm"
@@ -8213,6 +8462,213 @@ function LoginScreen() {
   );
 }
 
+// ─── CLARIVA BANK (Unit embedded banking) ─────────────────────────────────────
+// The tenant's own bank account, living INSIDE Clariva via Unit BaaS. Three
+// "envelopes" (deposit accounts): Operating, Tax Vault, Payroll Reserve. Money
+// moves between them instantly with bookPayments — the CFO Insights "set aside
+// $X for tax" recommendation becomes a real transfer. Transactions sync into
+// r7_ledger_transactions as source='unit', so reconciliation is automatic.
+//
+// SANDBOX: against UNIT_ENV=sandbox this is fully clickable (auto-approved KYB,
+// simulated funds). Going LIVE requires the Unit/partner-bank compliance package
+// (insurance, policies, pentest) — see CLAUDE.md roadmap.
+//
+// REQUIRED DISCLOSURE: Unit assigns the partner bank and the exact legal string
+// you must show. Replace PARTNER_BANK with the bank Unit gives your program.
+const PARTNER_BANK = "Partner Bank"; // e.g. "Thread Bank" / "i3 Bank" — set per Unit program
+
+const ENVELOPE_META = {
+  operating: { color: "var(--accent)", hint: "Square payouts land here" },
+  tax_vault: { color: "var(--blue)",   hint: "Sales-tax reserve" },
+  payroll:   { color: "var(--purple)", hint: "Payroll reserve" },
+};
+
+function ClarivaBank({ tenantId, onSync, showToast }) {
+  const isDemo = tenantId === "demo";
+  const [loading, setLoading] = useState(!isDemo);
+  const [busy, setBusy] = useState(false);
+  const [state, setState] = useState(null);     // { enrolled, envelopes, total_available, card, ... }
+  const [xfer, setXfer] = useState(null);        // transfer modal form or null
+
+  const refresh = useCallback(async () => {
+    if (isDemo) return;
+    try {
+      const s = await fetchClarivaBankState(tenantId);
+      setState(s);
+    } catch (e) {
+      showToast("Clariva Bank: " + e.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId, isDemo, showToast]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const enroll = async () => {
+    if (!window.confirm("Open a Clariva Bank account for this restaurant? In sandbox this is instant; in production it starts KYB review.")) return;
+    setBusy(true);
+    showToast("Opening Clariva Bank account…", "info");
+    try {
+      await onboardClarivaBank(tenantId);
+      showToast("Clariva Bank account opened", "success");
+      await refresh();
+    } catch (e) {
+      showToast("Could not open account: " + e.message, "error");
+    } finally { setBusy(false); }
+  };
+
+  const sync = async () => {
+    setBusy(true);
+    showToast("Syncing Clariva Bank transactions…", "info");
+    try {
+      const r = await syncClarivaBank(tenantId);
+      if (r.not_enrolled) { showToast("Open your Clariva Bank account first", "info"); }
+      else { showToast(`Clariva Bank · ${r.added} transaction${r.added === 1 ? "" : "s"} synced`, "success"); if (onSync) onSync(); }
+      await refresh();
+    } catch (e) {
+      showToast("Sync failed: " + e.message, "error");
+    } finally { setBusy(false); }
+  };
+
+  const doTransfer = async () => {
+    const amt = parseFloat(xfer.amount);
+    if (!amt || amt <= 0) { showToast("Enter an amount > 0", "error"); return; }
+    if (xfer.from === xfer.to) { showToast("Pick two different envelopes", "error"); return; }
+    setBusy(true);
+    try {
+      const r = await transferClarivaBank(tenantId, xfer.from, xfer.to, amt, xfer.description);
+      showToast(`Moved ${fmt(r.amount)}: ${r.from} → ${r.to}`, "success");
+      setXfer(null);
+      await refresh();
+      if (onSync) onSync();
+    } catch (e) {
+      showToast("Transfer failed: " + e.message, "error");
+    } finally { setBusy(false); }
+  };
+
+  const disclosure = (
+    <div style={{ marginTop: 18, fontSize: 11, color: "var(--text3)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
+      Banking services provided by {PARTNER_BANK}, Member FDIC. Clariva is a financial technology company, not a bank.
+      Deposits are eligible for FDIC pass-through insurance up to applicable limits. The Clariva debit card is issued pursuant to a license from the card network.
+    </div>
+  );
+
+  if (isDemo) {
+    return (
+      <div className="page">
+        <div className="page-header"><div><div className="page-title">Clariva Bank</div><div className="page-subtitle">Embedded banking — available in production</div></div></div>
+        <div className="card"><div className="empty"><div className="empty-icon">🏦</div><div className="empty-title">Clariva Bank runs in production only</div><div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6, maxWidth: 460 }}>Open the live tenant to enroll. Each restaurant gets real deposit accounts (Operating, Tax Vault, Payroll) and a debit card, powered by Unit.</div></div></div>
+        {disclosure}
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (<div className="page"><div className="page-header"><div className="page-title">Clariva Bank</div></div><div className="card" style={{ color: "var(--text3)", fontFamily: "var(--font-mono)", fontSize: 13 }}>Loading…</div></div>);
+  }
+
+  const enrolled = state?.enrolled;
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Clariva Bank</div>
+          <div className="page-subtitle">{enrolled ? "Your restaurant's bank, inside Clariva" : "Open a bank account for this restaurant"}</div>
+        </div>
+        {enrolled && (
+          <div className="flex items-center gap-12">
+            <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => setXfer({ from: "operating", to: "tax_vault", amount: "", description: "" })} style={{ borderColor: "var(--accentBorder)", color: "var(--accent)" }}>Move money</button>
+            <button className="btn btn-primary btn-sm" disabled={busy} onClick={sync}><Icon name="bank" size={13} /> {busy ? "Syncing…" : "Sync Clariva Bank"}</button>
+          </div>
+        )}
+      </div>
+
+      {!enrolled ? (
+        <div className="card" style={{ textAlign: "center", padding: "40px 28px" }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>🏦</div>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 24, color: "var(--text)", marginBottom: 8 }}>Open your Clariva Bank account</div>
+          <div style={{ fontSize: 13, color: "var(--text2)", maxWidth: 520, margin: "0 auto 22px", lineHeight: 1.6 }}>
+            Real FDIC-eligible deposit accounts, a Clariva debit card, and automatic envelopes for taxes and payroll — all inside the app. Square payouts land in Operating; CFO Insights moves the right amount into Tax Vault and Payroll for you.
+          </div>
+          <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", maxWidth: 560, margin: "0 auto 24px" }}>
+            {Object.entries(ENVELOPE_META).map(([k, m]) => (
+              <div className="kpi-card" key={k}><div className="kpi-label" style={{ color: m.color }}>{k.replace("_", " ")}</div><div className="kpi-delta" style={{ color: "var(--text3)" }}>{m.hint}</div></div>
+            ))}
+          </div>
+          {state?.status === "error" && state?.last_error && (
+            <div style={{ fontSize: 12, color: "var(--red)", marginBottom: 14 }}>Last attempt failed: {state.last_error}</div>
+          )}
+          <button className="btn btn-primary" disabled={busy} onClick={enroll}>{busy ? "Opening…" : "Open Clariva Bank Account"}</button>
+          {disclosure}
+        </div>
+      ) : (
+        <>
+          <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+            <div className="kpi-card">
+              <div className="kpi-label">Total available</div>
+              <div className="kpi-value" style={{ color: "var(--accent)" }}>{fmt(state.total_available || 0)}</div>
+              <div className="kpi-delta" style={{ color: "var(--text3)" }}>across all envelopes</div>
+            </div>
+            {(state.envelopes || []).map(e => (
+              <div className="kpi-card" key={e.account_id}>
+                <div className="kpi-label" style={{ color: ENVELOPE_META[e.purpose]?.color || "var(--text2)" }}>{e.name}</div>
+                <div className="kpi-value" style={{ color: e.error ? "var(--red)" : "var(--text)" }}>{e.error ? "—" : fmt(e.available != null ? e.available : e.balance || 0)}</div>
+                <div className="kpi-delta mono" style={{ color: "var(--text3)", fontSize: 10 }}>{e.error ? e.error : (e.account_number_masked || ENVELOPE_META[e.purpose]?.hint || "")}</div>
+              </div>
+            ))}
+          </div>
+
+          {state.card && (
+            <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, background: "linear-gradient(135deg, var(--surface), rgba(201,168,76,0.08))", border: "1px solid var(--accentBorder)" }}>
+              <div>
+                <div className="kpi-label" style={{ color: "var(--accent)" }}>Clariva Debit Card</div>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, letterSpacing: 2, color: "var(--text)", marginTop: 4 }}>•••• •••• •••• {state.card.last4 || "••••"}</div>
+              </div>
+              <div style={{ textAlign: "right", fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>VIRTUAL<br />{state.last_synced_at ? "synced " + fmtDate(state.last_synced_at) : "not synced yet"}</div>
+            </div>
+          )}
+
+          {disclosure}
+        </>
+      )}
+
+      {xfer && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setXfer(null)}>
+          <div className="modal" style={{ maxWidth: 460 }}>
+            <div className="modal-header"><div className="modal-title">Move money between envelopes</div></div>
+            <div className="modal-body">
+              <div className="flex items-center gap-12" style={{ marginBottom: 14 }}>
+                <div style={{ flex: 1 }}>
+                  <label className="kpi-label">From</label>
+                  <select className="input" value={xfer.from} onChange={e => setXfer({ ...xfer, from: e.target.value })}>
+                    {(state.envelopes || []).map(e => <option key={e.account_id} value={e.purpose}>{e.name}</option>)}
+                  </select>
+                </div>
+                <div style={{ alignSelf: "flex-end", paddingBottom: 8, color: "var(--text3)" }}>→</div>
+                <div style={{ flex: 1 }}>
+                  <label className="kpi-label">To</label>
+                  <select className="input" value={xfer.to} onChange={e => setXfer({ ...xfer, to: e.target.value })}>
+                    {(state.envelopes || []).map(e => <option key={e.account_id} value={e.purpose}>{e.name}</option>)}
+                  </select>
+                </div>
+              </div>
+              <label className="kpi-label">Amount</label>
+              <input className="input" type="number" min="0" step="0.01" placeholder="0.00" value={xfer.amount} onChange={e => setXfer({ ...xfer, amount: e.target.value })} autoFocus />
+              <label className="kpi-label" style={{ marginTop: 12, display: "block" }}>Note (optional)</label>
+              <input className="input" type="text" maxLength={50} placeholder="e.g. June sales tax set-aside" value={xfer.description} onChange={e => setXfer({ ...xfer, description: e.target.value })} />
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost btn-sm" onClick={() => setXfer(null)} disabled={busy}>Cancel</button>
+              <button className="btn btn-primary btn-sm" onClick={doTransfer} disabled={busy}>{busy ? "Moving…" : "Move money"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -8267,7 +8723,7 @@ export default function App() {
     if (TENANT_ID === "demo") return;
     if (showSpinner) setSyncing(true);
     try {
-      const [txns, cats, bgts, bls, projs, recs, accs, shifts, payrolls, tips] = await Promise.all([
+      const [txns, cats, bgts, bls, projs, recs, accs, shifts, payrolls, tips, posShifts] = await Promise.all([
         fetchTransactions(TENANT_ID, dateRange),
         fetchCategories(TENANT_ID),
         fetchBudgets(TENANT_ID),
@@ -8278,6 +8734,11 @@ export default function App() {
         fetchLaborShifts(TENANT_ID, dateRange),
         fetchPayrollRuns(TENANT_ID),
         fetchTipsDaily(TENANT_ID, dateRange),
+        // Bridge from clariva-pos team mgmt (#21.3). Native punches merge
+        // into the same shifts array so Labor renders both providers
+        // uniformly. Each row carries source='square' or 'pos_punch' so
+        // future filters can split / dedup as needed.
+        fetchPosPunchShifts(TENANT_ID, dateRange),
       ]);
       // Merge DB rows with whatever is in local state. A naive replace would
       // drop transactions that were just imported but haven't finished their
@@ -8297,7 +8758,10 @@ export default function App() {
       if (projs.length > 0) setProjects(projs.map(p => ({ ...p, projectedRevenue: p.projected_revenue })));
       setRecurring(recs);
       setBankAccounts(accs);
-      setLaborShifts(shifts);
+      // Merge Square mirror + POS-native punch shifts, sorted by start.
+      const merged = [...shifts, ...(posShifts || [])]
+        .sort((a, b) => new Date(b.start_at) - new Date(a.start_at));
+      setLaborShifts(merged);
       setPayrollRuns(payrolls);
       setTipsDaily(tips);
     } catch (err) {
@@ -8346,6 +8810,9 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_bank_accounts", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_labor_shifts", filter: `tenant_id=eq.${TENANT_ID}` },
+        () => loadAll(false))
+      // Bridge from clariva-pos: native punches stream into Labor too.
+      .on("postgres_changes", { event: "*", schema: "public", table: "pos_time_punches", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_payroll_runs", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
@@ -8476,6 +8943,7 @@ export default function App() {
     { id: "bills", label: "Bills & Payments", icon: "bills", badge: null },
     { id: "recurring", label: "Recurring", icon: "recurring", badge: recurring.filter(r => r.status === "active").length || null },
     { id: "accounts", label: "Bank Accounts", icon: "wallet", badge: bankAccounts.filter(a => a.status === "active").length || null },
+    { id: "clarivabank", label: "Clariva Bank", icon: "bank" },
     { id: "reconcile", label: "Reconciliation", icon: "reconcile" },
     { id: "tax", label: "Tax Summary", icon: "tax" },
   ];
@@ -8498,6 +8966,7 @@ export default function App() {
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
       case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
       case "accounts":     return <BankAccounts accounts={bankAccounts} setAccounts={setBankAccounts} saveBankAccount={saveBankAccount} deleteAcc={async(id)=>{setBankAccounts(p=>p.filter(a=>a.id!==id));if(TENANT_ID!=="demo")await deleteBankAccount(id);}} transactions={transactions} showToast={showToast} />;
+      case "clarivabank":  return <ClarivaBank tenantId={TENANT_ID} onSync={() => loadAll(false)} showToast={showToast} />;
       case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} showToast={showToast} />;
       case "tax":          return <TaxSummary transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} />;
       default: return null;
@@ -8630,6 +9099,11 @@ export default function App() {
               tenantId={TENANT_ID}
               dateRange={dateRange}
               onSync={handleMarketingSync}
+              showToast={showToast}
+            />
+            <BankSyncButton
+              tenantId={TENANT_ID}
+              onSync={() => loadAll(false)}
               showToast={showToast}
             />
             <button
