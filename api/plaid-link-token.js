@@ -23,9 +23,11 @@ const PLAID_HOSTS = {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const clientId = process.env.PLAID_CLIENT_ID;
-  const secret = process.env.PLAID_SECRET;
-  const env = process.env.PLAID_ENV || "sandbox";
+  // Trim defends against a trailing space/newline accidentally pasted into the
+  // Vercel env var — Plaid rejects those with INVALID_API_KEYS.
+  const clientId = (process.env.PLAID_CLIENT_ID || "").trim();
+  const secret = (process.env.PLAID_SECRET || "").trim();
+  const env = (process.env.PLAID_ENV || "sandbox").trim();
   const base = PLAID_HOSTS[env] || PLAID_HOSTS.sandbox;
   if (!clientId || !secret) return res.status(500).json({ error: "PLAID_CLIENT_ID / PLAID_SECRET not configured" });
 
@@ -43,7 +45,8 @@ export default async function handler(req, res) {
       language: "en",
     };
     // OAuth banks (Bank of America, Chase, etc.) require a registered redirect URI.
-    if (process.env.PLAID_REDIRECT_URI) body.redirect_uri = process.env.PLAID_REDIRECT_URI;
+    const redirect = (process.env.PLAID_REDIRECT_URI || "").trim();
+    if (redirect) body.redirect_uri = redirect;
 
     const r = await fetch(`${base}/link/token/create`, {
       method: "POST",
@@ -51,7 +54,13 @@ export default async function handler(req, res) {
       body: JSON.stringify(body),
     });
     const data = await r.json();
-    if (!r.ok) return res.status(502).json({ error: data.error_message || "Plaid link/token/create failed", plaid: data });
+    if (!r.ok) return res.status(502).json({
+      error: data.error_message || "Plaid link/token/create failed",
+      plaid: data,
+      // Safe diagnostics (no secret values): confirms which env/host was hit and
+      // whether the keys look like the right length (catches truncation/wrong env).
+      diag: { env, host: base, client_id_len: clientId.length, secret_len: secret.length },
+    });
 
     return res.status(200).json({ link_token: data.link_token, expiration: data.expiration, env });
   } catch (err) {

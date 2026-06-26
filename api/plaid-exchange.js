@@ -18,9 +18,9 @@ const PLAID_HOSTS = {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const clientId = process.env.PLAID_CLIENT_ID;
-  const secret = process.env.PLAID_SECRET;
-  const env = process.env.PLAID_ENV || "sandbox";
+  const clientId = (process.env.PLAID_CLIENT_ID || "").trim();
+  const secret = (process.env.PLAID_SECRET || "").trim();
+  const env = (process.env.PLAID_ENV || "sandbox").trim();
   const base = PLAID_HOSTS[env] || PLAID_HOSTS.sandbox;
   if (!clientId || !secret) return res.status(500).json({ error: "PLAID_CLIENT_ID / PLAID_SECRET not configured" });
 
