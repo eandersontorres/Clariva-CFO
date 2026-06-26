@@ -2215,7 +2215,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
       <div className="card" style={{ padding: 0 }}>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Reconciled</th><th style={{ textAlign: "right" }}>Amount</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Description</th><th style={{ textAlign: "right" }}>Amount</th><th>Category</th><th>Account</th><th>Reconciled</th><th></th></tr></thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr><td colSpan={7}><div className="empty"><div className="empty-icon">🔍</div><div className="empty-title">No transactions found</div></div></td></tr>
@@ -2242,6 +2242,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                       );
                     })()}
                   </td>
+                  <td className={t.amount >= 0 ? "amount-pos text-right" : "amount-neg text-right"} style={{ whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <button
@@ -2312,7 +2313,6 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                       {t.reconciled && <Icon name="check" size={12} color="var(--accent)" />}
                     </div>
                   </td>
-                  <td className={t.amount >= 0 ? "amount-pos text-right" : "amount-neg text-right"}>{fmt(t.amount)}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button
                       className="btn btn-ghost"
