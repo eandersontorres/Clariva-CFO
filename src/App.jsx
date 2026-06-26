@@ -5528,7 +5528,7 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
 }
 
 // ─── PROJECTS & PROJECTIONS ───────────────────────────────────────────────────
-function Projects({ transactions, projects, setProjects, saveProject, deleteProjectDB, dateRange = {} }) {
+function Projects({ transactions, projects, setProjects, saveProject, deleteProjectDB, categories = [], dateRange = {} }) {
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const YEAR = new Date().getFullYear();
 
@@ -8487,7 +8487,7 @@ export default function App() {
       case "labor":        return <Labor shifts={laborShifts} transactions={filteredByDate} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(true)} showToast={showToast} />;
       case "tips":         return <Tips tipsDaily={tipsDaily} shifts={laborShifts} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(false)} showToast={showToast} />;
       case "payroll":      return <Payroll runs={payrollRuns} shifts={laborShifts} tipsDaily={tipsDaily} transactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} onChange={() => loadAll(false)} showToast={showToast} />;
-      case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} dateRange={dateRange} />;
+      case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} categories={categories} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} payrollRuns={payrollRuns} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
