@@ -92,11 +92,25 @@ const MERCHANT_RULES = [
   ["PUBLIC STORAGE", "Rent & Utilities"],
 ];
 
+// Best merchant label for a transaction. merchant_name is the cleanest but is
+// often null on PENDING card transactions (Plaid returns a generic network
+// descriptor like "MAIL/TELEPHONE ORDER" in `name`). counterparties frequently
+// carries the real merchant even while pending, so we fall back to it before
+// the raw name.
+function merchantOf(t) {
+  if (t.merchant_name) return t.merchant_name;
+  if (Array.isArray(t.counterparties) && t.counterparties.length) {
+    const m = t.counterparties.find((c) => c && c.type === "merchant") || t.counterparties[0];
+    if (m && m.name) return m.name;
+  }
+  return t.name || "";
+}
+
 // Returns a category_id for an expense (outflow) txn, or null. Income/transfer
 // rows (ledger amount >= 0) are intentionally left uncategorized.
 function suggestCategoryId(t, nameToId) {
   if (-Number(t.amount) >= 0) return null; // only outflows
-  const desc = String(t.merchant_name || t.name || "").toUpperCase();
+  const desc = merchantOf(t).toUpperCase();
   for (const [pat, acct] of MERCHANT_RULES) {
     if (desc.includes(pat)) { const id = nameToId[acct.toLowerCase()]; if (id) return id; }
   }
@@ -191,7 +205,7 @@ export default async function handler(req, res) {
         id: "plaid_" + t.transaction_id,
         tenant_id,
         date: t.date || t.authorized_date,
-        description: String(t.merchant_name || t.name || "TRANSACTION").toUpperCase().trim().slice(0, 80),
+        description: (merchantOf(t) || "TRANSACTION").toUpperCase().trim().slice(0, 80),
         amount: -Number(t.amount),                 // flip Plaid's sign -> app convention
         category_id: suggestCategoryId(t, nameToId), // auto-categorize expenses from Plaid PFC
         account: acctName[t.account_id] || item.institution_name || "Plaid",
