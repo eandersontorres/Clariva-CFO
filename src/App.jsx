@@ -10,67 +10,68 @@ const STYLES = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
-    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    --bg: #0a0a0a;
-    --surface: #111111;
-    --surface2: #181818;
-    --surface3: #1f1f1f;
-    --border: rgba(201,168,76,0.1);
-    --border2: rgba(201,168,76,0.2);
-    --text: #E8E0D4;
-    --text2: #a09880;
-    --text3: #5a5245;
-    --accent: #C9A84C;
-    --accent2: #a8893a;
-    --accentBg: rgba(201,168,76,0.08);
-    --accentBorder: rgba(201,168,76,0.25);
-    --red: #c0614a;
-    --redBg: rgba(192,97,74,0.08);
-    --yellow: #d4a843;
-    --yellowBg: rgba(212,168,67,0.08);
-    --blue: #6a9abf;
-    --blueBg: rgba(106,154,191,0.08);
-    --purple: #9b8ea8;
-    --purpleBg: rgba(155,142,168,0.08);
+    /* Clariva rebrand (Caminho B v2): Inter, neutral base, CFO module color.
+       Rule: deep tone on light bg, signal tone on dark bg. */
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+    --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --bg: #101416;
+    --surface: #151A1C;
+    --surface2: #1B2124;
+    --surface3: #22292C;
+    --border: rgba(255,255,255,0.08);
+    --border2: rgba(255,255,255,0.14);
+    --text: #E8ECED;
+    --text2: #93A1A6;
+    --text3: #6C7A7E;
+    --accent: #46BC88;   /* cfo-signal */
+    --accent2: #5ECD9C;
+    --accentBg: rgba(70,188,136,0.10);
+    --accentBorder: rgba(70,188,136,0.30);
+    --red: #EE7E6B;      /* marketing-signal */
+    --redBg: rgba(238,126,107,0.10);
+    --yellow: #E8A93C;   /* kitchen-signal */
+    --yellowBg: rgba(232,169,60,0.10);
+    --blue: #4E9FB4;     /* petrol-signal */
+    --blueBg: rgba(78,159,180,0.10);
+    --purple: #A594E8;   /* book-signal */
+    --purpleBg: rgba(165,148,232,0.10);
     --sidebar: 220px;
     --radius: 10px;
     --radius2: 6px;
   }
 
   :root.theme-light {
-    /* Mirrors Clariva Purchase: slate surfaces + indigo accent (#6366F1) */
-    --bg: #F8FAFC;
+    /* Rebrand light: paper + ink, deep module tones */
+    --bg: #F6F6F4;
     --surface: #FFFFFF;
-    --surface2: #F1F5F9;
-    --surface3: #E2E8F0;
-    --border: #E2E8F0;
-    --border2: #CBD5E1;
-    --text: #0F172A;
-    --text2: #475569;
-    --text3: #94A3B8;
-    --accent: #6366F1;
-    --accent2: #4F46E5;
-    --accentBg: rgba(99,102,241,0.1);
-    --accentBorder: rgba(99,102,241,0.3);
-    --red: #dc2626;
-    --redBg: rgba(220,38,38,0.06);
-    --yellow: #ca8a04;
-    --yellowBg: rgba(202,138,4,0.08);
-    --blue: #2563eb;
-    --blueBg: rgba(37,99,235,0.06);
-    --purple: #7c3aed;
-    --purpleBg: rgba(124,58,237,0.06);
+    --surface2: #F1F1EE;
+    --surface3: #E8E8E5;
+    --border: #E8E8E5;
+    --border2: #D9D9D5;
+    --text: #0A0A0A;
+    --text2: #5A5A5A;
+    --text3: #9A9A9A;
+    --accent: #2E7D5B;   /* cfo-deep */
+    --accent2: #256A4C;
+    --accentBg: rgba(46,125,91,0.08);
+    --accentBorder: rgba(46,125,91,0.30);
+    --red: #B94A3D;      /* marketing-deep */
+    --redBg: rgba(185,74,61,0.07);
+    --yellow: #B07A1E;   /* kitchen-deep */
+    --yellowBg: rgba(176,122,30,0.08);
+    --blue: #2D5FA6;     /* checklist-deep */
+    --blueBg: rgba(45,95,166,0.07);
+    --purple: #6350A6;   /* book-deep */
+    --purpleBg: rgba(99,80,166,0.07);
   }
   :root.theme-light .sidebar { background: #FFFFFF; border-right: 1px solid var(--border); }
-  :root.theme-light .logo-icon { background: var(--accentBg); }
   :root.theme-light .nav-item:hover { background: var(--surface2); }
   :root.theme-light .nav-item.active { background: var(--accentBg); color: var(--accent); }
   :root.theme-light .btn-primary { color: #FFFFFF; }
-  :root.theme-light .card { box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
-  :root.theme-light .kpi-card { box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
-  :root.theme-light .modal { box-shadow: 0 20px 50px rgba(15,23,42,0.18); }
-  :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(15,23,42,0.15); }
+  :root.theme-light .card { box-shadow: 0 1px 2px rgba(10,10,10,0.04); }
+  :root.theme-light .kpi-card { box-shadow: 0 1px 2px rgba(10,10,10,0.04); }
+  :root.theme-light .modal { box-shadow: 0 20px 50px rgba(10,10,10,0.16); }
+  :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(10,10,10,0.15); }
 
   html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-sans); letter-spacing: 0.01em; }
   #root { height: 100%; }
@@ -84,7 +85,7 @@ const STYLES = `
   /* SIDEBAR */
   .sidebar {
     width: var(--sidebar);
-    background: #0d0d0d;
+    background: #0C0F11;
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
@@ -98,13 +99,12 @@ const STYLES = `
   }
   .logo-icon {
     width: 34px; height: 34px; flex-shrink: 0;
-    background: var(--accentBg);
-    border: 1px solid var(--accentBorder);
-    border-radius: 6px;
+    color: var(--text);
     display: flex; align-items: center; justify-content: center;
   }
   .logo-text { display: flex; flex-direction: column; }
-  .logo-mark { font-family: var(--font-sans); font-weight: 600; font-size: 15px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); line-height: 1; }
+  .logo-mark { font-family: var(--font-sans); font-weight: 700; font-size: 17px; letter-spacing: -0.03em; color: var(--text); line-height: 1; }
+  .logo-mark .logo-dot { color: var(--accent); }
   .logo-sub { font-family: var(--font-mono); font-size: 10px; font-weight: 500; color: var(--accent); letter-spacing: 0.14em; text-transform: uppercase; margin-top: 4px; line-height: 1; }
   .sidebar-section { padding: 16px 10px 8px; }
   .sidebar-section-label { font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); opacity: 0.6; padding: 0 8px 8px; font-family: var(--font-mono); }
@@ -140,7 +140,7 @@ const STYLES = `
   .btn-outline:hover { background: var(--surface2); color: var(--text); }
   .btn-ghost { background: transparent; color: var(--text3); border: none; padding: 6px 10px; }
   .btn-ghost:hover { color: var(--text); background: var(--surface2); }
-  .btn-danger { background: var(--redBg); color: var(--red); border: 1px solid rgba(240,94,94,0.2); }
+  .btn-danger { background: var(--redBg); color: var(--red); border: 1px solid color-mix(in srgb, var(--red) 25%, transparent); }
   .btn-sm { padding: 5px 11px; font-size: 12px; }
 
   /* CARDS */
@@ -175,10 +175,10 @@ const STYLES = `
   /* TAGS / BADGES */
   .tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 99px; font-size: 10px; font-family: var(--font-mono); font-weight: 400; border: 1px solid transparent; white-space: nowrap; }
   .tag-green { background: var(--accentBg); color: var(--accent); border-color: var(--accentBorder); }
-  .tag-red { background: var(--redBg); color: var(--red); border-color: rgba(240,94,94,0.2); }
-  .tag-yellow { background: var(--yellowBg); color: var(--yellow); border-color: rgba(240,200,74,0.2); }
-  .tag-blue { background: var(--blueBg); color: var(--blue); border-color: rgba(74,159,240,0.2); }
-  .tag-purple { background: var(--purpleBg); color: var(--purple); border-color: rgba(164,127,240,0.2); }
+  .tag-red { background: var(--redBg); color: var(--red); border-color: color-mix(in srgb, var(--red) 25%, transparent); }
+  .tag-yellow { background: var(--yellowBg); color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 25%, transparent); }
+  .tag-blue { background: var(--blueBg); color: var(--blue); border-color: color-mix(in srgb, var(--blue) 25%, transparent); }
+  .tag-purple { background: var(--purpleBg); color: var(--purple); border-color: color-mix(in srgb, var(--purple) 25%, transparent); }
   .tag-gray { background: var(--surface2); color: var(--text2); border-color: var(--border2); }
 
   /* FORMS */
@@ -1302,6 +1302,17 @@ function BankSyncButton({ tenantId, onSync, showToast }) {
     </button>
   );
 }
+
+// ─── BRAND MARK ───────────────────────────────────────────────────────────────
+// Clariva mark (Caminho B v2): two symmetric "C"s + center dot in the module
+// color. Strokes follow currentColor so it adapts to dark/light themes.
+const ClarivaMark = ({ size = 34 }) => (
+  <svg width={size} height={size} viewBox="0 0 100 100" fill="none" aria-label="Clariva">
+    <path d="M46.31 34.24 A20 20 0 1 0 46.31 65.76" stroke="currentColor" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M53.69 65.76 A20 20 0 1 0 53.69 34.24" stroke="currentColor" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="50" cy="50" r="8" fill="var(--accent)" />
+  </svg>
+);
 
 // ─── ICONS (inline SVG) ───────────────────────────────────────────────────────
 const Icon = ({ name, size = 16, color = "currentColor" }) => {
@@ -8428,12 +8439,10 @@ function LoginScreen() {
         <div className="card" style={{ width: "100%", maxWidth: 380, padding: 32 }}>
           <div className="flex items-center gap-10" style={{ marginBottom: 24 }}>
             <div className="logo-icon">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.65 1.87 1.96 0 2.4-.98 2.4-1.59 0-.83-.44-1.61-2.67-2.14-2.48-.6-4.18-1.62-4.18-3.67 0-1.72 1.39-2.84 3.11-3.21V4h2.67v1.95c1.86.45 2.79 1.86 2.85 3.39H14.3c-.05-1.11-.64-1.87-2.22-1.87-1.5 0-2.4.68-2.4 1.64 0 .84.65 1.39 2.67 1.91s4.18 1.39 4.18 3.91c-.01 1.83-1.38 2.83-3.12 3.16z" fill="var(--accent)"/>
-              </svg>
+              <ClarivaMark size={34} />
             </div>
             <div className="logo-text">
-              <div className="logo-mark">CLARIVA</div>
+              <div className="logo-mark">Clariva<span className="logo-dot">.</span></div>
               <div className="logo-sub">CFO</div>
             </div>
           </div>
@@ -8625,7 +8634,7 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
           </div>
 
           {state.card && (
-            <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, background: "linear-gradient(135deg, var(--surface), rgba(201,168,76,0.08))", border: "1px solid var(--accentBorder)" }}>
+            <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, background: "linear-gradient(135deg, var(--surface), var(--accentBg))", border: "1px solid var(--accentBorder)" }}>
               <div>
                 <div className="kpi-label" style={{ color: "var(--accent)" }}>Clariva Debit Card</div>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, letterSpacing: 2, color: "var(--text)", marginTop: 4 }}>•••• •••• •••• {state.card.last4 || "••••"}</div>
@@ -9007,12 +9016,10 @@ export default function App() {
         <nav className="sidebar">
           <div className="sidebar-logo">
             <div className="logo-icon">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.65 1.87 1.96 0 2.4-.98 2.4-1.59 0-.83-.44-1.61-2.67-2.14-2.48-.6-4.18-1.62-4.18-3.67 0-1.72 1.39-2.84 3.11-3.21V4h2.67v1.95c1.86.45 2.79 1.86 2.85 3.39H14.3c-.05-1.11-.64-1.87-2.22-1.87-1.5 0-2.4.68-2.4 1.64 0 .84.65 1.39 2.67 1.91s4.18 1.39 4.18 3.91c-.01 1.83-1.38 2.83-3.12 3.16z" fill="var(--accent)"/>
-              </svg>
+              <ClarivaMark size={34} />
             </div>
             <div className="logo-text">
-              <div className="logo-mark">Clariva</div>
+              <div className="logo-mark">Clariva<span className="logo-dot">.</span></div>
               <div className="logo-sub">CFO</div>
             </div>
           </div>
