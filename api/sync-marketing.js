@@ -1,4 +1,4 @@
-// Bridge: Clariva Marketing -> Clariva CFO.
+// Bridge: Favo Marketing -> Favo CFO.
 // Reads mkt_ad_snapshots via service role (Marketing has RLS that blocks
 // the anon key the browser uses) and returns one accrual-style transaction
 // per (ad_account x month), ID-stable so repeated syncs are idempotent.

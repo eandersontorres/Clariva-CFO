@@ -1,6 +1,6 @@
 # Handoff — Square → Finance revenue feed is stale (TorresBee)
 
-> **Created:** 2026-05-25 · by the Clariva POS validation work.
+> **Created:** 2026-05-25 · by the Favo POS validation work.
 > **For:** whoever owns the Square → Finance (CFO/ledger) ingestion here.
 > **Severity:** revenue not being booked — DRE/cash-flow understated.
 
@@ -144,7 +144,7 @@ Existing Square feed granularity: **1 `square_sale_gross` row per day**
    (the POS already has per-tender and per-category breakdowns if you
    want to mirror them — see `sales_report()` / `product_mix()` RPCs).
 
-> **Do NOT** have the POS write these ledger rows. Per Clariva POS rule
+> **Do NOT** have the POS write these ledger rows. Per Favo POS rule
 > #10, the POS only reads `r7_*`. The booking stays a CFO/Finance
 > responsibility. The POS provides validation only.
 

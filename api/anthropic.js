@@ -1,4 +1,4 @@
-// api/anthropic.js — same pattern as Clariva Kitchen
+// api/anthropic.js — same pattern as Favo Kitchen
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')

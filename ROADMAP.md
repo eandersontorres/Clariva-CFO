@@ -1,4 +1,4 @@
-# Clariva CFO — Roadmap
+# Favo CFO — Roadmap
 
 Live: [cfo.clariva.cloud](https://cfo.clariva.cloud) · Pilot tenant: TorresBee (Round Rock, TX)
 
@@ -17,7 +17,7 @@ Effort tags: `XS` < 2h · `S` half-day · `M` 1-2 days · `L` 3-5 days · `XL` 1
 - **Payroll** (`r7_payroll_runs`) — prep + Paychex CSV export. Pulls hours from Square, computes FLSA overtime per ISO week, tips pre-populated from the Tips screen, bonus/tips editable inline. Submit creates a shadow ledger transaction for bank reconciliation. Does NOT move money — Paychex stays the regulated processor.
 - **Sync Sales** (`api/sync-square-sales`) — daily gross sales + processing fees from Square Orders as the canonical revenue source. Re-tags bank-side Square deposits to `source='square_settlement'` so they don't double-count. Centralized `NON_REVENUE_SOURCES` / `isRevenueRelevant()` controls every income rollup.
 - **Sidebar hierarchy** — Payroll + Tips nested under Labor.
-- **Theme + font parity with Clariva Purchase** — Day theme uses Purchase's slate surfaces + indigo `#6366F1`; all typography switched to native system fonts (dropped 4 Google web fonts). Dark mode keeps Clariva gold.
+- **Theme + font parity with Favo Purchase** — Day theme uses Purchase's slate surfaces + indigo `#6366F1`; all typography switched to native system fonts (dropped 4 Google web fonts). Dark mode keeps Favo gold.
 
 ### 2026-05-13 · Bookkeeper agent + ecosystem bridges hardening
 
