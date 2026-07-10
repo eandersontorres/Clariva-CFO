@@ -55,7 +55,7 @@ the ledger has **zero** `square_sale_gross` rows, so ~**$28k** of gross
 revenue is missing from Finance.
 
 This was caught by a new POS-side reconciliation (`/finance` screen in
-`clariva-pos`) that compares POS-validated revenue against the ledger.
+`favo-pos`) that compares POS-validated revenue against the ledger.
 The POS is now the **source of truth for "what actually happened"**
 (validated against Square with drift zero), so you can use it to verify
 the backfill.

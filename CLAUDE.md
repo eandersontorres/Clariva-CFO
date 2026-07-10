@@ -267,7 +267,7 @@ Golden rule: **deep tone on light background, signal tone on dark background.** 
 - Mark: two symmetric "C"s + center dot (`FavoMark` component in App.jsx). Dot = module color (CFO green). Never rotate/tilt/squeeze; no shadow, gradient, or outline.
 - Wordmark: `Favo.` in Inter Bold 700, `letter-spacing: -0.03em`, dot in accent color.
 - "CFO" subtitle in DM Mono accent.
-- Favicon/app-icon: `public/clariva-cfo-dark.svg` (module dark icon from the asset pack).
+- Favicon/app-icon: `public/favo-cfo-dark.svg` (module dark icon from the asset pack).
 
 ---
 

@@ -8054,7 +8054,7 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
   const variance = actualPayroll - totalLoaded;
   const variancePct = totalLoaded > 0 ? (variance / totalLoaded) * 100 : 0;
 
-  // Source breakdown (bridge from clariva-pos #21.3): each shift carries
+  // Source breakdown (bridge from favo-pos #21.3): each shift carries
   // source='square' or 'pos_punch'. Surface the split so drift between
   // the two streams is visible without leaving the screen.
   const squareShifts = shifts.filter(s => s.source !== 'pos_punch');
@@ -8687,11 +8687,11 @@ function FavoBank({ tenantId, onSync, showToast }) {
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
   const [theme, setTheme] = useState(() => {
-    try { return localStorage.getItem("clariva-cfo-theme") || "dark"; } catch { return "dark"; }
+    try { return localStorage.getItem("favo-cfo-theme") || "dark"; } catch { return "dark"; }
   });
   useEffect(() => {
     document.documentElement.classList.toggle("theme-light", theme === "light");
-    try { localStorage.setItem("clariva-cfo-theme", theme); } catch {}
+    try { localStorage.setItem("favo-cfo-theme", theme); } catch {}
   }, [theme]);
   // Auth gate. `session === undefined` means we're still checking; null = logged
   // out; object = logged in. `authorized` = the user belongs to this deploy's
@@ -8748,7 +8748,7 @@ export default function App() {
         fetchLaborShifts(TENANT_ID, dateRange),
         fetchPayrollRuns(TENANT_ID),
         fetchTipsDaily(TENANT_ID, dateRange),
-        // Bridge from clariva-pos team mgmt (#21.3). Native punches merge
+        // Bridge from favo-pos team mgmt (#21.3). Native punches merge
         // into the same shifts array so Labor renders both providers
         // uniformly. Each row carries source='square' or 'pos_punch' so
         // future filters can split / dedup as needed.
@@ -8808,7 +8808,7 @@ export default function App() {
   useEffect(() => {
     if (TENANT_ID === "demo") return;
     const channel = supabase
-      .channel("clariva-cfo-realtime")
+      .channel("favo-cfo-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_transactions", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_accounts", filter: `tenant_id=eq.${TENANT_ID}` },
@@ -8825,7 +8825,7 @@ export default function App() {
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_labor_shifts", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
-      // Bridge from clariva-pos: native punches stream into Labor too.
+      // Bridge from favo-pos: native punches stream into Labor too.
       .on("postgres_changes", { event: "*", schema: "public", table: "pos_time_punches", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_payroll_runs", filter: `tenant_id=eq.${TENANT_ID}` },

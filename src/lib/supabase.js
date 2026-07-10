@@ -684,14 +684,14 @@ export async function fetchLaborShifts(tenantId, { start, end } = {}) {
   return data.map(s => ({ ...s, source: 'square' }))
 }
 
-// ─── POS-NATIVE PUNCH SHIFTS (bridge: clariva-pos team mgmt #21.3) ───
+// ─── POS-NATIVE PUNCH SHIFTS (bridge: favo-pos team mgmt #21.3) ───
 // Reads pos_time_punches from Favo POS and pairs adjacent
 // clock_in/clock_out per staff into shift rows shaped like
 // r7_labor_shifts (start_at, end_at, hours, employee_name, …) so the
 // Labor screen can render them alongside Square shifts. Wage fields
 // are zero until pos_staff carries an hourly_rate column — surface
 // the rows as "uncosted POS punches" in the UI when that day comes.
-// See docs/2026-05-team-management.md in clariva-pos for the contract.
+// See docs/2026-05-team-management.md in favo-pos for the contract.
 export async function fetchPosPunchShifts(tenantId, { start, end } = {}) {
   let pq = supabase
     .from('pos_time_punches')
