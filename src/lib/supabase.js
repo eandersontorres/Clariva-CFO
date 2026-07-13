@@ -433,7 +433,7 @@ export async function syncPlaidTransactions(tenantId) {
   return await res.json()
 }
 
-// ─── CLARIVA BANK (Unit embedded banking) ────────────────────────────────────
+// ─── FAVO BANK (Unit embedded banking) ───────────────────────────────────────
 // Thin wrappers over the /api/unit-* serverless functions. The Unit org token
 // stays server-side; these only move tenant_id + amounts + counts, never secrets.
 export async function onboardFavoBank(tenantId, profile) {

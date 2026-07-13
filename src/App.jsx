@@ -8534,7 +8534,7 @@ function LoginScreen() {
   );
 }
 
-// ─── CLARIVA BANK (Unit embedded banking) ─────────────────────────────────────
+// ─── FAVO BANK (Unit embedded banking) ────────────────────────────────────────
 // The tenant's own bank account, living INSIDE Favo via Unit BaaS. Three
 // "envelopes" (deposit accounts): Operating, Tax Vault, Payroll Reserve. Money
 // moves between them instantly with bookPayments — the CFO Insights "set aside
@@ -9015,7 +9015,7 @@ export default function App() {
     { id: "bills", label: "Bills & Payments", icon: "bills", badge: null },
     { id: "recurring", label: "Recurring", icon: "recurring", badge: recurring.filter(r => r.status === "active").length || null },
     { id: "accounts", label: "Bank Accounts", icon: "wallet", badge: bankAccounts.filter(a => a.status === "active").length || null },
-    { id: "clarivabank", label: "Favo Bank", icon: "bank" },
+    { id: "favobank", label: "Favo Bank", icon: "bank" },
     { id: "reconcile", label: "Reconciliation", icon: "reconcile" },
     { id: "tax", label: "Tax Summary", icon: "tax" },
   ];
@@ -9038,7 +9038,7 @@ export default function App() {
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
       case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
       case "accounts":     return <BankAccounts accounts={bankAccounts} setAccounts={setBankAccounts} saveBankAccount={saveBankAccount} deleteAcc={async(id)=>{setBankAccounts(p=>p.filter(a=>a.id!==id));if(TENANT_ID!=="demo")await deleteBankAccount(id);}} transactions={transactions} showToast={showToast} />;
-      case "clarivabank":  return <FavoBank tenantId={TENANT_ID} onSync={() => loadAll(false)} showToast={showToast} />;
+      case "favobank":     return <FavoBank tenantId={TENANT_ID} onSync={() => loadAll(false)} showToast={showToast} />;
       case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} showToast={showToast} />;
       case "tax":          return <TaxSummary transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} />;
       default: return null;
