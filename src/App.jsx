@@ -4773,6 +4773,7 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
           { id: "theoretical", label: "⚗️ Theoretical Usage" },
           { id: "production",  label: "🏭 Production Use" },
           { id: "menu",        label: "🍽 Menu Analysis" },
+          { id: "channels",    label: "📡 Sales Channels" },
         ].map(t => (
           <button
             key={t.id}
@@ -4815,10 +4816,42 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
             <KpiTile label="Production Orders" value={data.counts.prod_orders} />
           </div>
 
-          {tab === "usage" && (
+          {/* COGS strip — only when the Kitchen paired inventory counts around
+              the window (usage_method snapshots*). Same math the Kitchen
+              Performance screen showed: opening + purchases − closing. */}
+          {data.cogs && (
+            <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(5, 1fr)", marginBottom: 16 }}>
+              <KpiTile label={`Opening (${data.cogs.opening_snapshot?.date || "—"})`} value={fmt(data.cogs.opening_value)} />
+              <KpiTile label="Purchases" value={fmt(data.cogs.purchases_value)} />
+              <KpiTile label={`Closing (${data.cogs.closing_snapshot === "live_stock" ? "live stock" : data.cogs.closing_snapshot?.date || "—"})`} value={fmt(data.cogs.closing_value)} />
+              <KpiTile label="COGS" value={fmt(data.cogs.cogs)} />
+              <KpiTile label="Food Cost %" value={data.cogs.food_cost_pct != null ? data.cogs.food_cost_pct + "%" : "—"} />
+            </div>
+          )}
+
+          {tab === "usage" && (data.cogs ? (
+            <PerformanceTable
+              title="Usage Report — counted usage by category"
+              note={`Used = opening count + purchases − closing count, valued per stock unit. Counts paired by Favo Kitchen (${data.cogs.opening_snapshot?.date} → ${data.cogs.closing_snapshot === "live_stock" ? "live stock" : data.cogs.closing_snapshot?.date}). Cost% compares used value to net sales.`}
+              total={data.usage_report.totals.used_value}
+              totalLabel="Total used"
+              pct={data.usage_report.totals.cost_pct_of_revenue}
+              pctTone={pctTone(data.usage_report.totals.cost_pct_of_revenue, 35)}
+              rows={data.usage_report.by_category}
+              columns={[
+                { key: "cat_name",        label: "Category" },
+                { key: "start_value",     label: "Opening",    align: "right", format: "money" },
+                { key: "purchased_value", label: "Purchased",  align: "right", format: "money" },
+                { key: "end_value",       label: "Closing",    align: "right", format: "money" },
+                { key: "used_value",      label: "Used",       align: "right", format: "money" },
+                { key: "pct",             label: "% of sales", align: "right", format: "pct",
+                  derive: (r) => data.period_net_sales > 0 ? ((r.used_value || 0) / data.period_net_sales * 100) : null },
+              ]}
+            />
+          ) : (
             <PerformanceTable
               title="Usage Report — purchased value by category"
-              note="Sum of vendor invoices in the window grouped by inventory category. Used as a proxy for 'consumed' when snapshots aren't paired. Cost% compares to net sales."
+              note="Sum of vendor invoices in the window grouped by inventory category. Used as a proxy for 'consumed' — take opening/closing inventory counts in Favo Kitchen to unlock exact usage here. Cost% compares to net sales."
               total={data.usage_report.totals.purchased_value}
               totalLabel="Total purchased"
               pct={data.usage_report.totals.cost_pct_of_revenue}
@@ -4832,12 +4865,14 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
                   derive: (r) => data.period_net_sales > 0 ? (r.purchased_value / data.period_net_sales * 100) : null },
               ]}
             />
-          )}
+          ))}
 
           {tab === "theoretical" && (
             <PerformanceTable
               title="Theoretical Usage — what recipes × sales SHOULD have used"
-              note="Computed from active recipes × times sold (Square line items). Compare against actual purchased value to spot over-portioning or waste. Positive diff = inventory dropped more than recipes predicted."
+              note={data.cogs
+                ? "Computed from active recipes × times sold (Square line items). 'Actual' is COUNTED usage (opening + purchases − closing). Positive diff = inventory dropped more than recipes predicted — over-portioning, waste or unlogged use."
+                : "Computed from active recipes × times sold (Square line items). Compare against actual purchased value to spot over-portioning or waste. Positive diff = inventory dropped more than recipes predicted."}
               total={data.theoretical_usage.totals.theoretical_value}
               totalLabel="Total theoretical"
               pct={data.theoretical_usage.totals.cost_pct_of_revenue}
@@ -4867,6 +4902,29 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
               ]}
             />
           )}
+
+          {tab === "channels" && (data.sales_channels ? (
+            <PerformanceTable
+              title="Sales Channels — where the revenue comes from"
+              note="Orders grouped by origin (Square POS, Square Online, DoorDash, Uber Eats, …). Revenue is net of tax, before platform commissions."
+              total={data.sales_channels.totals.revenue}
+              totalLabel="Total revenue"
+              pct={null}
+              rows={data.sales_channels.by_channel}
+              columns={[
+                { key: "channel", label: "Channel" },
+                { key: "orders",  label: "Orders",       align: "right", format: "qty" },
+                { key: "items",   label: "Items sold",   align: "right", format: "qty" },
+                { key: "revenue", label: "Revenue",      align: "right", format: "money" },
+                { key: "pct",     label: "% of revenue", align: "right", format: "pct",
+                  derive: (r) => data.sales_channels.totals.revenue > 0 ? (r.revenue / data.sales_channels.totals.revenue * 100) : null },
+              ]}
+            />
+          ) : (
+            <div className="card" style={{ padding: 20, color: "var(--text3)", fontSize: 13 }}>
+              Channel data needs the latest Favo Kitchen API — redeploy Kitchen to enable this tab.
+            </div>
+          ))}
 
           {tab === "menu" && (
             <PerformanceTable
