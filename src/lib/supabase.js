@@ -874,6 +874,42 @@ export async function fetchMarketingSpend(tenantId, { start, end } = {}) {
   }
 }
 
+// ─── MANAGER TASKS (clv_manager_tasks) ────────────────────────────────────────
+// Fila CEO -> gerente Finance (loop Favo Team): o agente CEO (favo-ceo) abre
+// tarefa quando um KPI financeiro fecha breached. O gerente cobra o humano e
+// atualiza status/manager_notes aqui; o CEO acompanha do outro lado em /kpis.
+// RLS: qualquer usuario autenticado pode SELECT/UPDATE — o JWT do login basta.
+export async function fetchManagerTasks(tenantId, limit = 30) {
+  const { data, error } = await supabase
+    .from('clv_manager_tasks')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('module', 'finance')
+    .in('status', ['pending', 'in_progress'])
+    .order('due_by', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) { console.error('fetchManagerTasks', error); return [] }
+  return data || []
+}
+
+// Transicoes: pending -> in_progress -> done | dropped. done carimba
+// completed_at; manager_notes registra a cobranca/resultado.
+export async function updateManagerTask(taskId, patch) {
+  const body = { ...patch, updated_at: new Date().toISOString() }
+  if (patch.status === 'done' && !patch.completed_at) {
+    body.completed_at = new Date().toISOString()
+  }
+  const { data, error } = await supabase
+    .from('clv_manager_tasks')
+    .update(body)
+    .eq('id', taskId)
+    .select('*')
+    .maybeSingle()
+  if (error) { console.error('updateManagerTask', error); return { ok: false, error: error.message || String(error) } }
+  return { ok: true, data }
+}
+
 // ─── CONVERTERS ───────────────────────────────────────────────────────────────
 export function purchasesToTransactions(purchases, vendorMap = {}, foodBevCategoryId) {
   return purchases.map(p => {

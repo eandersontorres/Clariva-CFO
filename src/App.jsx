@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardClarivaBank, fetchClarivaBankState, syncClarivaBank, transferClarivaBank } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardClarivaBank, fetchClarivaBankState, syncClarivaBank, transferClarivaBank, fetchManagerTasks, updateManagerTask } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -1439,6 +1439,9 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
         </div>
       </div>
 
+      {/* Fila de tarefas abertas pelo agente CEO quando KPIs financeiros estouram */}
+      <CeoTasksPanel />
+
       {activeAccounts.length > 0 && (
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
@@ -1549,6 +1552,160 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TASKS FROM THE CEO (clv_manager_tasks) ───────────────────────────────────
+// Fila de cobranca do loop Favo Team: o agente CEO (favo-ceo) abre tarefa em
+// clv_manager_tasks quando um KPI financeiro (labor %, prime cost % etc.)
+// fecha breached. O gerente finance move o status aqui (start/done/drop) e
+// registra a cobranca em manager_notes; done/dropped somem da fila e o CEO
+// acompanha do outro lado em /kpis. Painel auto-contido: busca no mount do
+// Dashboard e nao participa do loadAll/realtime pra nao mexer no core do app.
+function CeoTasksPanel() {
+  const [tasks, setTasks] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    // Demo nao tem tenant real no Supabase compartilhado — fila fica vazia.
+    if (TENANT_ID === "demo") { setLoaded(true); return; }
+    let cancelled = false;
+    fetchManagerTasks(TENANT_ID, 30).then(rows => {
+      if (!cancelled) { setTasks(rows || []); setLoaded(true); }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleUpdate(id, patch) {
+    const res = await updateManagerTask(id, patch);
+    if (!res.ok) { setError("task update failed: " + (res.error || "unknown error")); return; }
+    setError(null);
+    setTasks(list => list
+      .map(t => (t.id === id ? { ...t, ...(res.data || patch) } : t))
+      // a fila so mostra tarefas abertas — done/dropped somem na hora
+      .filter(t => t.status === "pending" || t.status === "in_progress"));
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: tasks.length > 0 || !loaded ? 14 : 6 }}>
+        <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Tasks from the CEO</div>
+        <span className="tag tag-gray">{tasks.length}</span>
+      </div>
+      {error && (
+        <div style={{ fontSize: 11, color: "var(--red)", fontFamily: "var(--font-mono)", marginBottom: 10 }}>{error}</div>
+      )}
+      {!loaded && (
+        <div style={{ fontSize: 12, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>loading...</div>
+      )}
+      {loaded && tasks.length === 0 && (
+        <div style={{ fontSize: 12, color: "var(--text3)" }}>
+          Queue empty in <span className="mono" style={{ fontSize: 11 }}>clv_manager_tasks</span> — no finance KPI breached.
+        </div>
+      )}
+      {tasks.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {tasks.map(t => <CeoTaskRow key={t.id} task={t} onUpdate={handleUpdate} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CeoTaskRow({ task: t, onUpdate }) {
+  const [expanded, setExpanded] = useState(false);
+  const [notes, setNotes] = useState(t.manager_notes || "");
+
+  const overdue = t.due_by && new Date(t.due_by) < new Date();
+  const dueLabel = t.due_by
+    ? "due " + new Date(t.due_by).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    : (t.created_at ? new Date(t.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
+
+  function saveNotes() {
+    const trimmed = notes.trim();
+    if (trimmed === (t.manager_notes || "")) return;
+    onUpdate(t.id, { manager_notes: trimmed || null });
+  }
+
+  return (
+    <div
+      onClick={() => setExpanded(x => !x)}
+      style={{
+        background: "var(--surface2)",
+        border: overdue ? "1px solid color-mix(in srgb, var(--red) 40%, transparent)" : "1px solid var(--border)",
+        borderRadius: "var(--radius2)",
+        padding: "10px 14px",
+        cursor: "pointer",
+      }}
+    >
+      <div className="flex items-center justify-between" style={{ gap: 8, flexWrap: "wrap" }}>
+        <div className="flex items-center" style={{ gap: 8, minWidth: 0, flexWrap: "wrap" }}>
+          <span className={t.status === "in_progress" ? "tag tag-yellow" : "tag tag-red"}>{t.status.replace("_", " ")}</span>
+          {t.kpi_key && <span className="tag tag-gray">{t.kpi_key}</span>}
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>{t.title}</span>
+        </div>
+        <span className="mono" style={{ fontSize: 11, whiteSpace: "nowrap", color: overdue ? "var(--red)" : "var(--text3)" }}>
+          {dueLabel}
+        </span>
+      </div>
+
+      {expanded && t.details_md && (
+        <div style={{
+          marginTop: 8,
+          padding: 10,
+          background: "var(--bg)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius2)",
+          fontSize: 12,
+          color: "var(--text2)",
+          lineHeight: 1.55,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}>
+          {t.details_md}
+        </div>
+      )}
+
+      {expanded && (
+        <input
+          className="input"
+          value={notes}
+          onClick={e => e.stopPropagation()}
+          onChange={e => setNotes(e.target.value)}
+          onBlur={saveNotes}
+          onKeyDown={e => { if (e.key === "Enter") saveNotes(); }}
+          placeholder="manager notes (follow-up / outcome)"
+          style={{ marginTop: 8, fontSize: 12, padding: "7px 10px" }}
+        />
+      )}
+
+      <div className="flex items-center" style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
+        {t.status === "pending" && (
+          <button
+            className="btn btn-outline btn-sm"
+            style={{ color: "var(--yellow)", fontSize: 11 }}
+            onClick={e => { e.stopPropagation(); onUpdate(t.id, { status: "in_progress" }); }}
+          >
+            start
+          </button>
+        )}
+        <button
+          className="btn btn-outline btn-sm"
+          style={{ color: "var(--accent)", fontSize: 11 }}
+          onClick={e => { e.stopPropagation(); onUpdate(t.id, { status: "done" }); }}
+        >
+          done
+        </button>
+        <button
+          className="btn btn-outline btn-sm"
+          style={{ color: "var(--text3)", fontSize: 11 }}
+          onClick={e => { e.stopPropagation(); onUpdate(t.id, { status: "dropped" }); }}
+        >
+          drop
+        </button>
       </div>
     </div>
   );
