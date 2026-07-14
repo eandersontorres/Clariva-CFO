@@ -11,7 +11,7 @@ const TENANT = () => import.meta.env.VITE_TENANT_ID || 'demo'
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 // Tenant ids the logged-in user belongs to, via the SECURITY DEFINER function
-// that reads r7_user_tenants. Same path Clariva Purchase uses.
+// that reads r7_user_tenants. Same path Favo Purchase uses.
 export async function getMyTenantIds() {
   const { data, error } = await supabase.rpc('r7_get_my_tenant_ids')
   if (error) { console.error('getMyTenantIds', error); return [] }
@@ -433,10 +433,10 @@ export async function syncPlaidTransactions(tenantId) {
   return await res.json()
 }
 
-// ─── CLARIVA BANK (Unit embedded banking) ────────────────────────────────────
+// ─── FAVO BANK (Unit embedded banking) ───────────────────────────────────────
 // Thin wrappers over the /api/unit-* serverless functions. The Unit org token
 // stays server-side; these only move tenant_id + amounts + counts, never secrets.
-export async function onboardClarivaBank(tenantId, profile) {
+export async function onboardFavoBank(tenantId, profile) {
   const res = await fetch('/api/unit-onboard', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -449,7 +449,7 @@ export async function onboardClarivaBank(tenantId, profile) {
   return await res.json()
 }
 
-export async function fetchClarivaBankState(tenantId) {
+export async function fetchFavoBankState(tenantId) {
   const res = await fetch('/api/unit-accounts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -462,7 +462,7 @@ export async function fetchClarivaBankState(tenantId) {
   return await res.json()
 }
 
-export async function syncClarivaBank(tenantId) {
+export async function syncFavoBank(tenantId) {
   const res = await fetch('/api/unit-sync', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -475,7 +475,7 @@ export async function syncClarivaBank(tenantId) {
   return await res.json()
 }
 
-export async function transferClarivaBank(tenantId, fromPurpose, toPurpose, amount, description) {
+export async function transferFavoBank(tenantId, fromPurpose, toPurpose, amount, description) {
   const res = await fetch('/api/unit-transfer', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -684,14 +684,14 @@ export async function fetchLaborShifts(tenantId, { start, end } = {}) {
   return data.map(s => ({ ...s, source: 'square' }))
 }
 
-// ─── POS-NATIVE PUNCH SHIFTS (bridge: clariva-pos team mgmt #21.3) ───
-// Reads pos_time_punches from Clariva POS and pairs adjacent
+// ─── POS-NATIVE PUNCH SHIFTS (bridge: favo-pos team mgmt #21.3) ───
+// Reads pos_time_punches from Favo POS and pairs adjacent
 // clock_in/clock_out per staff into shift rows shaped like
 // r7_labor_shifts (start_at, end_at, hours, employee_name, …) so the
 // Labor screen can render them alongside Square shifts. Wage fields
 // are zero until pos_staff carries an hourly_rate column — surface
 // the rows as "uncosted POS punches" in the UI when that day comes.
-// See docs/2026-05-team-management.md in clariva-pos for the contract.
+// See docs/2026-05-team-management.md in favo-pos for the contract.
 export async function fetchPosPunchShifts(tenantId, { start, end } = {}) {
   let pq = supabase
     .from('pos_time_punches')

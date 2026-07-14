@@ -1,6 +1,6 @@
-# Clariva CFO
+# Favo CFO
 
-Bookkeeping & financial intelligence for restaurant operators. Part of the Clariva ecosystem (companion to Clariva Kitchen / Restauran7).
+Bookkeeping & financial intelligence for restaurant operators. Part of the Favo ecosystem (companion to Favo Kitchen / Restauran7).
 
 **Live:** [cfo.clariva.cloud](https://cfo.clariva.cloud)
 
@@ -8,7 +8,7 @@ Bookkeeping & financial intelligence for restaurant operators. Part of the Clari
 
 - React 18 + Vite 5 (single-file `App.jsx` SPA)
 - Vercel Serverless Functions for AI-powered PDF parsing (`/api/*`)
-- Supabase (shared project with Clariva Kitchen)
+- Supabase (shared project with Favo Kitchen)
 - Anthropic API (via `/api/parse-statement` proxy) for PDF statement extraction
 
 ## Features

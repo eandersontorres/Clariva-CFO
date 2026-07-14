@@ -1,4 +1,4 @@
-// Bridge: Clariva Book reservations -> CFO Insights.
+// Bridge: Favo Book reservations -> CFO Insights.
 // Book has RLS that blocks the anon key the browser holds, so this endpoint
 // runs with the service role to pull forward-looking demand and historical
 // no-show rate. Avg ticket comes from r7_snapshots (Square POS), which the
@@ -11,7 +11,7 @@ const HORIZON_DAYS = 14;            // upcoming window
 const NOSHOW_LOOKBACK_DAYS = 60;    // for no-show rate
 // avg_ticket source is currently unavailable — r7_snapshots is an inventory
 // snapshot table (label/counts JSONB), not Square POS revenue. When pos_orders
-// starts receiving data (Clariva POS launch), wire it back in here.
+// starts receiving data (Favo POS launch), wire it back in here.
 
 function isoDateOffset(days) {
   const d = new Date();

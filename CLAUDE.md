@@ -1,9 +1,9 @@
-# Clariva CFO
+# Favo CFO
 
-Bookkeeping & financial intelligence platform for restaurant operators. Part of the Clariva ecosystem (companion to **Clariva Kitchen / Restauran7**).
+Bookkeeping & financial intelligence platform for restaurant operators. Part of the Favo ecosystem (companion to **Favo Kitchen / Restauran7**).
 
 **Live:** [cfo.clariva.cloud](https://cfo.clariva.cloud)
-**Repo:** [github.com/eandersontorres/Clariva-CFO](https://github.com/eandersontorres/Clariva-CFO)
+**Repo:** [github.com/eandersontorres/Favo-CFO](https://github.com/eandersontorres/Favo-CFO)
 **Pilot tenant:** TorresBee Restaurant — Round Rock, TX (`tenant_id: 5dc58fa8-0a0a-4d24-8906-e32755e36e93`)
 
 ---
@@ -24,7 +24,7 @@ Bookkeeping & financial intelligence platform for restaurant operators. Part of 
 ## Project Structure
 
 ```
-Clariva-CFO/
+Favo-CFO/
 ├── api/
 │   └── anthropic.js          # Proxy to Anthropic API (PDF parsing, AI categorization)
 ├── src/
@@ -96,7 +96,7 @@ These tables are **read** from the Kitchen side via the **Sync Kitchen** button:
 ### Main App.jsx Sections (in order)
 
 1. **Imports** — supabase client, all CRUD/bridge functions
-2. **STYLES** — full CSS with Clariva palette and font tokens
+2. **STYLES** — full CSS with Favo palette and font tokens
 3. **SAMPLE_DATA** — demo data when `VITE_TENANT_ID === "demo"`
 4. **HELPERS** — `fmt`, `fmtDate`, date utilities
 5. **AUTO-CATEGORIZATION** — `getCategoryHistory()`, `suggestCategory()`, `normalizeDescription()`
@@ -235,7 +235,7 @@ setTransactions(prev => {
 
 ## Brand & Design System
 
-**Clariva rebrand "Caminho B (v2)"** — minimalist system shared across all Clariva modules. Full spec + assets: `C:\Dev\Clariva\rebrand\clariva-assets-B\BRAND.md`.
+**Favo rebrand "Caminho B (v2)"** — minimalist system shared across all Favo modules. Full spec + assets: `C:\Dev\Clariva\rebrand\clariva-assets-B\BRAND.md`.
 
 Golden rule: **deep tone on light background, signal tone on dark background.** Accent color appears only in: the mark's dot, the primary action (1 button per screen), key data, links/interaction, focus/selection, live status/badges. Everything else is black/white/gray.
 
@@ -264,10 +264,10 @@ Golden rule: **deep tone on light background, signal tone on dark background.** 
 
 ### Logo
 
-- Mark: two symmetric "C"s + center dot (`ClarivaMark` component in App.jsx). Dot = module color (CFO green). Never rotate/tilt/squeeze; no shadow, gradient, or outline.
-- Wordmark: `Clariva.` in Inter Bold 700, `letter-spacing: -0.03em`, dot in accent color.
+- Mark: two symmetric "C"s + center dot (`FavoMark` component in App.jsx). Dot = module color (CFO green). Never rotate/tilt/squeeze; no shadow, gradient, or outline.
+- Wordmark: `Favo.` in Inter Bold 700, `letter-spacing: -0.03em`, dot in accent color.
 - "CFO" subtitle in DM Mono accent.
-- Favicon/app-icon: `public/clariva-cfo-dark.svg` (module dark icon from the asset pack).
+- Favicon/app-icon: `public/favo-cfo-dark.svg` (module dark icon from the asset pack).
 
 ---
 
@@ -362,7 +362,7 @@ User clicks "Sync Kitchen" in top bar:
 - [ ] Multi-account support (multiple bank accounts per tenant)
 - [ ] Recurring transactions (rent, payroll, subscriptions auto-generated)
 - [ ] Receipt photo upload (similar to Kitchen invoice scanner) → attach to transaction
-- [ ] Multi-currency for Clariva Industria/Brewing modules
+- [ ] Multi-currency for Favo Industria/Brewing modules
 - [ ] Bank reconciliation (matching deposits to revenue accumulator)
 - [ ] Email reports (weekly P&L summary to owner)
 - [ ] Plaid integration (Phase 3 — when free tier no longer enough)
@@ -387,7 +387,7 @@ For PDF import testing locally, you also need to run `vercel dev` instead of `vi
 - Concise, direct recommendations over open-ended options
 - Brazilian Portuguese is fine for chat; code/comments in English
 - Action-oriented language for American market positioning
-- Clariva = professional / sophisticated tone
+- Favo = professional / sophisticated tone
 - Always show actual file changes, not just descriptions
 - For multi-file changes, copy each output file separately rather than zipping
 - Anderson manages the GitHub via web editor (commits via copy-paste) — keep code paste-friendly

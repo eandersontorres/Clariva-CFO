@@ -48,7 +48,7 @@ use the service role, which bypasses RLS.
 | Namespace | TorresBee id | Used by |
 |---|---|---|
 | Restauran7 (`r7_tenants`) | `5dc58fa8-…e36e93` | Kitchen, **CFO** |
-| Clariva (`clv_tenants`) | `384d3027-…343c16` | POS, Marketing (`mkt_restaurants` reuses it) |
+| Favo (`clv_tenants`) | `384d3027-…343c16` | POS, Marketing (`mkt_restaurants` reuses it) |
 
 They line up by `slug` ('torresbee'), not by id. CFO lives in the **r7
 namespace** — every `r7_ledger_*.tenant_id` is `5dc5…`. Stay there; don't
@@ -59,7 +59,7 @@ migrate to clv ids (would orphan all existing data).
 - `r7_user_tenants (user_id, tenant_id, role)` — **already populated** with 4
   TorresBee managers, including Anderson (`2b25331f-…`). This is what the RLS
   functions read.
-- `clv_tenant_members (user_id, tenant_id, role)` — Clariva-side, has Anderson
+- `clv_tenant_members (user_id, tenant_id, role)` — Favo-side, has Anderson
   as admin of the clv tenant. Not used by r7 RLS.
 
 ### RLS helper functions (security definer)

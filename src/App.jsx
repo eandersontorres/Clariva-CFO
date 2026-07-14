@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardClarivaBank, fetchClarivaBankState, syncClarivaBank, transferClarivaBank } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
@@ -10,7 +10,7 @@ const STYLES = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    /* Clariva rebrand (Caminho B v2): Inter, neutral base, CFO module color.
+    /* Favo rebrand (Caminho B v2): Inter, neutral base, CFO module color.
        Rule: deep tone on light bg, signal tone on dark bg. */
     --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
     --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -1010,7 +1010,7 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
 
   const sync = async () => {
     setLoading(true);
-    showToast("Syncing from Clariva Kitchen...", "info");
+    showToast("Syncing from Favo Kitchen...", "info");
     try {
       // Revenue used to come from r7_snapshots here, but that table is the
       // Kitchen inventory snapshot (label/counts), not Square POS sales — the
@@ -1051,7 +1051,7 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
       onClick={sync}
       disabled={loading}
       style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
-      title="Pull invoices + Square revenue from Clariva Kitchen"
+      title="Pull invoices + Square revenue from Favo Kitchen"
     >
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
         <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
@@ -1118,7 +1118,7 @@ function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
 
   const sync = async () => {
     setLoading(true);
-    showToast("Syncing ad spend from Clariva Marketing...", "info");
+    showToast("Syncing ad spend from Favo Marketing...", "info");
     try {
       const result = await fetchMarketingSpend(tenantId, dateRange);
       const txns = result.transactions || [];
@@ -1147,7 +1147,7 @@ function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
       onClick={sync}
       disabled={loading}
       style={{ gap: 8, borderColor: "var(--accentBorder)", color: loading ? "var(--text3)" : "var(--accent)" }}
-      title="Pull ad spend from Clariva Marketing (Meta + Google)"
+      title="Pull ad spend from Favo Marketing (Meta + Google)"
     >
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
         <path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>
@@ -1304,10 +1304,10 @@ function BankSyncButton({ tenantId, onSync, showToast }) {
 }
 
 // ─── BRAND MARK ───────────────────────────────────────────────────────────────
-// Clariva mark (Caminho B v2): two symmetric "C"s + center dot in the module
+// Favo mark (Caminho B v2): two symmetric "C"s + center dot in the module
 // color. Strokes follow currentColor so it adapts to dark/light themes.
-const ClarivaMark = ({ size = 34 }) => (
-  <svg width={size} height={size} viewBox="0 0 100 100" fill="none" aria-label="Clariva">
+const FavoMark = ({ size = 34 }) => (
+  <svg width={size} height={size} viewBox="0 0 100 100" fill="none" aria-label="Favo">
     <path d="M46.31 34.24 A20 20 0 1 0 46.31 65.76" stroke="currentColor" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
     <path d="M53.69 65.76 A20 20 0 1 0 53.69 34.24" stroke="currentColor" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
     <circle cx="50" cy="50" r="8" fill="var(--accent)" />
@@ -4017,7 +4017,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
   const [statementPreview, setStatementPreview] = useState(null);
   const aggregatorFileInputRef = useRef(null);
 
-  // Pull real invoices from Clariva Kitchen (r7_purchases) for the current window.
+  // Pull real invoices from Favo Kitchen (r7_purchases) for the current window.
   // The mock list this used to render was already stale by the time the screen
   // shipped; nothing here should fall back to fixtures in production.
   useEffect(() => {
@@ -4403,7 +4403,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
         <div className="kpi-card kpi-red">
           <div className="kpi-label">Pending Invoices</div>
           <div className="kpi-value">{kitchenInvoices.length}</div>
-          <div className="kpi-delta" style={{ color: "var(--text3)" }}>{loading ? "loading…" : "from Clariva Kitchen"}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>{loading ? "loading…" : "from Favo Kitchen"}</div>
         </div>
         <div className="kpi-card kpi-accent">
           <div className="kpi-label">Auto-Matched</div>
@@ -4620,7 +4620,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
           <div className="empty" style={{ padding: 30 }}>
             <div className="empty-icon">📭</div>
             <div className="empty-title">{loading ? "Loading invoices…" : "No Kitchen invoices in this date range"}</div>
-            <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Scan invoices in Clariva Kitchen or expand the date range</div>
+            <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Scan invoices in Favo Kitchen or expand the date range</div>
           </div>
         ) : kitchenInvoices.map(inv => {
           const match = findMatch(inv);
@@ -4739,7 +4739,7 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
         <div>
           <div className="page-title">Performance</div>
           <div className="page-subtitle">
-            {dateRange?.start} → {dateRange?.end} · TorresBee · powered by Clariva Kitchen
+            {dateRange?.start} → {dateRange?.end} · TorresBee · powered by Favo Kitchen
             {data?.period_net_sales != null && <> · Net sales {fmt(data.period_net_sales)}</>}
           </div>
         </div>
@@ -4794,7 +4794,7 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
       {loading && (
         <div className="empty" style={{ padding: 60 }}>
           <div className="empty-icon">⏳</div>
-          <div className="empty-title">Loading from Clariva Kitchen…</div>
+          <div className="empty-title">Loading from Favo Kitchen…</div>
         </div>
       )}
 
@@ -5622,14 +5622,14 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
         </div>
       </div>
 
-      {/* Bookings Forecast (Clariva Book bridge) */}
+      {/* Bookings Forecast (Favo Book bridge) */}
       {bookForecast && bookForecast.upcoming && bookForecast.upcoming.reservations > 0 && (
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
             <div>
               <div style={{ fontFamily: "var(--font-sans)", fontSize: 16, fontWeight: 600, letterSpacing: "0.04em" }}>📅 Bookings Forecast</div>
               <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
-                From Clariva Book · next {bookForecast.window.horizon_days} days
+                From Favo Book · next {bookForecast.window.horizon_days} days
               </div>
             </div>
             {bookForecast.projected_revenue_7d > 0 && (
@@ -8112,7 +8112,7 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
   const variance = actualPayroll - totalLoaded;
   const variancePct = totalLoaded > 0 ? (variance / totalLoaded) * 100 : 0;
 
-  // Source breakdown (bridge from clariva-pos #21.3): each shift carries
+  // Source breakdown (bridge from favo-pos #21.3): each shift carries
   // source='square' or 'pos_punch'. Surface the split so drift between
   // the two streams is visible without leaving the screen.
   const squareShifts = shifts.filter(s => s.source !== 'pos_punch');
@@ -8497,10 +8497,10 @@ function LoginScreen() {
         <div className="card" style={{ width: "100%", maxWidth: 380, padding: 32 }}>
           <div className="flex items-center gap-10" style={{ marginBottom: 24 }}>
             <div className="logo-icon">
-              <ClarivaMark size={34} />
+              <FavoMark size={34} />
             </div>
             <div className="logo-text">
-              <div className="logo-mark">Clariva<span className="logo-dot">.</span></div>
+              <div className="logo-mark">Favo<span className="logo-dot">.</span></div>
               <div className="logo-sub">CFO</div>
             </div>
           </div>
@@ -8508,7 +8508,7 @@ function LoginScreen() {
             {magicMode ? "Sign in with a link" : "Sign in"}
           </div>
           <div style={{ fontSize: 13, color: "var(--text3)", marginBottom: 20 }}>
-            {magicMode ? "We'll email you a one-time sign-in link." : "Login com sua conta Clariva"}
+            {magicMode ? "We'll email you a one-time sign-in link." : "Login com sua conta Favo"}
           </div>
           <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <input className="input" type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="email@exemplo.com" autoComplete="email" />
@@ -8534,8 +8534,8 @@ function LoginScreen() {
   );
 }
 
-// ─── CLARIVA BANK (Unit embedded banking) ─────────────────────────────────────
-// The tenant's own bank account, living INSIDE Clariva via Unit BaaS. Three
+// ─── FAVO BANK (Unit embedded banking) ────────────────────────────────────────
+// The tenant's own bank account, living INSIDE Favo via Unit BaaS. Three
 // "envelopes" (deposit accounts): Operating, Tax Vault, Payroll Reserve. Money
 // moves between them instantly with bookPayments — the CFO Insights "set aside
 // $X for tax" recommendation becomes a real transfer. Transactions sync into
@@ -8555,7 +8555,7 @@ const ENVELOPE_META = {
   payroll:   { color: "var(--purple)", hint: "Payroll reserve" },
 };
 
-function ClarivaBank({ tenantId, onSync, showToast }) {
+function FavoBank({ tenantId, onSync, showToast }) {
   const isDemo = tenantId === "demo";
   const [loading, setLoading] = useState(!isDemo);
   const [busy, setBusy] = useState(false);
@@ -8565,10 +8565,10 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
   const refresh = useCallback(async () => {
     if (isDemo) return;
     try {
-      const s = await fetchClarivaBankState(tenantId);
+      const s = await fetchFavoBankState(tenantId);
       setState(s);
     } catch (e) {
-      showToast("Clariva Bank: " + e.message, "error");
+      showToast("Favo Bank: " + e.message, "error");
     } finally {
       setLoading(false);
     }
@@ -8577,12 +8577,12 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
   useEffect(() => { refresh(); }, [refresh]);
 
   const enroll = async () => {
-    if (!window.confirm("Open a Clariva Bank account for this restaurant? In sandbox this is instant; in production it starts KYB review.")) return;
+    if (!window.confirm("Open a Favo Bank account for this restaurant? In sandbox this is instant; in production it starts KYB review.")) return;
     setBusy(true);
-    showToast("Opening Clariva Bank account…", "info");
+    showToast("Opening Favo Bank account…", "info");
     try {
-      await onboardClarivaBank(tenantId);
-      showToast("Clariva Bank account opened", "success");
+      await onboardFavoBank(tenantId);
+      showToast("Favo Bank account opened", "success");
       await refresh();
     } catch (e) {
       showToast("Could not open account: " + e.message, "error");
@@ -8591,11 +8591,11 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
 
   const sync = async () => {
     setBusy(true);
-    showToast("Syncing Clariva Bank transactions…", "info");
+    showToast("Syncing Favo Bank transactions…", "info");
     try {
-      const r = await syncClarivaBank(tenantId);
-      if (r.not_enrolled) { showToast("Open your Clariva Bank account first", "info"); }
-      else { showToast(`Clariva Bank · ${r.added} transaction${r.added === 1 ? "" : "s"} synced`, "success"); if (onSync) onSync(); }
+      const r = await syncFavoBank(tenantId);
+      if (r.not_enrolled) { showToast("Open your Favo Bank account first", "info"); }
+      else { showToast(`Favo Bank · ${r.added} transaction${r.added === 1 ? "" : "s"} synced`, "success"); if (onSync) onSync(); }
       await refresh();
     } catch (e) {
       showToast("Sync failed: " + e.message, "error");
@@ -8608,7 +8608,7 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
     if (xfer.from === xfer.to) { showToast("Pick two different envelopes", "error"); return; }
     setBusy(true);
     try {
-      const r = await transferClarivaBank(tenantId, xfer.from, xfer.to, amt, xfer.description);
+      const r = await transferFavoBank(tenantId, xfer.from, xfer.to, amt, xfer.description);
       showToast(`Moved ${fmt(r.amount)}: ${r.from} → ${r.to}`, "success");
       setXfer(null);
       await refresh();
@@ -8620,23 +8620,23 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
 
   const disclosure = (
     <div style={{ marginTop: 18, fontSize: 11, color: "var(--text3)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
-      Banking services provided by {PARTNER_BANK}, Member FDIC. Clariva is a financial technology company, not a bank.
-      Deposits are eligible for FDIC pass-through insurance up to applicable limits. The Clariva debit card is issued pursuant to a license from the card network.
+      Banking services provided by {PARTNER_BANK}, Member FDIC. Favo is a financial technology company, not a bank.
+      Deposits are eligible for FDIC pass-through insurance up to applicable limits. The Favo debit card is issued pursuant to a license from the card network.
     </div>
   );
 
   if (isDemo) {
     return (
       <div className="page">
-        <div className="page-header"><div><div className="page-title">Clariva Bank</div><div className="page-subtitle">Embedded banking — available in production</div></div></div>
-        <div className="card"><div className="empty"><div className="empty-icon">🏦</div><div className="empty-title">Clariva Bank runs in production only</div><div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6, maxWidth: 460 }}>Open the live tenant to enroll. Each restaurant gets real deposit accounts (Operating, Tax Vault, Payroll) and a debit card, powered by Unit.</div></div></div>
+        <div className="page-header"><div><div className="page-title">Favo Bank</div><div className="page-subtitle">Embedded banking — available in production</div></div></div>
+        <div className="card"><div className="empty"><div className="empty-icon">🏦</div><div className="empty-title">Favo Bank runs in production only</div><div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6, maxWidth: 460 }}>Open the live tenant to enroll. Each restaurant gets real deposit accounts (Operating, Tax Vault, Payroll) and a debit card, powered by Unit.</div></div></div>
         {disclosure}
       </div>
     );
   }
 
   if (loading) {
-    return (<div className="page"><div className="page-header"><div className="page-title">Clariva Bank</div></div><div className="card" style={{ color: "var(--text3)", fontFamily: "var(--font-mono)", fontSize: 13 }}>Loading…</div></div>);
+    return (<div className="page"><div className="page-header"><div className="page-title">Favo Bank</div></div><div className="card" style={{ color: "var(--text3)", fontFamily: "var(--font-mono)", fontSize: 13 }}>Loading…</div></div>);
   }
 
   const enrolled = state?.enrolled;
@@ -8645,13 +8645,13 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
     <div className="page">
       <div className="page-header">
         <div>
-          <div className="page-title">Clariva Bank</div>
-          <div className="page-subtitle">{enrolled ? "Your restaurant's bank, inside Clariva" : "Open a bank account for this restaurant"}</div>
+          <div className="page-title">Favo Bank</div>
+          <div className="page-subtitle">{enrolled ? "Your restaurant's bank, inside Favo" : "Open a bank account for this restaurant"}</div>
         </div>
         {enrolled && (
           <div className="flex items-center gap-12">
             <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => setXfer({ from: "operating", to: "tax_vault", amount: "", description: "" })} style={{ borderColor: "var(--accentBorder)", color: "var(--accent)" }}>Move money</button>
-            <button className="btn btn-primary btn-sm" disabled={busy} onClick={sync}><Icon name="bank" size={13} /> {busy ? "Syncing…" : "Sync Clariva Bank"}</button>
+            <button className="btn btn-primary btn-sm" disabled={busy} onClick={sync}><Icon name="bank" size={13} /> {busy ? "Syncing…" : "Sync Favo Bank"}</button>
           </div>
         )}
       </div>
@@ -8659,9 +8659,9 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
       {!enrolled ? (
         <div className="card" style={{ textAlign: "center", padding: "40px 28px" }}>
           <div style={{ fontSize: 40, marginBottom: 8 }}>🏦</div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 24, color: "var(--text)", marginBottom: 8 }}>Open your Clariva Bank account</div>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 24, color: "var(--text)", marginBottom: 8 }}>Open your Favo Bank account</div>
           <div style={{ fontSize: 13, color: "var(--text2)", maxWidth: 520, margin: "0 auto 22px", lineHeight: 1.6 }}>
-            Real FDIC-eligible deposit accounts, a Clariva debit card, and automatic envelopes for taxes and payroll — all inside the app. Square payouts land in Operating; CFO Insights moves the right amount into Tax Vault and Payroll for you.
+            Real FDIC-eligible deposit accounts, a Favo debit card, and automatic envelopes for taxes and payroll — all inside the app. Square payouts land in Operating; CFO Insights moves the right amount into Tax Vault and Payroll for you.
           </div>
           <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", maxWidth: 560, margin: "0 auto 24px" }}>
             {Object.entries(ENVELOPE_META).map(([k, m]) => (
@@ -8671,7 +8671,7 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
           {state?.status === "error" && state?.last_error && (
             <div style={{ fontSize: 12, color: "var(--red)", marginBottom: 14 }}>Last attempt failed: {state.last_error}</div>
           )}
-          <button className="btn btn-primary" disabled={busy} onClick={enroll}>{busy ? "Opening…" : "Open Clariva Bank Account"}</button>
+          <button className="btn btn-primary" disabled={busy} onClick={enroll}>{busy ? "Opening…" : "Open Favo Bank Account"}</button>
           {disclosure}
         </div>
       ) : (
@@ -8694,7 +8694,7 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
           {state.card && (
             <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, background: "linear-gradient(135deg, var(--surface), var(--accentBg))", border: "1px solid var(--accentBorder)" }}>
               <div>
-                <div className="kpi-label" style={{ color: "var(--accent)" }}>Clariva Debit Card</div>
+                <div className="kpi-label" style={{ color: "var(--accent)" }}>Favo Debit Card</div>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, letterSpacing: 2, color: "var(--text)", marginTop: 4 }}>•••• •••• •••• {state.card.last4 || "••••"}</div>
               </div>
               <div style={{ textAlign: "right", fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>VIRTUAL<br />{state.last_synced_at ? "synced " + fmtDate(state.last_synced_at) : "not synced yet"}</div>
@@ -8745,11 +8745,11 @@ function ClarivaBank({ tenantId, onSync, showToast }) {
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
   const [theme, setTheme] = useState(() => {
-    try { return localStorage.getItem("clariva-cfo-theme") || "dark"; } catch { return "dark"; }
+    try { return localStorage.getItem("favo-cfo-theme") || "dark"; } catch { return "dark"; }
   });
   useEffect(() => {
     document.documentElement.classList.toggle("theme-light", theme === "light");
-    try { localStorage.setItem("clariva-cfo-theme", theme); } catch {}
+    try { localStorage.setItem("favo-cfo-theme", theme); } catch {}
   }, [theme]);
   // Auth gate. `session === undefined` means we're still checking; null = logged
   // out; object = logged in. `authorized` = the user belongs to this deploy's
@@ -8806,7 +8806,7 @@ export default function App() {
         fetchLaborShifts(TENANT_ID, dateRange),
         fetchPayrollRuns(TENANT_ID),
         fetchTipsDaily(TENANT_ID, dateRange),
-        // Bridge from clariva-pos team mgmt (#21.3). Native punches merge
+        // Bridge from favo-pos team mgmt (#21.3). Native punches merge
         // into the same shifts array so Labor renders both providers
         // uniformly. Each row carries source='square' or 'pos_punch' so
         // future filters can split / dedup as needed.
@@ -8866,7 +8866,7 @@ export default function App() {
   useEffect(() => {
     if (TENANT_ID === "demo") return;
     const channel = supabase
-      .channel("clariva-cfo-realtime")
+      .channel("favo-cfo-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_transactions", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_ledger_accounts", filter: `tenant_id=eq.${TENANT_ID}` },
@@ -8883,7 +8883,7 @@ export default function App() {
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_labor_shifts", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
-      // Bridge from clariva-pos: native punches stream into Labor too.
+      // Bridge from favo-pos: native punches stream into Labor too.
       .on("postgres_changes", { event: "*", schema: "public", table: "pos_time_punches", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_payroll_runs", filter: `tenant_id=eq.${TENANT_ID}` },
@@ -8893,7 +8893,7 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "r7_square_payouts", filter: `tenant_id=eq.${TENANT_ID}` },
         () => loadAll(false))
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") { console.log("Clariva CFO: real-time active"); setRealtimeActive(true); }
+        if (status === "SUBSCRIBED") { console.log("Favo CFO: real-time active"); setRealtimeActive(true); }
         if (status === "CLOSED" || status === "CHANNEL_ERROR") setRealtimeActive(false);
       });
     return () => supabase.removeChannel(channel);
@@ -9015,7 +9015,7 @@ export default function App() {
     { id: "bills", label: "Bills & Payments", icon: "bills", badge: null },
     { id: "recurring", label: "Recurring", icon: "recurring", badge: recurring.filter(r => r.status === "active").length || null },
     { id: "accounts", label: "Bank Accounts", icon: "wallet", badge: bankAccounts.filter(a => a.status === "active").length || null },
-    { id: "clarivabank", label: "Clariva Bank", icon: "bank" },
+    { id: "favobank", label: "Favo Bank", icon: "bank" },
     { id: "reconcile", label: "Reconciliation", icon: "reconcile" },
     { id: "tax", label: "Tax Summary", icon: "tax" },
   ];
@@ -9038,7 +9038,7 @@ export default function App() {
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
       case "recurring":    return <Recurring recurring={recurring} setRecurring={setRecurring} saveRecurring={saveRecurring} deleteR={async(id)=>{setRecurring(p=>p.filter(r=>r.id!==id));if(TENANT_ID!=="demo")await deleteRecurring(id);}} categories={categories} transactions={transactions} showToast={showToast} />;
       case "accounts":     return <BankAccounts accounts={bankAccounts} setAccounts={setBankAccounts} saveBankAccount={saveBankAccount} deleteAcc={async(id)=>{setBankAccounts(p=>p.filter(a=>a.id!==id));if(TENANT_ID!=="demo")await deleteBankAccount(id);}} transactions={transactions} showToast={showToast} />;
-      case "clarivabank":  return <ClarivaBank tenantId={TENANT_ID} onSync={() => loadAll(false)} showToast={showToast} />;
+      case "favobank":     return <FavoBank tenantId={TENANT_ID} onSync={() => loadAll(false)} showToast={showToast} />;
       case "reconcile":    return <Reconciliation transactions={filteredByDate} setTransactions={setTransactions} saveTransactions={saveTransactions} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} showToast={showToast} />;
       case "tax":          return <TaxSummary transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} />;
       default: return null;
@@ -9074,10 +9074,10 @@ export default function App() {
         <nav className="sidebar">
           <div className="sidebar-logo">
             <div className="logo-icon">
-              <ClarivaMark size={34} />
+              <FavoMark size={34} />
             </div>
             <div className="logo-text">
-              <div className="logo-mark">Clariva<span className="logo-dot">.</span></div>
+              <div className="logo-mark">Favo<span className="logo-dot">.</span></div>
               <div className="logo-sub">CFO</div>
             </div>
           </div>

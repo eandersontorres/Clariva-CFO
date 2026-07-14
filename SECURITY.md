@@ -1,4 +1,4 @@
-# Clariva CFO — Information Security Policy
+# Favo CFO — Information Security Policy
 
 **Owner:** Anderson Torres (Owner / Security Lead)
 **Contact:** eanderson.torres@gmail.com
@@ -9,12 +9,12 @@
 
 ## 1. Purpose & Scope
 
-This policy documents the security controls Clariva CFO operationalizes to identify,
-mitigate, and monitor information-security risks. It covers the Clariva CFO web
+This policy documents the security controls Favo CFO operationalizes to identify,
+mitigate, and monitor information-security risks. It covers the Favo CFO web
 application, its serverless API, its database, and all third-party integrations
 (Plaid, Anthropic, Supabase, Vercel, Square).
 
-Clariva CFO is a bookkeeping and financial-intelligence platform for restaurant
+Favo CFO is a bookkeeping and financial-intelligence platform for restaurant
 operators. It ingests bank transactions (via Plaid) and POS data to produce
 ledgers, P&L, cash-flow, and tax-ready reports.
 
@@ -26,7 +26,7 @@ ledgers, P&L, cash-flow, and tax-ready reports.
 | **Sensitive** | Bank transactions, account balances, ledger data | Encrypted in transit and at rest; access scoped per tenant. |
 | **Public** | Marketing pages, app shell | No restrictions. |
 
-Clariva CFO does **not** store full card numbers (PAN), online-banking credentials,
+Favo CFO does **not** store full card numbers (PAN), online-banking credentials,
 or government IDs. Bank authentication happens entirely inside Plaid's interface.
 
 ## 3. Secrets Management
@@ -62,7 +62,7 @@ or government IDs. Bank authentication happens entirely inside Plaid's interface
 
 ## 6. Vendor / Third-Party Risk
 
-Clariva CFO relies on SOC 2-compliant infrastructure providers: **Supabase**
+Favo CFO relies on SOC 2-compliant infrastructure providers: **Supabase**
 (database/auth), **Vercel** (hosting/compute), **Plaid** (bank connectivity),
 **Anthropic** (AI parsing), and **Square** (POS). Secrets for each are isolated
 per provider and rotated if exposure is suspected.

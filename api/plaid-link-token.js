@@ -38,7 +38,7 @@ export default async function handler(req, res) {
     const body = {
       client_id: clientId,
       secret,
-      client_name: "Clariva CFO",
+      client_name: "Favo CFO",
       user: { client_user_id: tenant_id },
       products: ["transactions"],
       country_codes: ["US"],
