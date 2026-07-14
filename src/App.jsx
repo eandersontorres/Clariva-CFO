@@ -1304,12 +1304,11 @@ function BankSyncButton({ tenantId, onSync, showToast }) {
 }
 
 // ─── BRAND MARK ───────────────────────────────────────────────────────────────
-// Favo mark (Caminho B v2): two symmetric "C"s + center dot in the module
-// color. Strokes follow currentColor so it adapts to dark/light themes.
+// Favo mark: hexagon ("favo" = honeycomb cell) + center dot in the module
+// color. Stroke follows currentColor so it adapts to dark/light themes.
 const FavoMark = ({ size = 34 }) => (
   <svg width={size} height={size} viewBox="0 0 100 100" fill="none" aria-label="Favo">
-    <path d="M46.31 34.24 A20 20 0 1 0 46.31 65.76" stroke="currentColor" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M53.69 65.76 A20 20 0 1 0 53.69 34.24" stroke="currentColor" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+    <polygon points="50,14 81.18,32 81.18,68 50,86 18.82,68 18.82,32" stroke="currentColor" strokeWidth="9" strokeLinejoin="round" />
     <circle cx="50" cy="50" r="8" fill="var(--accent)" />
   </svg>
 );
