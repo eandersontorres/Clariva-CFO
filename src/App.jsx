@@ -1344,6 +1344,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     transactions: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>,
     categories: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>,
     pl: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
+    trends: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>,
     cashflow: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
     budget: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>,
     reconcile: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
@@ -8774,6 +8775,293 @@ function FavoBank({ tenantId, onSync, showToast }) {
   );
 }
 
+// ─── TRENDS (month-over-month KPIs) ───────────────────────────────────────────
+// Self-fetching: pulls its own N-month window from Supabase so the charts don't
+// depend on the top-bar date range. Monthly math mirrors the P&L screen exactly
+// (same ledger filter, same benchmark thresholds and weights as opsScore) so a
+// month here always matches what P&L shows for that month.
+const TREND_BENCH = {
+  net_margin: { label: "Net Margin",  target: "≥15%", excellent: 15, critical: 0,  lower: false, weight: 0.25 },
+  ebitda:     { label: "EBITDA",      target: "≥20%", excellent: 20, critical: 5,  lower: false, weight: 0.15 },
+  prime:      { label: "Prime Cost",  target: "≤55%", excellent: 55, critical: 70, lower: true,  weight: 0.25 },
+  food:       { label: "Food Cost",   target: "≤28%", excellent: 28, critical: 40, lower: true,  weight: 0.20 },
+  labor:      { label: "Labor Cost",  target: "≤25%", excellent: 25, critical: 40, lower: true,  weight: 0.15 },
+};
+const trendNorm = (value, { excellent, critical, lower }) => {
+  if (lower) {
+    if (value <= excellent) return 100;
+    if (value >= critical) return 0;
+    return Math.round(100 - ((value - excellent) / (critical - excellent)) * 100);
+  }
+  if (value >= excellent) return 100;
+  if (value <= critical) return 0;
+  return Math.round(((value - critical) / (excellent - critical)) * 100);
+};
+const trendBandTone = (score) => score >= 60 ? "var(--accent)" : score >= 40 ? "var(--yellow)" : "var(--red)";
+
+function TrendLineChart({ points, height = 170, yMin, yMax, fmtVal, color = "var(--accent)", target, targetDir, bands, dotTone }) {
+  // points: [{ label, tip, value }] — value null = gap (month without revenue)
+  const W = 560, H = height, padL = 40, padR = 14, padT = 14, padB = 22;
+  const vals = points.map(p => p.value).filter(v => v != null);
+  if (vals.length === 0) return <div style={{ color: "var(--text3)", fontSize: 12, padding: 20 }}>No data in this window.</div>;
+  let lo = yMin != null ? yMin : Math.min(...vals, target != null ? target : Infinity);
+  let hi = yMax != null ? yMax : Math.max(...vals, target != null ? target : -Infinity);
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const span = hi - lo, pad = yMin != null && yMax != null ? 0 : span * 0.12;
+  lo -= pad; hi += pad;
+  const x = i => padL + (points.length === 1 ? 0 : (i / (points.length - 1)) * (W - padL - padR));
+  const y = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+  const gridVals = bands || [lo + (hi - lo) * 0.25, lo + (hi - lo) * 0.5, lo + (hi - lo) * 0.75];
+  const path = points.map((p, i) => p.value == null ? null : `${x(i)},${y(p.value)}`).filter(Boolean).join(" ");
+  const labelStep = Math.max(1, Math.ceil(points.length / 9));
+  const last = [...points].reverse().find(p => p.value != null);
+  const lastIdx = points.lastIndexOf(last);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {gridVals.map(g => (
+        <g key={g}>
+          <line x1={padL} x2={W - padR} y1={y(g)} y2={y(g)} stroke="var(--border)" strokeWidth="1" />
+          <text x={padL - 6} y={y(g) + 3} textAnchor="end" fontSize="9" fill="var(--text3)" fontFamily="var(--font-mono)">{fmtVal(g)}</text>
+        </g>
+      ))}
+      {target != null && (
+        <g>
+          <line x1={padL} x2={W - padR} y1={y(target)} y2={y(target)} stroke="var(--text3)" strokeWidth="1" strokeDasharray="4 4" />
+          <text x={W - padR} y={y(target) - 4} textAnchor="end" fontSize="9" fill="var(--text3)" fontFamily="var(--font-mono)">target {targetDir}{fmtVal(target)}</text>
+        </g>
+      )}
+      <polyline points={path} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      {points.map((p, i) => p.value == null ? null : (
+        <g key={p.label}>
+          <circle cx={x(i)} cy={y(p.value)} r={i === lastIdx ? 4 : 3}
+            fill={i === lastIdx ? (dotTone ? dotTone(p.value) : color) : "var(--surface)"}
+            stroke={dotTone ? dotTone(p.value) : color} strokeWidth="2" />
+          <rect x={x(i) - 12} y={padT} width="24" height={H - padT - padB} fill="transparent">
+            <title>{p.tip}</title>
+          </rect>
+        </g>
+      ))}
+      {last && (
+        <text x={Math.min(x(lastIdx) + 8, W - padR)} y={y(last.value) - 8} textAnchor={lastIdx > points.length - 3 ? "end" : "start"} fontSize="11" fontWeight="500" fill="var(--text)" fontFamily="var(--font-mono)">{fmtVal(last.value)}</text>
+      )}
+      {points.map((p, i) => i % labelStep !== 0 ? null : (
+        <text key={p.label} x={x(i)} y={H - 7} textAnchor="middle" fontSize="9" fill="var(--text3)" fontFamily="var(--font-mono)">{p.label}</text>
+      ))}
+    </svg>
+  );
+}
+
+function Trends({ tenantId, categories, allTransactions }) {
+  const [windowMonths, setWindowMonths] = useState(18);
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth() - (windowMonths - 1), 1).toISOString().slice(0, 10);
+      const data = tenantId === "demo"
+        ? (allTransactions || [])
+        : await fetchTransactions(tenantId, { start, end: now.toISOString().slice(0, 10) });
+      if (alive) { setRows(data); setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [tenantId, windowMonths]);
+
+  const monthly = useMemo(() => {
+    if (!rows) return [];
+    const mapped = rows.map(t => ({ ...t, category: t.category ?? (t.category_id || UNCATEGORIZED) }));
+    const isLedger = makeLedgerFilter(categories, mapped);
+    const cogsCatIds = new Set((categories || []).filter(c => (c.taxLine ?? c.tax_line) === "COGS").map(c => c.id));
+    const laborCat = (categories || []).find(c => /payroll|labor|wage/i.test(c.name || ""));
+    const findCatIds = (pred) => new Set((categories || []).filter(pred).map(c => c.id));
+    const ebitdaAddbackIds = new Set([
+      ...findCatIds(c => /interest/i.test(c.name || "") || (c.taxLine ?? c.tax_line) === "Interest"),
+      ...findCatIds(c => (/income\s*tax|federal\s*tax|state\s*income\s*tax/i.test(c.name || "") && !/sales/i.test(c.name || "")) || (c.taxLine ?? c.tax_line) === "Income Tax"),
+      ...findCatIds(c => /depreciation/i.test(c.name || "") || (c.taxLine ?? c.tax_line) === "Depreciation"),
+      ...findCatIds(c => /amortization/i.test(c.name || "") || (c.taxLine ?? c.tax_line) === "Amortization"),
+    ]);
+
+    const byMonth = new Map();
+    for (const t of mapped) {
+      if (!isLedger(t)) continue;
+      const d = accrualDate(t);
+      if (!d) continue;
+      const key = d.slice(0, 7);
+      if (!byMonth.has(key)) byMonth.set(key, { revenue: 0, expenses: 0, cogs: 0, labor: 0, addbacks: 0 });
+      const m = byMonth.get(key);
+      const amt = parseFloat(t.amount || 0);
+      if (amt > 0) m.revenue += amt; else m.expenses += -amt;
+      if (amt < 0 && cogsCatIds.has(t.category)) m.cogs += -amt;
+      if (amt < 0 && laborCat && t.category === laborCat.id) m.labor += -amt;
+      if (amt < 0 && ebitdaAddbackIds.has(t.category)) m.addbacks += -amt;
+    }
+
+    const keys = [...byMonth.keys()].sort();
+    return keys.map(key => {
+      const m = byMonth.get(key);
+      const [yy, mm] = key.split("-");
+      const label = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(mm, 10) - 1] + " " + yy.slice(2);
+      if (m.revenue <= 0) return { key, label, revenue: m.revenue, netIncome: m.revenue - m.expenses };
+      const netIncome = m.revenue - m.expenses;
+      const food = (m.cogs / m.revenue) * 100;
+      const labor = (m.labor / m.revenue) * 100;
+      const prime = food + labor;
+      const netMargin = (netIncome / m.revenue) * 100;
+      const ebitda = ((netIncome + m.addbacks) / m.revenue) * 100;
+      const vals = { net_margin: netMargin, ebitda, prime, food, labor };
+      const score = Math.round(Object.entries(TREND_BENCH).reduce((s, [k, b]) => s + trendNorm(vals[k], b) * b.weight, 0));
+      return { key, label, revenue: m.revenue, netIncome, food, labor, prime, netMargin, ebitda, score };
+    });
+  }, [rows, categories]);
+
+  const latest = [...monthly].reverse().find(m => m.score != null);
+  const prev = latest ? [...monthly].reverse().find(m => m.score != null && m.key < latest.key) : null;
+  const pct1 = v => v.toFixed(1) + "%";
+  const pct0 = v => Math.round(v) + "%";
+  const kpiCards = [
+    { title: "Food Cost %",  metric: "food",      target: 28, dir: "≤", lower: true,  bench: TREND_BENCH.food },
+    { title: "Labor Cost %", metric: "labor",     target: 25, dir: "≤", lower: true,  bench: TREND_BENCH.labor },
+    { title: "Prime Cost %", metric: "prime",     target: 55, dir: "≤", lower: true,  bench: TREND_BENCH.prime },
+    { title: "Net Margin %", metric: "netMargin", target: 15, dir: "≥", lower: false, bench: TREND_BENCH.net_margin },
+  ];
+  const deltaChip = (curr, before, lower) => {
+    if (curr == null || before == null) return null;
+    const d = curr - before;
+    if (Math.abs(d) < 0.05) return <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>= flat</span>;
+    const good = lower ? d < 0 : d > 0;
+    return (
+      <span style={{ fontSize: 10, color: good ? "var(--accent)" : "var(--red)", fontFamily: "var(--font-mono)" }}>
+        {d > 0 ? "▲" : "▼"} {Math.abs(d).toFixed(1)}pp vs prev
+      </span>
+    );
+  };
+
+  // Revenue vs Net Income bars share one $ scale anchored at zero.
+  const moneyChart = useMemo(() => {
+    if (monthly.length === 0) return null;
+    const W = 560, H = 200, padL = 48, padR = 14, padT = 14, padB = 22;
+    const hi = Math.max(...monthly.map(m => m.revenue), 1);
+    const lo = Math.min(...monthly.map(m => m.netIncome), 0);
+    const y = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+    const slot = (W - padL - padR) / monthly.length;
+    const bw = Math.max(3, Math.min(14, slot * 0.32));
+    const labelStep = Math.max(1, Math.ceil(monthly.length / 9));
+    const fmtK = v => "$" + Math.round(v / 1000) + "k";
+    const gridVals = [0, hi * 0.5, hi];
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+        {gridVals.map(g => (
+          <g key={g}>
+            <line x1={padL} x2={W - padR} y1={y(g)} y2={y(g)} stroke={g === 0 ? "var(--border2)" : "var(--border)"} strokeWidth="1" />
+            <text x={padL - 6} y={y(g) + 3} textAnchor="end" fontSize="9" fill="var(--text3)" fontFamily="var(--font-mono)">{fmtK(g)}</text>
+          </g>
+        ))}
+        {monthly.map((m, i) => {
+          const cx = padL + slot * i + slot / 2;
+          const niTone = m.netIncome >= 0 ? "var(--accent)" : "var(--red)";
+          return (
+            <g key={m.key}>
+              <rect x={cx - bw - 1} y={y(m.revenue)} width={bw} height={Math.max(1, y(0) - y(m.revenue))} rx="2" fill="var(--blue)" opacity="0.75" />
+              <rect x={cx + 1} y={m.netIncome >= 0 ? y(m.netIncome) : y(0)} width={bw} height={Math.max(1, Math.abs(y(0) - y(m.netIncome)))} rx="2" fill={niTone} opacity="0.9" />
+              <rect x={cx - slot / 2} y={padT} width={slot} height={H - padT - padB} fill="transparent">
+                <title>{`${m.label} · Revenue ${fmt(m.revenue)} · Net Income ${fmt(m.netIncome)}`}</title>
+              </rect>
+              {i % labelStep === 0 && <text x={cx} y={H - 7} textAnchor="middle" fontSize="9" fill="var(--text3)" fontFamily="var(--font-mono)">{m.label}</text>}
+            </g>
+          );
+        })}
+      </svg>
+    );
+  }, [monthly]);
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Trends</div>
+          <div className="page-subtitle">Month-over-month KPIs · same math as the P&L Operations Score</div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[12, 18, 24].map(n => (
+            <button key={n} className={`btn btn-sm ${windowMonths === n ? "btn-primary" : "btn-outline"}`} onClick={() => setWindowMonths(n)}>{n} mo</button>
+          ))}
+        </div>
+      </div>
+
+      {loading && <div style={{ color: "var(--text3)", fontSize: 12, fontFamily: "var(--font-mono)", padding: 30 }}>Loading {windowMonths} months…</div>}
+
+      {!loading && monthly.length > 0 && (
+        <>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+              <div>
+                <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Operations Score</div>
+                <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>0–100 · 80+ Excellent · 60+ Healthy · 40+ Watch · below 40 Critical</div>
+              </div>
+              {latest && latest.score != null && (
+                <div style={{ textAlign: "right" }}>
+                  <span className="mono" style={{ fontSize: 26, color: trendBandTone(latest.score) }}>{latest.score}</span>
+                  <div>{deltaChip(latest.score, prev?.score, false)}</div>
+                </div>
+              )}
+            </div>
+            <TrendLineChart
+              points={monthly.map(m => ({ label: m.label, value: m.score ?? null, tip: `${m.label} · Score ${m.score ?? "—"}` }))}
+              yMin={0} yMax={100} bands={[40, 60, 80]} fmtVal={v => Math.round(v)}
+              color="var(--accent)" dotTone={trendBandTone} height={190}
+            />
+          </div>
+
+          <div className="grid-2" style={{ gap: 14 }}>
+            {kpiCards.map(k => {
+              const lv = latest?.[k.metric], pv = prev?.[k.metric];
+              const tone = lv == null ? "var(--text3)" : trendBandTone(trendNorm(lv, k.bench));
+              return (
+                <div key={k.metric} className="card" style={{ marginBottom: 14 }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+                    <div>
+                      <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>{k.title}</div>
+                      <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>target {k.dir}{k.target}%</div>
+                    </div>
+                    {lv != null && (
+                      <div style={{ textAlign: "right" }}>
+                        <span className="mono" style={{ fontSize: 22, color: tone }}>{pct1(lv)}</span>
+                        <div>{deltaChip(lv, pv, k.lower)}</div>
+                      </div>
+                    )}
+                  </div>
+                  <TrendLineChart
+                    points={monthly.map(m => ({ label: m.label, value: m[k.metric] ?? null, tip: `${m.label} · ${k.title} ${m[k.metric] != null ? pct1(m[k.metric]) : "—"}` }))}
+                    target={k.target} targetDir={k.dir} fmtVal={pct0} height={150}
+                    color="var(--blue)"
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="card">
+            <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+              <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13 }}>Revenue vs Net Income</div>
+              <div style={{ display: "flex", gap: 14, fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text2)" }}>
+                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "var(--blue)", marginRight: 5 }} />Revenue</span>
+                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "var(--accent)", marginRight: 5 }} />Net Income (red when negative)</span>
+              </div>
+            </div>
+            {moneyChart}
+          </div>
+        </>
+      )}
+      {!loading && monthly.length === 0 && (
+        <div className="card" style={{ color: "var(--text3)", fontSize: 13 }}>No transactions found in the last {windowMonths} months.</div>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -9043,6 +9331,7 @@ export default function App() {
     { id: "categories", label: "Chart of Accounts", icon: "categories" },
     { id: "pl", label: "Profit & Loss", icon: "pl" },
     { id: "performance", label: "Performance", icon: "insights" },
+    { id: "trends", label: "Trends", icon: "trends" },
     { id: "cashflow", label: "Cash Flow", icon: "cashflow" },
     { id: "budget", label: "Budget", icon: "budget" },
     { id: "bills", label: "Bills & Payments", icon: "bills", badge: null },
@@ -9066,6 +9355,7 @@ export default function App() {
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} setTransactions={setTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} payrollRuns={payrollRuns} tenantId={TENANT_ID} showToast={showToast} />;
       case "performance":  return <Performance tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
+      case "trends":       return <Trends tenantId={TENANT_ID} categories={categories} allTransactions={transactions} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
       case "bills":        return <Bills transactions={filteredByDate} setTransactions={setTransactions} bills={bills} setBills={setBills} saveBill={saveBill} deleteB={async(id)=>{setBills(p=>p.filter(b=>b.id!==id));if(TENANT_ID!=="demo")await deleteBill(id);}} categories={categories} dateRange={dateRange} showToast={showToast} saveTransactions={saveTransactions} />;
