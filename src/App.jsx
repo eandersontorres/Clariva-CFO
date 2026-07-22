@@ -927,6 +927,17 @@ const quarterStart = () => {
 const lastMonthStart = () => { const d = new Date(); d.setMonth(d.getMonth()-1); d.setDate(1); return d.toISOString().split("T")[0]; };
 const lastMonthEnd   = () => { const d = new Date(); d.setDate(0); return d.toISOString().split("T")[0]; };
 
+// ─── BOOKS CLOSED LOCK ────────────────────────────────────────────────────────
+// Jan–Jun 2026 lives in the ledger as monthly P&L summaries imported from the
+// accountant's spreadsheet (source 'pl_import', account "P&L Import"). Any row
+// synced or file-imported into that window would double-count against those
+// summaries, so every ingestion path filters through inOpenPeriod(). The DB
+// enforces the same rule with a BEFORE INSERT trigger (r7_ledger_locks +
+// r7_ledger_block_closed_period) so server-side syncs (Plaid, Square) are
+// covered even if the UI guard is bypassed.
+const BOOKS_CLOSED_THROUGH = "2026-06-30";
+const inOpenPeriod = (t) => !t.date || t.date > BOOKS_CLOSED_THROUGH;
+
 const DATE_PRESETS = [
   { label: "This Month",    start: firstOfMonth,  end: today },
   { label: "Last Month",    start: lastMonthStart, end: lastMonthEnd },
@@ -1029,14 +1040,18 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
       const foodBevCat = categories.find(c => c.name === "Food & Beverage" || c.tax_line === "COGS");
 
       const expTxns = purchasesToTransactions(purchases, vendorMap, foodBevCat?.id);
-      const all = expTxns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED }));
+      const mapped = expTxns.map(t => ({ ...t, category: t.category_id || UNCATEGORIZED }));
+      const all = mapped.filter(inOpenPeriod);
+      const lockedOut = mapped.length - all.length;
 
       if (all.length === 0) {
-        showToast("No new vendor invoices from Kitchen in this date range.", "info");
+        showToast(lockedOut > 0
+          ? `Books are closed through ${BOOKS_CLOSED_THROUGH} — ${lockedOut} invoice(s) already covered by the imported P&L.`
+          : "No new vendor invoices from Kitchen in this date range.", "info");
       } else {
         onSync(all);
         setLastSync(new Date().toLocaleTimeString());
-        showToast(all.length + " vendor invoice(s) synced from Kitchen", "success");
+        showToast(all.length + " vendor invoice(s) synced from Kitchen" + (lockedOut > 0 ? ` · ${lockedOut} skipped (closed period)` : ""), "success");
       }
     } catch (err) {
       showToast("Sync failed: " + err.message, "error");
@@ -1068,10 +1083,19 @@ function SalesSyncButton({ tenantId, dateRange, onSync, showToast }) {
   const [lastSync, setLastSync] = useState(null);
 
   const sync = async () => {
+    // Never re-pull Square days that fall inside the closed period — those
+    // months exist only as the imported P&L summaries and would double-count.
+    if (dateRange.end <= BOOKS_CLOSED_THROUGH) {
+      showToast(`Books are closed through ${BOOKS_CLOSED_THROUGH} — Square sales for this range are already in the imported P&L.`, "info");
+      return;
+    }
+    const clampedRange = dateRange.start > BOOKS_CLOSED_THROUGH
+      ? dateRange
+      : { start: "2026-07-01", end: dateRange.end };
     setLoading(true);
     showToast("Pulling Square sales + processing fees...", "info");
     try {
-      const result = await syncSquareSales(tenantId, dateRange);
+      const result = await syncSquareSales(tenantId, clampedRange);
       setLastSync(new Date().toLocaleTimeString());
       // Response shape changed in PR5 (Orders API): totals now expose net_sales,
       // tax, tips, etc separately. Fall back to the old gross_sales field for
@@ -1121,7 +1145,7 @@ function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
     showToast("Syncing ad spend from Favo Marketing...", "info");
     try {
       const result = await fetchMarketingSpend(tenantId, dateRange);
-      const txns = result.transactions || [];
+      const txns = (result.transactions || []).filter(inOpenPeriod);
       if (txns.length === 0) {
         if (!result.accounts) {
           showToast("No connected ad accounts in Marketing yet.", "info");
@@ -1913,9 +1937,13 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           showToast("No transactions found in PDF.", "error");
           return;
         }
-        const { fresh, skipped } = dedupAgainstExisting(rawImported);
+        const { fresh: freshAll, skipped } = dedupAgainstExisting(rawImported);
+        const fresh = freshAll.filter(inOpenPeriod);
+        const lockedOut = freshAll.length - fresh.length;
         if (fresh.length === 0) {
-          showToast(`All ${rawImported.length} transactions were already in the ledger (same date + amount + description). Nothing imported.`, "info");
+          showToast(lockedOut > 0
+            ? `Books are closed through ${BOOKS_CLOSED_THROUGH} — these transactions are already covered by the imported P&L. Nothing imported.`
+            : `All ${rawImported.length} transactions were already in the ledger (same date + amount + description). Nothing imported.`, "info");
           return;
         }
         const linked = applyAccountLink(fresh, bankAccounts);
@@ -1933,6 +1961,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         const autoCount = imported.filter(t => t.autoCategorized).length;
         const tags = [
           skipped.length && `${skipped.length} duplicate${skipped.length === 1 ? "" : "s"} skipped`,
+          lockedOut && `${lockedOut} in closed period skipped`,
           acctCount && `${acctCount} linked to accounts`,
           recCount && `${recCount} matched recurring`,
           autoCount && `${autoCount} auto-categorized`,
@@ -1960,9 +1989,13 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         rawParsed = parseBoACSV(text);
       }
       if (rawParsed.length === 0) { showToast("No transactions found in file. Check the format.", "error"); return; }
-      const { fresh, skipped } = dedupAgainstExisting(rawParsed);
+      const { fresh: freshAll, skipped } = dedupAgainstExisting(rawParsed);
+      const fresh = freshAll.filter(inOpenPeriod);
+      const lockedOut = freshAll.length - fresh.length;
       if (fresh.length === 0) {
-        showToast(`All ${rawParsed.length} transactions were already in the ledger (same date + amount + description). Nothing imported.`, "info");
+        showToast(lockedOut > 0
+          ? `Books are closed through ${BOOKS_CLOSED_THROUGH} — these transactions are already covered by the imported P&L. Nothing imported.`
+          : `All ${rawParsed.length} transactions were already in the ledger (same date + amount + description). Nothing imported.`, "info");
         return;
       }
       const linked = applyAccountLink(fresh, bankAccounts);
@@ -1980,6 +2013,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
       const autoCount = parsed.filter(t => t.autoCategorized).length;
       const tags = [
         skipped.length && `${skipped.length} duplicate${skipped.length === 1 ? "" : "s"} skipped`,
+        lockedOut && `${lockedOut} in closed period skipped`,
         acctCount && `${acctCount} linked to accounts`,
         recCount && `${recCount} matched recurring`,
         autoCount && `${autoCount} auto-categorized`,
