@@ -205,7 +205,15 @@ export default async function handler(req, res) {
         id: "plaid_" + t.transaction_id,
         tenant_id,
         date: t.date || t.authorized_date,
-        description: (merchantOf(t) || "TRANSACTION").toUpperCase().trim().slice(0, 80),
+        // Pending card charges often carry only a generic network descriptor
+        // ("MAIL/TELEPHONE ORDER") with no merchant anywhere. Label those
+        // PENDING — the real merchant name arrives when the charge posts and
+        // the posted version replaces this row on the next sync.
+        description: (
+          t.pending && !t.merchant_name && !(Array.isArray(t.counterparties) && t.counterparties.some((c) => c && c.name))
+            ? "PENDING"
+            : (merchantOf(t) || "TRANSACTION")
+        ).toUpperCase().trim().slice(0, 80),
         amount: -Number(t.amount),                 // flip Plaid's sign -> app convention
         category_id: suggestCategoryId(t, nameToId), // auto-categorize expenses from Plaid PFC
         account: acctName[t.account_id] || item.institution_name || "Plaid",
