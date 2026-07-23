@@ -162,6 +162,8 @@ export async function upsertCategory(row, tenantId) {
     color: row.color || '#555b6b',
     tax_line: row.taxLine || row.tax_line || '',
     is_default: row.is_default || false,
+    is_eliminable: row.is_eliminable || false,
+    eliminable_note: row.eliminable_note || null,
   }
   if (!mapped.id) delete mapped.id
   const { error } = await supabase.from('r7_ledger_accounts').upsert(mapped, { onConflict: 'id' })

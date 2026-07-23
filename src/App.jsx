@@ -2395,7 +2395,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
 // ─── CATEGORIES ───────────────────────────────────────────────────────────────
 function Categories({ categories, setCategories, saveCategory, deleteCategory: deleteCategoryDB, transactions, showToast }) {
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ name: "", type: "expense", color: "#f05e5e", taxLine: "" });
+  const [form, setForm] = useState({ name: "", type: "expense", color: "#f05e5e", taxLine: "", is_eliminable: false, eliminable_note: "" });
   const [editing, setEditing] = useState(null);
 
   const COLORS = ["#f05e5e", "#f0c84a", "#4a9ff0", "#a47ff0", "#00d4a0", "#f0904a", "#4af0d0", "#90a0b0", "#e06090", "#60c0e0"];
@@ -2431,12 +2431,13 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
     "Wages",
   ];
 
-  const openAdd = () => { setEditing(null); setForm({ name: "", type: "expense", color: "#f05e5e", taxLine: "" }); setModal(true); };
-  const openEdit = (c) => { setEditing(c.id); setForm({ name: c.name, type: c.type, color: c.color, taxLine: c.taxLine }); setModal(true); };
+  const openAdd = () => { setEditing(null); setForm({ name: "", type: "expense", color: "#f05e5e", taxLine: "", is_eliminable: false, eliminable_note: "" }); setModal(true); };
+  const openEdit = (c) => { setEditing(c.id); setForm({ name: c.name, type: c.type, color: c.color, taxLine: c.taxLine, is_eliminable: !!c.is_eliminable, eliminable_note: c.eliminable_note || "" }); setModal(true); };
 
   const save = () => {
     if (!form.name.trim()) return;
     const updated = { id: editing || Date.now().toString(), ...form };
+    if (updated.type !== "expense") { updated.is_eliminable = false; updated.eliminable_note = ""; }
     if (editing) {
       setCategories(prev => prev.map(c => c.id === editing ? updated : c));
       showToast("Category updated", "success");
@@ -2484,7 +2485,12 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
               <div key={c.id} className="card card-sm flex items-center gap-12" style={{ marginBottom: 8 }}>
                 <div className="swatch" style={{ background: c.color, width: 14, height: 14, borderRadius: 4 }} />
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>
+                    {c.name}
+                    {c.is_eliminable && (
+                      <span title={c.eliminable_note || "Flagged eliminable — feeds the CEO cockpit"} style={{ marginLeft: 8, fontSize: 9, fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5, color: "var(--yellow)", background: "var(--yellowBg)", border: "1px solid var(--yellow)40", borderRadius: 4, padding: "1px 6px", verticalAlign: "middle" }}>eliminable</span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
                     {txnCount(c.id)} txns · {c.taxLine || "no tax line"} · {fmt(Math.abs(txnTotal(c.id)))}
                   </div>
@@ -2544,6 +2550,21 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
                   ))}
                 </div>
               </div>
+              {form.type === "expense" && (
+                <div className="form-group" style={{ background: form.is_eliminable ? "var(--yellowBg)" : "transparent", border: `1px solid ${form.is_eliminable ? "var(--yellow)" : "var(--border)"}40`, borderRadius: 8, padding: 12 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
+                    <input type="checkbox" checked={form.is_eliminable} onChange={e => setForm(f => ({ ...f, is_eliminable: e.target.checked }))} />
+                    Eliminable cost
+                  </label>
+                  <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4, lineHeight: 1.4 }}>
+                    Cost that could be cut or renegotiated. Feeds the "Eliminable cost" KPI in the CEO cockpit.
+                  </div>
+                  {form.is_eliminable && (
+                    <input className="input" style={{ marginTop: 8 }} placeholder="Why / how to eliminate — e.g. renegotiate in Jan 27" maxLength={120}
+                      value={form.eliminable_note} onChange={e => setForm(f => ({ ...f, eliminable_note: e.target.value }))} />
+                  )}
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
