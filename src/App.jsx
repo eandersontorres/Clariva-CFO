@@ -1341,6 +1341,7 @@ const FavoMark = ({ size = 34 }) => (
 const Icon = ({ name, size = 16, color = "currentColor" }) => {
   const icons = {
     dashboard: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>,
+    ceo: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.5" fill={color}/></svg>,
     transactions: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>,
     categories: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>,
     pl: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
@@ -9083,6 +9084,222 @@ function Trends({ tenantId, categories, allTransactions }) {
   );
 }
 
+// ─── CEO COCKPIT ──────────────────────────────────────────────────────────────
+const CEO_DEFAULT_MACHINES = [
+  { id: "pizza",  name: "Boleadora de massa de pizza", now: "Hoje: porcionado e boleado à mão",
+    desc: "Divisora/boleadora que corta e arredonda as bolas de massa em uma prensada.",
+    equip: 2500, setup: 150, days: 6, manual: 45, machine: 12, maint: 120 },
+  { id: "brig",   name: "Porcionadora de brigadeiro", now: "Hoje: porcionado, pesado e boleado à mão",
+    desc: "Encrustadeira/formadora automática que porciona e arredonda as bolinhas.",
+    equip: 7000, setup: 400, days: 4, manual: 40, machine: 10, maint: 300 },
+  { id: "batata", name: "Descascadora de batata", now: "Hoje: descascado à mão",
+    desc: "Descascadora abrasiva de bancada, 20–22 lb por ciclo.",
+    equip: 1500, setup: 100, days: 6, manual: 35, machine: 6, maint: 80 },
+];
+
+const roiStorageKey = (tid) => `favo_ceo_roi_${tid || "demo"}`;
+
+const roiCalc = (m, rate, weeks) => {
+  const capex = (+m.equip || 0) + (+m.setup || 0);
+  const dailyMin = Math.max(0, (+m.manual || 0) - (+m.machine || 0));
+  const annualHrs = dailyMin * (+m.days || 0) * (+weeks || 0) / 60;
+  const annualNet = annualHrs * (+rate || 0) - (+m.maint || 0);
+  const months = annualNet > 0 ? capex / (annualNet / 12) : Infinity;
+  const roi3 = capex > 0 ? (annualNet * 3 - capex) / capex * 100 : 0;
+  return { capex, dailyMin, annualHrs, annualNet, months, roi3 };
+};
+
+const roiVerdict = (mo) => {
+  if (!isFinite(mo) || mo < 0) return { t: "Sem economia", c: "var(--red)", bg: "var(--redBg)" };
+  if (mo <= 18) return { t: "Compra recomendada", c: "var(--accent)", bg: "var(--accentBg)" };
+  if (mo <= 36) return { t: "Avaliar volume", c: "var(--yellow)", bg: "var(--yellowBg)" };
+  return { t: "Não compensa hoje", c: "var(--red)", bg: "var(--redBg)" };
+};
+
+const roiMonths = (mo) => !isFinite(mo) ? "∞" : mo < 24 ? mo.toFixed(mo < 10 ? 1 : 0) : (mo / 12).toFixed(1);
+const roiMonthsUnit = (mo) => !isFinite(mo) ? "" : mo < 24 ? "meses" : "anos";
+
+function CEO({ tenantId, showToast }) {
+  const KEY = roiStorageKey(tenantId);
+  const [rate, setRate] = useState(18);
+  const [weeks, setWeeks] = useState(52);
+  const [machines, setMachines] = useState(CEO_DEFAULT_MACHINES);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (Array.isArray(d.machines) && d.machines.length) setMachines(d.machines);
+        if (typeof d.rate === "number") setRate(d.rate);
+        if (typeof d.weeks === "number") setWeeks(d.weeks);
+      }
+    } catch { /* ignore */ }
+  }, [KEY]);
+
+  useEffect(() => {
+    try { localStorage.setItem(KEY, JSON.stringify({ rate, weeks, machines })); } catch { /* ignore */ }
+  }, [KEY, rate, weeks, machines]);
+
+  const upd = (id, key, val) => setMachines(ms => ms.map(m => m.id === id ? { ...m, [key]: val } : m));
+  const addMachine = () => setMachines(ms => [...ms, {
+    id: "m_" + Date.now(), name: "Nova máquina", now: "Hoje: manual", desc: "",
+    equip: 0, setup: 0, days: 6, manual: 0, machine: 0, maint: 0,
+  }]);
+  const removeMachine = (id) => setMachines(ms => ms.filter(m => m.id !== id));
+  const resetDefaults = () => {
+    setMachines(CEO_DEFAULT_MACHINES); setRate(18); setWeeks(52);
+    if (showToast) showToast("Premissas de ROI restauradas", "success");
+  };
+
+  const results = machines.map(m => ({ m, r: roiCalc(m, rate, weeks) }));
+  const totalCapex = results.reduce((s, x) => s + x.r.capex, 0);
+  const totalSavings = results.reduce((s, x) => s + Math.max(0, x.r.annualNet), 0);
+  const blendedRoi = totalCapex > 0 ? (totalSavings * 3 - totalCapex) / totalCapex * 100 : 0;
+  const best = results.filter(x => isFinite(x.r.months)).sort((a, b) => a.r.months - b.r.months)[0];
+
+  const sectionLabel = { fontSize: 11, fontFamily: "var(--font-mono)", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--text3)", margin: "26px 0 14px" };
+
+  const numField = (m, key, label, unit, prefix) => (
+    <div>
+      <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        {prefix && <span style={{ color: "var(--text3)", fontSize: 13 }}>{prefix}</span>}
+        <input className="input" type="number" min="0" style={{ fontFamily: "var(--font-mono)", padding: "6px 9px" }}
+          value={m[key]} onChange={e => upd(m.id, key, e.target.value === "" ? "" : +e.target.value)} />
+        {unit && <span style={{ color: "var(--text3)", fontSize: 11, whiteSpace: "nowrap" }}>{unit}</span>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">CEO Cockpit</div>
+          <div className="page-subtitle">Decisões de dono · ROI de investimentos · TorresBee</div>
+        </div>
+        <div className="flex gap-8">
+          <button className="btn btn-outline btn-sm" onClick={resetDefaults}>↺ Restaurar padrão</button>
+          <button className="btn btn-primary btn-sm" onClick={addMachine}><Icon name="plus" size={13} /> Máquina</button>
+        </div>
+      </div>
+
+      <div style={sectionLabel}>ROI de Equipamentos</div>
+
+      <div className="card" style={{ marginBottom: 18, display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text3)", marginBottom: 6 }}>Custo mão de obra</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: "var(--text3)" }}>$</span>
+            <input className="input" type="number" step="0.5" min="0" style={{ width: 90, fontFamily: "var(--font-mono)" }}
+              value={rate} onChange={e => setRate(e.target.value === "" ? 0 : +e.target.value)} />
+            <span style={{ color: "var(--text3)", fontSize: 12 }}>/hora (carregado)</span>
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text3)", marginBottom: 6 }}>Semanas / ano</div>
+          <input className="input" type="number" step="1" min="0" style={{ width: 90, fontFamily: "var(--font-mono)" }}
+            value={weeks} onChange={e => setWeeks(e.target.value === "" ? 0 : +e.target.value)} />
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--text3)", maxWidth: 320, lineHeight: 1.5 }}>
+          A economia considera só a mão de obra liberada. Ganho de capacidade, venda extra e menos desperdício ficam de fora — são upside.
+        </div>
+      </div>
+
+      <div className="kpi-grid">
+        <div className="kpi-card kpi-blue">
+          <div className="kpi-label">Investimento total</div>
+          <div className="kpi-value">{fmt(totalCapex)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>{machines.length} máquina{machines.length === 1 ? "" : "s"} avaliada{machines.length === 1 ? "" : "s"}</div>
+        </div>
+        <div className="kpi-card kpi-accent">
+          <div className="kpi-label">Economia / ano</div>
+          <div className="kpi-value" style={{ color: "var(--accent)" }}>{fmt(totalSavings)}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>mão de obra liberada</div>
+        </div>
+        <div className="kpi-card kpi-yellow">
+          <div className="kpi-label">Melhor payback</div>
+          <div className="kpi-value">{best ? `${roiMonths(best.r.months)} ${roiMonthsUnit(best.r.months)}` : "—"}</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{best ? best.m.name : "sem economia"}</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">ROI em 3 anos</div>
+          <div className="kpi-value" style={{ color: blendedRoi >= 0 ? "var(--accent)" : "var(--red)" }}>{blendedRoi >= 0 ? "+" : ""}{Math.round(blendedRoi)}%</div>
+          <div className="kpi-delta" style={{ color: "var(--text3)" }}>carteira combinada</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 16 }}>
+        {results.map(({ m, r }) => {
+          const v = roiVerdict(r.months);
+          const barPct = !isFinite(r.months) ? 100 : Math.min(100, (r.months / 48) * 100);
+          return (
+            <div key={m.id} className="card" style={{ padding: 0, overflow: "hidden", borderColor: `color-mix(in srgb, ${v.c} 35%, var(--border))` }}>
+              <div style={{ padding: "16px 18px 14px", borderBottom: "1px solid var(--border)" }}>
+                <div className="flex items-center justify-between" style={{ gap: 8 }}>
+                  <div style={{ fontSize: 10, fontFamily: "var(--font-mono)", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text3)" }}>{m.now}</div>
+                  <button className="btn btn-ghost" style={{ padding: "2px 6px" }} title="Remover" onClick={() => removeMachine(m.id)}><Icon name="close" size={13} /></button>
+                </div>
+                <input value={m.name} onChange={e => upd(m.id, "name", e.target.value)}
+                  style={{ width: "100%", border: "none", background: "transparent", color: "var(--text)", fontSize: 17, fontWeight: 600, fontFamily: "var(--font-sans)", letterSpacing: "-0.01em", outline: "none", margin: "5px 0 2px", padding: 0 }} />
+                <div style={{ fontSize: 12, color: "var(--text3)", lineHeight: 1.45 }}>{m.desc}</div>
+              </div>
+
+              <div style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 14px" }}>
+                {numField(m, "equip", "Equipamento", "", "$")}
+                {numField(m, "setup", "Instalação/frete", "", "$")}
+                {numField(m, "manual", "Tempo manual", "min/dia", "")}
+                {numField(m, "machine", "Tempo c/ máquina", "min/dia", "")}
+                {numField(m, "days", "Dias de uso", "/sem", "")}
+                {numField(m, "maint", "Manutenção", "/ano", "$")}
+              </div>
+
+              <div style={{ padding: "16px 18px 18px", background: "var(--surface2)", borderTop: "1px solid var(--border)" }}>
+                <div className="flex items-center justify-between" style={{ gap: 12 }}>
+                  <div>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 30, fontWeight: 400, lineHeight: 1, color: v.c }}>
+                      {roiMonths(r.months)}<span style={{ fontSize: 14, color: "var(--text3)" }}> {roiMonthsUnit(r.months)}</span>
+                    </div>
+                    <div style={{ fontSize: 10, fontFamily: "var(--font-mono)", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text3)", marginTop: 5 }}>Payback</div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 999, background: v.bg, color: v.c, whiteSpace: "nowrap" }}>{v.t}</span>
+                </div>
+                <div style={{ height: 6, background: "var(--border)", borderRadius: 999, margin: "13px 0 12px", overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: barPct + "%", background: v.c, borderRadius: 999, transition: "width 0.2s" }} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div className="card card-sm" style={{ padding: "9px 11px" }}>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 16 }}>{fmt(Math.max(0, r.annualNet))}</div>
+                    <div style={{ fontSize: 10.5, color: "var(--text3)", marginTop: 2 }}>Economia / ano</div>
+                  </div>
+                  <div className="card card-sm" style={{ padding: "9px 11px" }}>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 16, color: r.roi3 >= 0 ? "var(--text)" : "var(--red)" }}>{r.roi3 >= 0 ? "+" : ""}{Math.round(r.roi3)}%</div>
+                    <div style={{ fontSize: 10.5, color: "var(--text3)", marginTop: 2 }}>ROI 3 anos</div>
+                  </div>
+                  <div className="card card-sm" style={{ padding: "9px 11px", gridColumn: "1 / -1" }}>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 14 }}>{fmt(r.capex)} · {Math.round(r.annualHrs)} h/ano poupadas</div>
+                    <div style={{ fontSize: 10.5, color: "var(--text3)", marginTop: 2 }}>Investimento total · mão de obra liberada</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="card" style={{ marginTop: 22 }}>
+        <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--accent)", marginBottom: 10 }}>Como ler</div>
+        <ul style={{ margin: 0, paddingLeft: 18, color: "var(--text2)", fontSize: 12.5, lineHeight: 1.6 }}>
+          <li><b style={{ color: "var(--text)" }}>Payback ≤ 18 meses</b> = compra recomendada · <b style={{ color: "var(--yellow)" }}>18–36</b> = avaliar volume · <b style={{ color: "var(--red)" }}>&gt; 36</b> = não compensa hoje.</li>
+          <li>Preencha os minutos com o tempo <b style={{ color: "var(--text)" }}>real</b> gasto por dia hoje (manual) e o esperado com a máquina. Tudo é salvo neste dispositivo.</li>
+          <li>Preços de referência (EUA, jul/2026): boleadora de massa US$1.150 (manual) a US$8.400 (semi-auto) · descascadora 20–22 lb US$1.430–1.680 · porcionadora de brigadeiro (encrustadeira) US$6.800–8.400.</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -9343,6 +9560,7 @@ export default function App() {
   const NAV = [
     { id: "dashboard", label: "Overview", icon: "dashboard" },
     { id: "insights", label: "CFO Insights", icon: "insights" },
+    { id: "ceo", label: "CEO Cockpit", icon: "ceo" },
     { id: "bookkeeper", label: "Bookkeeper", icon: "bookkeeper" },
     { id: "labor", label: "Labor", icon: "labor" },
     { id: "payroll", label: "Payroll", icon: "bills", indent: 1 },
@@ -9366,6 +9584,7 @@ export default function App() {
   const renderScreen = () => {
     switch (screen) {
       case "insights":     return <Insights transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
+      case "ceo":          return <CEO tenantId={TENANT_ID} showToast={showToast} />;
       case "bookkeeper":   return <Bookkeeper transactions={filteredByAccrual} allTransactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} dateRange={dateRange} setScreen={setScreen} showToast={showToast} />;
       case "labor":        return <Labor shifts={laborShifts} transactions={filteredByDate} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(true)} showToast={showToast} />;
       case "tips":         return <Tips tipsDaily={tipsDaily} shifts={laborShifts} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(false)} showToast={showToast} />;
