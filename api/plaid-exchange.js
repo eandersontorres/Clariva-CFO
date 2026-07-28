@@ -7,7 +7,7 @@
 // The access_token is the bank credential. It is returned to the browser NOWHERE
 // in this response — only the institution name + a sanitized account list.
 
-import { createClient } from "@supabase/supabase-js";
+import { authorizeSync, serviceRoleClient } from "./_auth.js";
 
 const PLAID_HOSTS = {
   sandbox: "https://sandbox.plaid.com",
@@ -18,21 +18,25 @@ const PLAID_HOSTS = {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
+  const supabase = serviceRoleClient();
+  if (!supabase) return res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
+
+  const { tenant_id, public_token, institution_name, institution_id } = req.body || {};
+
+  // Exchanges a public token for a long-lived Plaid access_token and stores it
+  // against this tenant — i.e. it attaches a bank connection. Caller must be a
+  // member of the tenant it's attaching to. See api/_auth.js.
+  const auth = await authorizeSync(req, res, tenant_id, supabase);
+  if (!auth.ok) return;
+
+  if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
+  if (!public_token) return res.status(400).json({ error: "public_token required" });
+
   const clientId = (process.env.PLAID_CLIENT_ID || "").trim();
   const secret = (process.env.PLAID_SECRET || "").trim();
   const env = (process.env.PLAID_ENV || "sandbox").trim();
   const base = PLAID_HOSTS[env] || PLAID_HOSTS.sandbox;
   if (!clientId || !secret) return res.status(500).json({ error: "PLAID_CLIENT_ID / PLAID_SECRET not configured" });
-
-  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) return res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
-
-  const { tenant_id, public_token, institution_name, institution_id } = req.body || {};
-  if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
-  if (!public_token) return res.status(400).json({ error: "public_token required" });
-
-  const supabase = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
   try {
     // 1. Exchange public_token -> access_token + item_id

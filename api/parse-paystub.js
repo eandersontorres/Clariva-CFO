@@ -7,6 +7,8 @@
 // strict JSON out. Server normalizes numbers (strips commas / dollar signs)
 // and rebuilds derived totals so the client can trust the response shape.
 
+import { authorizeSession } from './_auth.js'
+
 export const config = {
   api: {
     bodyParser: {
@@ -25,6 +27,11 @@ const num = (v) => {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+
+  // No tenant to scope to, but every call bills Anthropic tokens — and a
+  // paystub PDF is employee PII. Require a real logged-in operator.
+  const auth = await authorizeSession(req, res)
+  if (!auth.ok) return
 
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
   if (!ANTHROPIC_API_KEY) {

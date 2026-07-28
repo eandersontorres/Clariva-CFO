@@ -107,3 +107,47 @@ export async function authorizeSync(req, res, tenantId, db) {
 
   return { ok: true, via: "user", userId: user.id };
 }
+
+/**
+ * Authorize a request that has no tenant to scope to.
+ *
+ * The PDF parsers and the Anthropic proxy take a document, not a tenant_id —
+ * there's nothing to check membership against, but they bill Anthropic tokens
+ * per call, so leaving them open is a direct cost-amplification vector. The
+ * bar here is "a real logged-in operator of some tenant": a valid Supabase JWT
+ * whose user belongs to at least one tenant. A signed-up-but-unassigned user
+ * is not enough.
+ *
+ * Same contract as authorizeSync: on failure the response is already written.
+ */
+export async function authorizeSession(req, res, db) {
+  const token = bearerToken(req);
+  if (!token) return deny(res, "missing bearer token");
+
+  if (matchesSecret(token, process.env.CRON_SECRET)) {
+    return { ok: true, via: "cron", userId: null };
+  }
+
+  const supabase = db || serviceRoleClient();
+  if (!supabase) {
+    res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
+    return { ok: false };
+  }
+
+  const { data, error } = await supabase.auth.getUser(token);
+  const user = data?.user;
+  if (error || !user) return deny(res, "invalid or expired token");
+
+  const { data: rows, error: memberErr } = await supabase
+    .from("r7_user_tenants")
+    .select("tenant_id")
+    .eq("user_id", user.id);
+  if (memberErr) {
+    console.error("session auth membership lookup:", memberErr.message);
+    res.status(500).json({ error: "membership lookup failed" });
+    return { ok: false };
+  }
+  if (!rows || rows.length === 0) return deny(res, "user belongs to no tenant");
+
+  return { ok: true, via: "user", userId: user.id };
+}

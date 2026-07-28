@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
-import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
+import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser, authHeaders } from "./lib/supabase.js";
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 
@@ -1956,7 +1956,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
         });
         const apiRes = await fetch("/api/parse-statement", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: await authHeaders(),
           body: JSON.stringify({ pdfBase64: base64, filename: file.name }),
         });
         if (!apiRes.ok) {
@@ -7430,7 +7430,7 @@ function Payroll({ runs, shifts, tipsDaily, transactions, categories, setTransac
       });
       const apiRes = await fetch("/api/parse-paystub", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await authHeaders(),
         body: JSON.stringify({ pdfBase64: base64, filename: file.name }),
       });
       if (!apiRes.ok) {

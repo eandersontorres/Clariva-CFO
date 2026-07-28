@@ -14,6 +14,8 @@
 // the redirect URI must be registered in the Plaid dashboard. In sandbox you log
 // in with the fake credentials user_good / pass_good against any test bank.
 
+import { authorizeSync, serviceRoleClient } from "./_auth.js";
+
 const PLAID_HOSTS = {
   sandbox: "https://sandbox.plaid.com",
   development: "https://development.plaid.com",
@@ -23,6 +25,18 @@ const PLAID_HOSTS = {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
+  // No Supabase work of its own, but the membership check needs a client and
+  // an open link-token mint is a free way to burn Plaid quota. See api/_auth.js.
+  const supabase = serviceRoleClient();
+  if (!supabase) return res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
+
+  const { tenant_id } = req.body || {};
+
+  const auth = await authorizeSync(req, res, tenant_id, supabase);
+  if (!auth.ok) return;
+
+  if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
+
   // Trim defends against a trailing space/newline accidentally pasted into the
   // Vercel env var — Plaid rejects those with INVALID_API_KEYS.
   const clientId = (process.env.PLAID_CLIENT_ID || "").trim();
@@ -30,9 +44,6 @@ export default async function handler(req, res) {
   const env = (process.env.PLAID_ENV || "sandbox").trim();
   const base = PLAID_HOSTS[env] || PLAID_HOSTS.sandbox;
   if (!clientId || !secret) return res.status(500).json({ error: "PLAID_CLIENT_ID / PLAID_SECRET not configured" });
-
-  const { tenant_id } = req.body || {};
-  if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
 
   try {
     const body = {

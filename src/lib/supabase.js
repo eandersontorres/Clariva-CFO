@@ -33,10 +33,11 @@ export async function signOutUser() {
   return await supabase.auth.signOut()
 }
 
-// Headers for the /api/* endpoints that run as service role (the sync
-// endpoints). They verify this token and check the user is a member of the
-// tenant being synced — see api/_auth.js. Without it they answer 401, which is
-// the point: they used to be callable by anyone who knew a tenant UUID.
+// Headers for every /api/* endpoint that runs as service role, holds a
+// provider secret, or bills Anthropic tokens. They verify this token and — for
+// the tenant-scoped ones — check the user is a member of the tenant being
+// acted on. See api/_auth.js. Without it they answer 401, which is the point:
+// they used to be callable by anyone who knew a tenant UUID.
 export async function authHeaders() {
   const { data } = await supabase.auth.getSession()
   const token = data?.session?.access_token
@@ -412,7 +413,7 @@ export async function syncSquareSales(tenantId, range = {}) {
 export async function createPlaidLinkToken(tenantId) {
   const res = await fetch('/api/plaid-link-token', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ tenant_id: tenantId }),
   })
   if (!res.ok) {
@@ -425,7 +426,7 @@ export async function createPlaidLinkToken(tenantId) {
 export async function exchangePlaidPublicToken(tenantId, publicToken, institutionName, institutionId) {
   const res = await fetch('/api/plaid-exchange', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ tenant_id: tenantId, public_token: publicToken, institution_name: institutionName, institution_id: institutionId }),
   })
   if (!res.ok) {
@@ -454,7 +455,7 @@ export async function syncPlaidTransactions(tenantId) {
 export async function onboardFavoBank(tenantId, profile) {
   const res = await fetch('/api/unit-onboard', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ tenant_id: tenantId, profile }),
   })
   if (!res.ok) {
@@ -467,7 +468,7 @@ export async function onboardFavoBank(tenantId, profile) {
 export async function fetchFavoBankState(tenantId) {
   const res = await fetch('/api/unit-accounts', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ tenant_id: tenantId }),
   })
   if (!res.ok) {
@@ -480,7 +481,7 @@ export async function fetchFavoBankState(tenantId) {
 export async function syncFavoBank(tenantId) {
   const res = await fetch('/api/unit-sync', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ tenant_id: tenantId }),
   })
   if (!res.ok) {
@@ -493,7 +494,7 @@ export async function syncFavoBank(tenantId) {
 export async function transferFavoBank(tenantId, fromPurpose, toPurpose, amount, description) {
   const res = await fetch('/api/unit-transfer', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ tenant_id: tenantId, from_purpose: fromPurpose, to_purpose: toPurpose, amount, description }),
   })
   if (!res.ok) {
@@ -582,7 +583,7 @@ export async function upsertAggregatorPayouts(rows, tenantId) {
 export async function parseAggregatorStatement({ pdfBase64, csvText, filename, platformHint }) {
   const res = await fetch('/api/parse-aggregator-statement', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ pdfBase64, csvText, filename, platformHint }),
   })
   if (!res.ok) {
@@ -854,7 +855,7 @@ export async function fetchBookingsForecast(tenantId) {
   try {
     const res = await fetch('/api/forecast-bookings', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ tenant_id: tenantId }),
     })
     if (!res.ok) {
@@ -875,7 +876,7 @@ export async function fetchMarketingSpend(tenantId, { start, end } = {}) {
   try {
     const res = await fetch('/api/sync-marketing', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ tenant_id: tenantId, start, end }),
     })
     if (!res.ok) {
