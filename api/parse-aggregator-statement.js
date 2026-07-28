@@ -10,6 +10,8 @@
 // different so the prompt walks Claude through the common fields and asks
 // for a normalized envelope back.
 
+import { authorizeSession } from './_auth.js';
+
 export const config = {
   api: {
     bodyParser: {
@@ -37,6 +39,11 @@ const detectPlatform = (filename = '', hint = '') => {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // No tenant to scope to, but every call bills Anthropic tokens. Require a
+  // real logged-in operator.
+  const auth = await authorizeSession(req, res);
+  if (!auth.ok) return;
 
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured.' });

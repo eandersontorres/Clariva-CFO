@@ -6,7 +6,7 @@
 // bookPayment semantics (docs.unit.co): `account` is the source, `direction`
 // "Debit" moves money OUT of it into `counterpartyAccount` (the destination).
 
-import { createClient } from "@supabase/supabase-js";
+import { authorizeSync, serviceRoleClient } from "./_auth.js";
 
 const UNIT_HOSTS = { sandbox: "https://api.s.unit.sh", production: "https://api.unit.co" };
 
@@ -18,18 +18,22 @@ export default async function handler(req, res) {
   const base = UNIT_HOSTS[env] || UNIT_HOSTS.sandbox;
   if (!token) return res.status(500).json({ error: "UNIT_API_TOKEN not configured" });
 
-  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) return res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
+  const supabase = serviceRoleClient();
+  if (!supabase) return res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
 
   const { tenant_id, from_purpose, to_purpose, amount, description } = req.body || {};
+
+  // MOVES MONEY between this tenant's Unit accounts. Runs as service role with the
+  // Unit org token, so it must verify its caller belongs to this tenant.
+  // See api/_auth.js.
+  const auth = await authorizeSync(req, res, tenant_id, supabase);
+  if (!auth.ok) return;
+
   if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
   if (!from_purpose || !to_purpose) return res.status(400).json({ error: "from_purpose and to_purpose required" });
   if (from_purpose === to_purpose) return res.status(400).json({ error: "from and to must differ" });
   const cents = Math.round(Number(amount) * 100);
   if (!cents || cents <= 0) return res.status(400).json({ error: "amount must be > 0" });
-
-  const supabase = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
   try {
     const { data: enroll } = await supabase

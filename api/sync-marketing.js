@@ -6,23 +6,24 @@
 // can swap the grouping to daily without disturbing existing rows — the
 // month-keyed IDs simply stop receiving updates.
 
-import { createClient } from "@supabase/supabase-js";
+import { authorizeSync, serviceRoleClient } from "./_auth.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) {
+  const supabase = serviceRoleClient();
+  if (!supabase) {
     return res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
   }
 
   const { tenant_id, start, end } = req.body || {};
-  if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
 
-  const supabase = createClient(url, serviceKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  // Runs as service role to get past RLS on the mkt_* tables, so it has to
+  // check its own caller. See api/_auth.js.
+  const auth = await authorizeSync(req, res, tenant_id, supabase);
+  if (!auth.ok) return;
+
+  if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
 
   try {
     // r7_tenants and mkt_restaurants are separate tables with their own UUIDs.

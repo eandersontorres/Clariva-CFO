@@ -1,3 +1,5 @@
+import { authorizeSession } from './_auth.js'
+
 // Increase Vercel body size limit to 20MB for large PDF statements
 export const config = {
   api: {
@@ -9,6 +11,12 @@ export const config = {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+
+  // No tenant to scope to — this takes a document, not a tenant_id — but every
+  // call bills Anthropic tokens against a 20MB body, so an open endpoint is a
+  // direct cost-amplification vector. Require a real logged-in operator.
+  const auth = await authorizeSession(req, res)
+  if (!auth.ok) return
 
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
   if (!ANTHROPIC_API_KEY) {

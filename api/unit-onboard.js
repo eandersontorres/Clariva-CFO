@@ -17,7 +17,7 @@
 // shapes below follow docs.unit.co; verify exact required fields against your
 // sandbox before go-live, as Unit occasionally adds required KYB attributes.
 
-import { createClient } from "@supabase/supabase-js";
+import { authorizeSync, serviceRoleClient } from "./_auth.js";
 
 const UNIT_HOSTS = { sandbox: "https://api.s.unit.sh", production: "https://api.unit.co" };
 
@@ -71,14 +71,19 @@ export default async function handler(req, res) {
   const base = UNIT_HOSTS[env] || UNIT_HOSTS.sandbox;
   if (!token) return res.status(500).json({ error: "UNIT_API_TOKEN not configured" });
 
-  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) return res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
+  const supabase = serviceRoleClient();
+  if (!supabase) return res.status(500).json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" });
 
   const { tenant_id, profile } = req.body || {};
+
+  // Creates a Unit application/account for this tenant. Runs as service role with the
+  // Unit org token, so it must verify its caller belongs to this tenant.
+  // See api/_auth.js.
+  const auth = await authorizeSync(req, res, tenant_id, supabase);
+  if (!auth.ok) return;
+
   if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
 
-  const supabase = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
   // Thin JSON:API wrapper. Returns parsed { data, included } or throws with the
   // Unit error title/detail (Unit returns { errors: [{title, detail}] }).

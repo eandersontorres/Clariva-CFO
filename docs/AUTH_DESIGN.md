@@ -9,11 +9,8 @@ Author: design session 2026-05-24.
 - ✅ **Phase A** — Supabase Auth login gate (commit cc59cd9). Verified: anon sees
   0 rows, authenticated tenant member sees all data. Anderson logged in OK.
 - ⬜ **Phase B** — multi-tenant polish (switcher, dynamic tenant name, role-aware UI)
-- 🟡 **Phase C** — endpoint hardening. **Sync endpoints DONE (2026-07-28)**:
-  `sync-square-sales/tips/labor/payouts` + `plaid-sync` now go through
-  `api/_auth.js`. Still open: `parse-statement`, `parse-paystub`,
-  `parse-aggregator-statement`, `forecast-bookings`, `sync-marketing`,
-  `plaid-link-token`, `plaid-exchange`, `unit-*`, `anthropic`.
+- ✅ **Phase C** — endpoint hardening (2026-07-28). Every `/api/*` route now
+  goes through `api/_auth.js`. No endpoint accepts an anonymous caller.
 
 ---
 
@@ -148,16 +145,37 @@ probe gets 401 rather than the 400 that used to prove the handler was running.
 `CRON_SECRET` is now required, not optional — `cron-sync-square.js` returns 500
 when it's unset instead of firing four calls that would all 401.
 
-**Applying this to the remaining endpoints** is a two-line change each:
+#### Extended to every endpoint (2026-07-28)
 
-```js
-const auth = await authorizeSync(req, res, tenant_id, supabase);
-if (!auth.ok) return;
-```
+`api/_auth.js` exports two gates. Which one a route uses depends on whether it
+has a tenant to scope to:
 
-plus swapping the client's `fetch` headers to `await authHeaders()`. Note that
-`parse-*` and `anthropic` are the higher-cost targets (they bill Anthropic
-tokens per call), so they're the natural next batch.
+| Gate | Requires | Used by |
+|---|---|---|
+| `authorizeSync(req, res, tenantId, db)` | valid JWT **and** membership of `tenantId` (or `CRON_SECRET`) | every route taking a `tenant_id`: `sync-square-*`, `plaid-sync`, `plaid-link-token`, `plaid-exchange`, `forecast-bookings`, `sync-marketing`, `unit-*` |
+| `authorizeSession(req, res, db)` | valid JWT **and** membership of ≥1 tenant (or `CRON_SECRET`) | routes with no tenant to check against: `parse-statement`, `parse-paystub`, `parse-aggregator-statement`, `anthropic` |
+
+The `parse-*` routes take a document, not a `tenant_id`, so there's nothing to
+scope to — but each call bills Anthropic tokens against a 20MB body, which
+makes an open endpoint a cost-amplification vector. "Member of at least one
+tenant" is the right bar: a signed-up-but-unassigned user can't burn tokens.
+
+Adding a route: call the matching gate **before** validating the body, so an
+unauthenticated probe gets 401 rather than a 400 that confirms the handler
+ran. On the client, use `await authHeaders()` for the `fetch` headers.
+
+#### `api/anthropic.js`
+
+Worth calling out separately. It forwarded an **arbitrary request body** to the
+Anthropic Messages API on the org key, with `Access-Control-Allow-Origin: *`
+and no auth — any web page could drive it from a visitor's browser, choosing
+the model, prompt and token count. It now requires a session and uses an
+explicit CORS allowlist (`FAVO_ALLOWED_ORIGINS`, defaulting to the CFO custom
+domains).
+
+**Nothing in this repo calls it** — the PDF flows use `parse-*`. It was gated
+rather than deleted because `CLAUDE.md` still documents it as the canonical
+proxy. If no sibling Favo app uses it, delete it.
 
 ---
 
