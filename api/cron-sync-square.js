@@ -24,9 +24,23 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "VITE_TENANT_ID not configured for cron" });
   }
 
-  const base = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : (process.env.CFO_PUBLIC_URL || "https://cfo.clariva.cloud");
+  // The project runs Vercel Authentication with deploymentType
+  // "all_except_custom_domains": every *.vercel.app URL answers 401, only the
+  // custom domains are reachable. VERCEL_URL is a *.vercel.app deployment URL,
+  // so using it here made every internal call below 401 — silently, because the
+  // failures were only recorded in the response body. Always go through a
+  // custom domain.
+  // VERCEL_PROJECT_PRODUCTION_URL is normally the shortest custom domain, but it
+  // falls back to *.vercel.app when a project has none — which would put us
+  // straight back behind the 401. Reject that shape rather than re-break.
+  const candidate = (
+    process.env.CFO_PUBLIC_URL ||
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`) ||
+    ""
+  ).replace(/\/+$/, "");
+  const base = candidate && !/\.vercel\.app$/i.test(new URL(candidate).hostname)
+    ? candidate
+    : "https://cfo.clariva.cloud";
 
   const endpoints = [
     "sync-square-sales",
@@ -37,6 +51,7 @@ export default async function handler(req, res) {
     "sync-square-payouts",
   ];
   const results = {};
+  const failed = [];
   for (const ep of endpoints) {
     try {
       const r = await fetch(`${base}/api/${ep}`, {
@@ -44,11 +59,25 @@ export default async function handler(req, res) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tenant_id: tenantId }),
       });
-      results[ep] = r.ok ? await r.json() : { error: "HTTP " + r.status, detail: (await r.text()).slice(0, 200) };
+      if (r.ok) {
+        results[ep] = await r.json();
+      } else {
+        results[ep] = { error: "HTTP " + r.status, detail: (await r.text()).slice(0, 200) };
+        failed.push(ep);
+      }
     } catch (err) {
       results[ep] = { error: err.message };
+      failed.push(ep);
     }
   }
 
-  return res.status(200).json({ ran_at: new Date().toISOString(), tenant_id: tenantId, results });
+  // Answer with the real outcome. Returning 200 while every sync 401'd is how
+  // this went unnoticed for seven weeks: Vercel's cron dashboard showed a green
+  // run each morning and the ledger quietly stopped receiving revenue.
+  const body = { ran_at: new Date().toISOString(), tenant_id: tenantId, base, results };
+  if (failed.length) {
+    console.error("cron-sync-square: failed endpoints", failed.join(", "), "base=" + base);
+    return res.status(500).json({ ...body, error: "sync failed: " + failed.join(", ") });
+  }
+  return res.status(200).json(body);
 }

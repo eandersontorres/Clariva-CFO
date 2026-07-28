@@ -12,6 +12,12 @@
 // (mapped to the tenant's Chart of Accounts by name). Income/transfer rows are
 // left UNCATEGORIZED to avoid double-counting POS revenue already modeled from
 // Square. A user-set category is never overwritten on re-sync.
+//
+// SOURCE CLASSIFICATION: every row is tagged at ingestion (see classifySource)
+// so income/expense roll-ups are correct the moment the sync finishes. This
+// used to depend on a re-tag pass at the end of sync-square-sales, which only
+// covered that run's window — rows landing between Square syncs stayed
+// source='plaid' and were counted as income on top of the Square feed.
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -106,10 +112,55 @@ function merchantOf(t) {
   return t.name || "";
 }
 
-// Returns a category_id for an expense (outflow) txn, or null. Income/transfer
-// rows (ledger amount >= 0) are intentionally left uncategorized.
+// ─── SOURCE CLASSIFICATION ───────────────────────────────────────────────────
+// Bank rows fall into three buckets that must NOT be counted as income/expense:
+//
+//   square_settlement  Square paying out into the bank. The revenue was already
+//                      booked from the Orders API (sq_sale_/sq_tax_/sq_tip_),
+//                      so the deposit is the same dollar arriving. Square's
+//                      debits (fee sweeps, chargebacks) are the same story —
+//                      sq_fee_ already carries them.
+//   internal_transfer  Money moving between the tenant's own accounts. Both
+//                      legs are imported, so they net to zero by construction.
+//
+// Everything else stays source='plaid' and counts normally.
+//
+// Deposits from delivery aggregators are deliberately NOT in this list: for a
+// tenant whose aggregator orders are injected into Square they would be
+// double-counted, but TorresBee's are not — its Square deposits reconcile to
+// Square gross on their own. They are booked as Revenue - Delivery instead.
+const SQUARE_RE = /\bsquare\b|\bsq\s*\*/i;
+const AGGREGATOR_RE = /\b(doordash|door\s*dash|ubereats|uber\s*eats|uber|grubhub|grub\s*hub|postmates|seamless)\b/i;
+const TRANSFER_RES = [
+  /^online payment from chk/i,            // credit leg, lands on a card account
+  /^online banking payment to crd/i,      // debit leg, leaves checking
+  /^online banking transfer\s+(to|from)/i, // checking <-> savings
+];
+// Plaid's own labels for own-account movement. Sharper than the descriptor
+// when the bank's wording drifts.
+const TRANSFER_PFC = new Set(["TRANSFER_IN_ACCOUNT_TRANSFER", "TRANSFER_OUT_ACCOUNT_TRANSFER"]);
+
+function classifySource(t, description) {
+  if (SQUARE_RE.test(description)) return "square_settlement";
+  if (TRANSFER_RES.some((re) => re.test(description))) return "internal_transfer";
+  if (TRANSFER_PFC.has(t.personal_finance_category?.detailed)) return "internal_transfer";
+  return "plaid";
+}
+
+// Returns a category_id for a txn, or null.
+//   - outflows  → merchant rules, then Plaid's personal_finance_category
+//   - inflows   → only aggregator deposits (Revenue - Delivery). Everything
+//                 else is left uncategorized so it surfaces for review rather
+//                 than being guessed into the P&L.
 function suggestCategoryId(t, nameToId) {
-  if (-Number(t.amount) >= 0) return null; // only outflows
+  const ledgerAmount = -Number(t.amount);
+  if (ledgerAmount >= 0) {
+    const inflowDesc = merchantOf(t).toUpperCase();
+    if (ledgerAmount > 0 && AGGREGATOR_RE.test(inflowDesc)) {
+      return nameToId["revenue - delivery"] || null;
+    }
+    return null;
+  }
   const desc = merchantOf(t).toUpperCase();
   for (const [pat, acct] of MERCHANT_RULES) {
     if (desc.includes(pat)) { const id = nameToId[acct.toLowerCase()]; if (id) return id; }
@@ -201,28 +252,35 @@ export default async function handler(req, res) {
         continue;
       }
 
-      const toRow = (t) => ({
-        id: "plaid_" + t.transaction_id,
-        tenant_id,
-        date: t.date || t.authorized_date,
+      const toRow = (t) => {
         // Pending card charges often carry only a generic network descriptor
         // ("MAIL/TELEPHONE ORDER") with no merchant anywhere. Label those
         // PENDING — the real merchant name arrives when the charge posts and
         // the posted version replaces this row on the next sync.
-        description: (
+        const description = (
           t.pending && !t.merchant_name && !(Array.isArray(t.counterparties) && t.counterparties.some((c) => c && c.name))
             ? "PENDING"
             : (merchantOf(t) || "TRANSACTION")
-        ).toUpperCase().trim().slice(0, 80),
-        amount: -Number(t.amount),                 // flip Plaid's sign -> app convention
-        category_id: suggestCategoryId(t, nameToId), // auto-categorize expenses from Plaid PFC
-        account: acctName[t.account_id] || item.institution_name || "Plaid",
-        account_id: null,
-        reconciled: false,
-        source: "plaid",
-        notes: t.pending ? "Pending — will reconcile when posted" : "",
-        tags: [],
-      });
+        ).toUpperCase().trim().slice(0, 80);
+        return {
+          id: "plaid_" + t.transaction_id,
+          tenant_id,
+          date: t.date || t.authorized_date,
+          description,
+          amount: -Number(t.amount),                 // flip Plaid's sign -> app convention
+          category_id: suggestCategoryId(t, nameToId), // auto-categorize from Plaid PFC / merchant
+          account: acctName[t.account_id] || item.institution_name || "Plaid",
+          // Same id the account materialize step below writes into
+          // r7_ledger_bank_accounts. Without it the client's internal-transfer
+          // pairing has nothing to compare and every transfer leg is counted
+          // as income or expense.
+          account_id: t.account_id ? "plaid_acct_" + t.account_id : null,
+          reconciled: false,
+          source: classifySource(t, description),
+          notes: t.pending ? "Pending — will reconcile when posted" : "",
+          tags: [],
+        };
+      };
 
       const rows = [...added, ...modified].map(toRow);
       if (rows.length > 0) {
