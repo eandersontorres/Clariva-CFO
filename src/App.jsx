@@ -692,23 +692,49 @@ function makeLedgerFilter(categories, allTxns) {
   };
 }
 
+// Split a set of ledger rows into income and expense totals. Which side a row
+// lands on is decided by its category type, NOT by the sign of the amount: a
+// vendor refund is a credit posted to an expense account and has to reduce that
+// expense rather than read as revenue. Only uncategorized rows fall back to the
+// sign. Both buckets sum signed, so contra entries net out.
+// Callers must pre-filter with makeLedgerFilter / detectTransferPairs.
+function splitIncomeExpense(txns, categories) {
+  const catTypeById = new Map((categories || []).map(c => [c.id, c.type]));
+  let income = 0, expense = 0;
+  for (const t of txns || []) {
+    const amt = parseFloat(t.amount) || 0;
+    const type = catTypeById.get(t.category);
+    if (type ? type === "income" : amt > 0) income += amt;
+    else expense += -amt;
+  }
+  return { income, expense, catTypeById };
+}
+
 // ─── INTERNAL TRANSFER DETECTION ──────────────────────────────────────────────
 // A transfer between your own accounts (Checking -> Savings, payment of credit
 // card from checking) shows up in the ledger as two transactions: one negative
 // in the source account, one positive in the destination. They cancel out at
 // the entity level, so counting them as income/expense double-inflates both.
 // We pair them when: opposite signs, matching absolute amount, different
-// account_id, and dates within 2 days. Skip ambiguous matches (>1 candidate).
+// account, and dates within 2 days. Skip ambiguous matches (>1 candidate).
+//
+// Identity is account_id when present, falling back to the `account` display
+// string ("Main 6577 ••6577"). The fallback matters: importers and older rows
+// leave account_id null, and requiring it silently disabled the whole pass —
+// every transfer leg then landed in income AND expense.
+function accountKeyOf(t) {
+  return t.account_id || (t.account ? "name:" + t.account : null);
+}
 function detectTransferPairs(transactions) {
   const pairs = new Map();
-  // Transactions explicitly tagged source='internal_transfer' (set by parser
-  // pattern detection or by direct DB update for half-imported transfers like
-  // "ONLINE BANKING PAYMENT TO CRD") count as transfers even without a matching
+  // Transactions explicitly tagged source='internal_transfer' (set at Plaid
+  // ingestion, by parser pattern detection, or by direct DB update for
+  // half-imported transfers) count as transfers even without a matching
   // partner row — they're already known not to be revenue or expense.
   for (const t of transactions || []) {
     if (t.source === 'internal_transfer') pairs.set(t.id, null);
   }
-  const candidates = (transactions || []).filter(t => t.account_id && !isNaN(parseFloat(t.amount)));
+  const candidates = (transactions || []).filter(t => accountKeyOf(t) && !isNaN(parseFloat(t.amount)));
   const negatives = candidates.filter(t => parseFloat(t.amount) < 0);
   const positives = candidates.filter(t => parseFloat(t.amount) > 0);
   const dayMs = 24 * 60 * 60 * 1000;
@@ -716,9 +742,10 @@ function detectTransferPairs(transactions) {
     if (pairs.has(neg.id)) continue;
     const negAmt = parseFloat(neg.amount);
     const negDate = new Date(neg.date).getTime();
+    const negKey = accountKeyOf(neg);
     const matches = positives.filter(p =>
       !pairs.has(p.id) &&
-      p.account_id !== neg.account_id &&
+      accountKeyOf(p) !== negKey &&
       Math.abs(parseFloat(p.amount) + negAmt) < 0.01 &&
       Math.abs(new Date(p.date).getTime() - negDate) <= 2 * dayMs
     );
@@ -1393,8 +1420,7 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
   const isLedger = makeLedgerFilter(categories, allTransactions || transactions);
   const realTxns = transactions.filter(t => !transferPairs.has(t.id) && isLedger(t));
   const transferCount = transactions.filter(t => transferPairs.has(t.id)).length;
-  const totalIncome = realTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-  const totalExpense = Math.abs(realTxns.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
+  const { income: totalIncome, expense: totalExpense, catTypeById } = splitIncomeExpense(realTxns, categories);
   const netIncome = totalIncome - totalExpense;
   const uncat = realTxns.filter(t => t.category === UNCATEGORIZED).length;
 
@@ -1407,14 +1433,18 @@ function Dashboard({ transactions, categories, budgets, bankAccounts = [], allTr
   const debt = accountBalances.filter(x => ACCOUNT_TYPE_META[x.acc.type]?.liability).reduce((s, x) => s + x.balance, 0);
   const cashPosition = liquid + debt;
 
-  // Expense by category (transfers already excluded via realTxns)
+  // Expense by category (transfers already excluded via realTxns). Sums signed
+  // for the same reason as the totals above, so a refund shrinks its category
+  // instead of being dropped. Categories that end up net-zero or negative are
+  // filtered out — a fully refunded line is not spend.
   const expByCat = {};
-  realTxns.filter(t => t.amount < 0).forEach(t => {
-    expByCat[t.category] = (expByCat[t.category] || 0) + Math.abs(t.amount);
+  realTxns.forEach(t => {
+    if (catTypeById.get(t.category) === "income") return;
+    expByCat[t.category] = (expByCat[t.category] || 0) - (parseFloat(t.amount) || 0);
   });
   const catItems = Object.entries(expByCat)
     .map(([cid, amt]) => ({ cat: categories.find(c => c.id === cid), amt }))
-    .filter(x => x.cat)
+    .filter(x => x.cat && x.amt > 0)
     .sort((a, b) => b.amt - a.amt)
     .slice(0, 6);
 
@@ -5555,11 +5585,12 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
   }, [tenantId]);
   const [period, setPeriod] = useState("weekly");
   const isLedger = makeLedgerFilter(categories, transactions);
-  const totalIncome  = transactions.filter(t => t.amount > 0 && isLedger(t)).reduce((s,t) => s+t.amount, 0);
-  const totalExpense = Math.abs(transactions.filter(t => t.amount < 0 && isLedger(t)).reduce((s,t) => s+t.amount, 0));
+  const transferPairs = detectTransferPairs(transactions);
+  const realTxns = transactions.filter(t => !transferPairs.has(t.id) && isLedger(t));
+  const { income: totalIncome, expense: totalExpense } = splitIncomeExpense(realTxns, categories);
   const netIncome    = totalIncome - totalExpense;
   const netMargin    = totalIncome > 0 ? (netIncome/totalIncome)*100 : 0;
-  const getCat = (id) => id ? Math.abs(transactions.filter(t => t.category === id && isLedger(t)).reduce((s,t) => s+t.amount, 0)) : 0;
+  const getCat = (id) => id ? Math.abs(realTxns.filter(t => t.category === id).reduce((s,t) => s+t.amount, 0)) : 0;
   // Resolve categories by name match instead of the legacy integer ids
   // ("1","2","3"...). Those were the original seed keys; once the chart of
   // accounts migrated to UUIDs the lookups silently returned 0 for every
