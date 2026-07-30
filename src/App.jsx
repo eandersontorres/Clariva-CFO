@@ -1,12 +1,18 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
-import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
+import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser, fetchTenant } from "./lib/supabase.js";
+import { initCountry, setCountryFromTenant, country, supports, money, moneyCompact, currencySymbol, formatNumber as ctryNumber, formatDate as ctryDate, formatDateShort as ctryDateShort, formatMonth as ctryMonth, formatTime as ctryTime, parseDate as ctryParseDate, parseAmount as ctryParseAmount } from "./lib/country/index.js";
 
 // Active tenant: localStorage override (set by the sidebar TenantSwitcher) wins
 // over the deploy's env pin, so one deploy can serve a multi-store manager.
 const ENV_TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 const TENANT_ID = (() => { try { return localStorage.getItem("cfo_active_tenant") || ENV_TENANT_ID; } catch { return ENV_TENANT_ID; } })();
+
+// Resolve the country pack synchronously, from the per-tenant localStorage
+// cache, BEFORE any component renders. The authoritative value comes from
+// r7_tenants and is reconciled on mount (see the country effect in App).
+initCountry(TENANT_ID);
 
 // ─── STYLES ────────────────────────────────────────────────────────────────
 const STYLES = `
@@ -302,18 +308,9 @@ const STYLES = `
 `;
 
 // ─── SAMPLE DATA ─────────────────────────────────────────────────────────────
-const DEFAULT_CATEGORIES = [
-  { id: "1", name: "Food & Beverage", type: "expense", color: "#f05e5e", taxLine: "COGS" },
-  { id: "2", name: "Payroll", type: "expense", color: "#f0c84a", taxLine: "Wages" },
-  { id: "3", name: "Rent & Utilities", type: "expense", color: "#4a9ff0", taxLine: "Rent" },
-  { id: "4", name: "Marketing", type: "expense", color: "#a47ff0", taxLine: "Advertising" },
-  { id: "5", name: "Equipment", type: "expense", color: "#f0904a", taxLine: "Depreciation" },
-  { id: "6", name: "Insurance", type: "expense", color: "#4af0d0", taxLine: "Insurance" },
-  { id: "7", name: "Office & Supplies", type: "expense", color: "#90a0b0", taxLine: "Office" },
-  { id: "8", name: "Revenue - Dining", type: "income", color: "#00d4a0", taxLine: "Gross Receipts" },
-  { id: "9", name: "Revenue - Delivery", type: "income", color: "#00b890", taxLine: "Gross Receipts" },
-  { id: UNCATEGORIZED, name: "Uncategorized", type: "expense", color: "#555b6b", taxLine: "" },
-];
+// Seeded chart of accounts now comes from the country pack — US keeps exactly
+// the list that used to live here (src/lib/country/us.js).
+const DEFAULT_CATEGORIES = country().defaultCategories;
 
 const SAMPLE_TRANSACTIONS = [
   { id: "t1", date: "2025-01-03", description: "SYSCO FOODS", amount: -2340.50, category: "1", account: "Checking ••4821", reconciled: true },
@@ -343,9 +340,12 @@ const SAMPLE_BUDGETS = [
 ];
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
-const fmt = (v) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v);
-const fmtDate = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-const fmtShort = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+// Thin wrappers over the active country pack. They must stay functions (not
+// captured values) so the pack can be swapped after the tenant row loads and
+// the next render picks it up.
+const fmt = (v) => money(v);
+const fmtDate = (s) => ctryDate(s);
+const fmtShort = (s) => ctryDateShort(s);
 
 // ─── BANK STATEMENT PARSERS (inlined) ───────────────────────────────────────
 
@@ -853,9 +853,11 @@ function parseBoACSV(text) {
       if (cols.length < Math.max(dateIdx, 1) + 1) continue;
       const dateStr = (cols[dateIdx] || '').trim();
       if (!dateStr) continue;
-      let parsedDate;
-      try { const d = new Date(dateStr); if (isNaN(d.getTime())) continue; parsedDate = d.toISOString().split('T')[0]; }
-      catch { continue; }
+      // Country-aware: "03/04/2025" is March 4 under a US tenant and 3 April
+      // under a BR one. The old `new Date(str)` always assumed US and failed
+      // silently — wrong dates, no error.
+      const parsedDate = ctryParseDate(dateStr);
+      if (!parsedDate) continue;
 
       // Detect pattern BEFORE touching the sign — payments/transfers shouldn't
       // be flipped by the cardholder-spend convention even when a CardHolder
@@ -869,7 +871,10 @@ function parseBoACSV(text) {
 
       let amount = NaN;
       if (amountIdx >= 0) {
-        amount = parseFloat((cols[amountIdx] || '').replace(/[$,\s()]/g, ''));
+        // Country-aware: "1.234,56" is 1234.56 in BR but 1.234 under the old
+        // US-only cleaner — a silent 1000x error. Also honours accounting
+        // parentheses, which the old cleaner stripped into a positive.
+        amount = ctryParseAmount(cols[amountIdx] || '');
         // Multi-cardholder credit-card exports list every charge as a positive
         // number ("$133.82"). For the ledger these are expenses and have to be
         // negative. Detect the format via the CardHolder Name column and flip
@@ -880,8 +885,8 @@ function parseBoACSV(text) {
           amount = -amount;
         }
       } else if (debitIdx >= 0 || creditIdx >= 0) {
-        const debit  = parseFloat((cols[debitIdx]  || '').replace(/[$,\s]/g, '')) || 0;
-        const credit = parseFloat((cols[creditIdx] || '').replace(/[$,\s]/g, '')) || 0;
+        const debit  = ctryParseAmount(cols[debitIdx]  || '') || 0;
+        const credit = ctryParseAmount(cols[creditIdx] || '') || 0;
         amount = credit - debit;
       }
       if (isNaN(amount) || amount === 0) continue;
@@ -889,7 +894,7 @@ function parseBoACSV(text) {
       const cardHolder = (cols[cardHolderIdx] || '').trim();
       const last4 = (cols[last4Idx] || '').trim().match(/\d{4}/)?.[0] || '';
 
-      let account = 'Imported · BoA';
+      let account = country().importedAccountLabel;
       if (cardHolder && last4) account = cardHolder.toUpperCase() + ' – ' + last4;
       else if (cardHolder)     account = cardHolder.toUpperCase();
       else if (last4)          account = 'Card ' + last4;
@@ -917,12 +922,11 @@ function parseBoACSV(text) {
     if (first === 'date' || first === 'posted date' || first.startsWith('account')) continue;
     let date = cols[0], desc = cols[1] || '', amtStr = cols[2] || '';
     if (cols.length >= 5) { desc = cols[2] || cols[1]; amtStr = cols[4]; }
-    const amount = parseFloat(amtStr.replace(/[$,\s]/g, ''));
+    const amount = ctryParseAmount(amtStr);
     if (isNaN(amount)) continue;
-    let parsedDate;
-    try { const d = new Date(date); if (isNaN(d.getTime())) continue; parsedDate = d.toISOString().split('T')[0]; }
-    catch { continue; }
-    txns.push({ id: 'csv_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2,5), date: parsedDate, description: desc.toUpperCase().trim().slice(0, 80), amount, account: 'Imported · BoA', category_id: null, category: UNCATEGORIZED, reconciled: false, source: 'csv' });
+    const parsedDate = ctryParseDate(date);
+    if (!parsedDate) continue;
+    txns.push({ id: 'csv_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2,5), date: parsedDate, description: desc.toUpperCase().trim().slice(0, 80), amount, account: country().importedAccountLabel, category_id: null, category: UNCATEGORIZED, reconciled: false, source: 'csv' });
   }
   return txns;
 }
@@ -939,7 +943,7 @@ function parseOFX(text) {
     if (!dtPosted || !amtStr) continue;
     const amount = parseFloat(amtStr);
     if (isNaN(amount)) continue;
-    txns.push({ id: fitid ? 'ofx_' + fitid : 'ofx_' + Date.now() + '_' + Math.random().toString(36).slice(2,5), date: dtPosted.slice(0,4) + '-' + dtPosted.slice(4,6) + '-' + dtPosted.slice(6,8), description: name.toUpperCase().trim().slice(0, 80), amount, account: 'Imported · BoA', category_id: null, category: UNCATEGORIZED, reconciled: false, source: 'ofx' });
+    txns.push({ id: fitid ? 'ofx_' + fitid : 'ofx_' + Date.now() + '_' + Math.random().toString(36).slice(2,5), date: dtPosted.slice(0,4) + '-' + dtPosted.slice(4,6) + '-' + dtPosted.slice(6,8), description: name.toUpperCase().trim().slice(0, 80), amount, account: country().importedAccountLabel, category_id: null, category: UNCATEGORIZED, reconciled: false, source: 'ofx' });
   }
   return txns;
 }
@@ -1080,7 +1084,7 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
           : "No new vendor invoices from Kitchen in this date range.", "info");
       } else {
         onSync(all);
-        setLastSync(new Date().toLocaleTimeString());
+        setLastSync(new Date());
         showToast(all.length + " vendor invoice(s) synced from Kitchen" + (lockedOut > 0 ? ` · ${lockedOut} skipped (closed period)` : ""), "success");
       }
     } catch (err) {
@@ -1103,7 +1107,7 @@ function KitchenSyncButton({ tenantId, categories, dateRange, onSync, showToast 
         <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
       </svg>
       {loading ? "Syncing..." : "Sync Kitchen"}
-      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{ctryTime(lastSync)}</span>}
     </button>
   );
 }
@@ -1126,7 +1130,7 @@ function SalesSyncButton({ tenantId, dateRange, onSync, showToast }) {
     showToast("Pulling Square sales + processing fees...", "info");
     try {
       const result = await syncSquareSales(tenantId, clampedRange);
-      setLastSync(new Date().toLocaleTimeString());
+      setLastSync(new Date());
       // Response shape changed in PR5 (Orders API): totals now expose net_sales,
       // tax, tips, etc separately. Fall back to the old gross_sales field for
       // backward compat in case a stale deployment is still answering.
@@ -1161,7 +1165,7 @@ function SalesSyncButton({ tenantId, dateRange, onSync, showToast }) {
         <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
       </svg>
       {loading ? "Syncing..." : "Sync Sales"}
-      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{ctryTime(lastSync)}</span>}
     </button>
   );
 }
@@ -1184,7 +1188,7 @@ function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
         }
       } else {
         onSync(txns);
-        setLastSync(new Date().toLocaleTimeString());
+        setLastSync(new Date());
         const providers = (result.providers || []).join(", ").toUpperCase() || "Marketing";
         showToast(txns.length + " ad-spend accrual(s) synced from " + providers, "success");
       }
@@ -1207,7 +1211,7 @@ function MarketingSyncButton({ tenantId, dateRange, onSync, showToast }) {
         <path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>
       </svg>
       {loading ? "Syncing..." : "Sync Marketing"}
-      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{ctryTime(lastSync)}</span>}
     </button>
   );
 }
@@ -1269,7 +1273,7 @@ function BankSyncButton({ tenantId, onSync, showToast }) {
               await exchangePlaidPublicToken(tenantId, public_token, metadata?.institution?.name || "Bank", metadata?.institution?.institution_id || null);
               showToast("Bank connected. Pulling transactions...", "info");
               await syncPlaidTransactions(tenantId);
-              setLastSync(new Date().toLocaleTimeString());
+              setLastSync(new Date());
               if (onSync) onSync();
               showToast("Bank connected & synced", "success");
             } catch (e) { showToast("Bank connect failed: " + e.message, "error"); }
@@ -1325,7 +1329,7 @@ function BankSyncButton({ tenantId, onSync, showToast }) {
         showToast("Bank connected. Pulling transactions...", "info");
         result = await syncPlaidTransactions(tenantId);
       }
-      setLastSync(new Date().toLocaleTimeString());
+      setLastSync(new Date());
       const errored = (result.institutions || []).filter(i => i.error);
       if (errored.length > 0) {
         showToast("Bank sync issue: " + errored.map(i => i.name + " — " + i.error).join("; "), "error");
@@ -1352,7 +1356,7 @@ function BankSyncButton({ tenantId, onSync, showToast }) {
         <line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/>
       </svg>
       {loading ? "Syncing..." : "Sync Bank"}
-      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
+      {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{ctryTime(lastSync)}</span>}
     </button>
   );
 }
@@ -1818,7 +1822,7 @@ function SplitModal({ txn, categories, payrollRuns = [], onClose, onSave, transa
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4, borderTop: "1px solid var(--border)", color: balanced ? "var(--accent)" : "var(--red)" }}>
               <span>{balanced ? "Balanced" : "Remaining"}</span>
-              <span>{balanced ? "$0.00 ✓" : fmt(remaining)}</span>
+              <span>{balanced ? fmt(0) + " ✓" : fmt(remaining)}</span>
             </div>
           </div>
 
@@ -2433,37 +2437,11 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
   const [editing, setEditing] = useState(null);
 
   const COLORS = ["#f05e5e", "#f0c84a", "#4a9ff0", "#a47ff0", "#00d4a0", "#f0904a", "#4af0d0", "#90a0b0", "#e06090", "#60c0e0"];
-  // Mirrors IRS Schedule C 2024/2025. Income = Part I lines, COGS = Part III
-  // aggregate, Expenses = Part II lines 8–27. Strings are stable identifiers;
-  // changing them retroactively unmaps existing categories from the Tax
-  // Summary report, so add new ones instead of renaming.
-  const TAX_LINES_INCOME = ["Gross Receipts", "Returns and Allowances", "Other Income"];
-  const TAX_LINES_EXPENSE = [
-    "Advertising",
-    "Car and Truck Expenses",
-    "COGS",
-    "Commissions and Fees",
-    "Contract Labor",
-    "Depletion",
-    "Depreciation",
-    "Employee Benefits",
-    "Insurance",
-    "Legal & Professional Services",
-    "Meals",
-    "Mortgage Interest",
-    "Office Expense",
-    "Other Expenses",
-    "Other Interest",
-    "Pension & Profit-Sharing",
-    "Rent",
-    "Rent - Vehicles/Equipment",
-    "Repairs & Maintenance",
-    "Supplies",
-    "Taxes & Licenses",
-    "Travel",
-    "Utilities",
-    "Wages",
-  ];
+  // Reporting lines come from the country pack: IRS Schedule C in the US, DRE
+  // gerencial in Brazil. The strings are stable identifiers persisted in
+  // r7_ledger_accounts.tax_line — changing one retroactively unmaps existing
+  // categories from the reports, so add new ones instead of renaming.
+  const LINES = country().reportingLines;
 
   const openAdd = () => { setEditing(null); setForm({ name: "", type: "expense", color: "#f05e5e", taxLine: "", is_eliminable: false, eliminable_note: "" }); setModal(true); };
   const openEdit = (c) => { setEditing(c.id); setForm({ name: c.name, type: c.type, color: c.color, taxLine: c.taxLine, is_eliminable: !!c.is_eliminable, eliminable_note: c.eliminable_note || "" }); setModal(true); };
@@ -2564,14 +2542,14 @@ function Categories({ categories, setCategories, saveCategory, deleteCategory: d
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="label">Tax Line (Schedule C)</label>
+                  <label className="label">{country().reportingLineLabel}</label>
                   <select className="input" value={form.taxLine} onChange={e => setForm(f => ({ ...f, taxLine: e.target.value }))}>
                     <option value="">— none —</option>
-                    <optgroup label="Income (Part I)">
-                      {TAX_LINES_INCOME.map(l => <option key={l} value={l}>{l}</option>)}
+                    <optgroup label={LINES.incomeLabel}>
+                      {LINES.income.map(l => <option key={l} value={l}>{l}</option>)}
                     </optgroup>
-                    <optgroup label="Expenses (Part II) & COGS (Part III)">
-                      {TAX_LINES_EXPENSE.map(l => <option key={l} value={l}>{l}</option>)}
+                    <optgroup label={LINES.expenseLabel}>
+                      {LINES.expense.map(l => <option key={l} value={l}>{l}</option>)}
                     </optgroup>
                   </select>
                 </div>
@@ -5064,7 +5042,7 @@ function PerformanceTable({ title, note, total, totalLabel, pct, pctTone, rows =
       const color = n > 0.01 ? "var(--red)" : n < -0.01 ? "var(--accent)" : "var(--text3)";
       return <span style={{ color }}>{n >= 0 ? "+" : ""}{fmt(n)}</span>;
     }
-    if (format === "qty") return Number(val).toLocaleString();
+    if (format === "qty") return ctryNumber(val);
     if (format === "pct") {
       const n = parseFloat(val);
       const color = n > 35 ? "var(--red)" : n > 28 ? "var(--yellow)" : "var(--accent)";
@@ -5094,7 +5072,7 @@ function PerformanceTable({ title, note, total, totalLabel, pct, pctTone, rows =
           <div key={i}>
             <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>{e.label}</div>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 18 }}>
-              {e.format === "qty" ? Number(e.value).toLocaleString() : fmt(parseFloat(e.value))}
+              {e.format === "qty" ? ctryNumber(e.value) : fmt(parseFloat(e.value))}
             </div>
           </div>
         ))}
@@ -5142,11 +5120,13 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
 
   const [modal, setModal] = useState(null); // null | "add" | "pay" | "view"
   const [selected, setSelected] = useState(null);
-  const [payForm, setPayForm] = useState({ date: "", method: "Bank Transfer", notes: "" });
+  const [payForm, setPayForm] = useState({ date: "", method: country().defaultPaymentMethod, notes: "" });
   const [addForm, setAddForm] = useState({ vendor: "", amount: "", dueDate: "", category: "", notes: "" });
   const [filterStatus, setFilterStatus] = useState("all");
 
-  const METHODS = ["Bank Transfer", "Check", "ACH", "Credit Card", "Cash", "Zelle", "Wire Transfer"];
+  // Payment rails are country-specific: ACH/Check/Zelle in the US, Pix/Boleto
+  // in Brazil.
+  const METHODS = country().paymentMethods;
 
   // Sync new Kitchen purchases into bills
   useEffect(() => {
@@ -5216,7 +5196,7 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
       const m = matchBill(bill);
       if (!m) continue;
       usedTxnIds.add(m.id);
-      const method = m.account && m.account !== "Plaid" ? m.account : "Bank Transfer";
+      const method = m.account && m.account !== "Plaid" ? m.account : country().defaultPaymentMethod;
       paidBills.push({
         ...bill,
         status: "paid",
@@ -5272,7 +5252,7 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
 
   const openPay = (bill) => {
     setSelected(bill);
-    setPayForm({ date: today(), method: "Bank Transfer", notes: "" });
+    setPayForm({ date: today(), method: country().defaultPaymentMethod, notes: "" });
     setModal("pay");
   };
 
@@ -6280,7 +6260,7 @@ function projectRecurring(rules, months = 3) {
       if (m < 0) outflow += m; else inflow += m;
       items.push({ name: r.name, amount: m, categoryId: r.category_id });
     }
-    out.push({ monthKey, label: target.toLocaleString("en-US", { month: "short", year: "numeric" }), outflow, inflow, net: inflow + outflow, items });
+    out.push({ monthKey, label: ctryMonth(target), outflow, inflow, net: inflow + outflow, items });
   }
   return out;
 }
@@ -6973,7 +6953,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
     showToast("Pulling card tips from Square...", "info");
     try {
       const result = await syncSquareTips(tenantId, dateRange);
-      setLastSync(new Date().toLocaleTimeString());
+      setLastSync(new Date());
       showToast(`${result.rows_written} day-employee tip rows · ${result.employees_with_tips} employees`, "success");
       if (onSync) onSync();
     } catch (err) {
@@ -7091,7 +7071,7 @@ function Tips({ tipsDaily, shifts, tenantId, dateRange, onSync, showToast }) {
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
           {loading ? "Syncing..." : "Sync Tips"}
-          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
+          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{ctryTime(lastSync)}</span>}
         </button>
       </div>
 
@@ -8148,7 +8128,7 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
     showToast("Pulling shifts from Square...", "info");
     try {
       const result = await syncSquareLabor(tenantId, dateRange);
-      setLastSync(new Date().toLocaleTimeString());
+      setLastSync(new Date());
       if (result.shifts === 0) {
         showToast("No shifts in this date range.", "info");
       } else {
@@ -8241,7 +8221,7 @@ function Labor({ shifts, transactions, categories, tenantId, dateRange, onSync, 
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
           {loading ? "Syncing..." : "Sync Labor"}
-          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{lastSync}</span>}
+          {lastSync && <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{ctryTime(lastSync)}</span>}
         </button>
       </div>
 
@@ -9005,7 +8985,7 @@ function Trends({ tenantId, categories, allTransactions }) {
     const slot = (W - padL - padR) / monthly.length;
     const bw = Math.max(3, Math.min(14, slot * 0.32));
     const labelStep = Math.max(1, Math.ceil(monthly.length / 9));
-    const fmtK = v => "$" + Math.round(v / 1000) + "k";
+    const fmtK = v => moneyCompact(v);
     const gridVals = [0, hi * 0.5, hi];
     return (
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
@@ -9225,7 +9205,7 @@ function CEO({ tenantId, showToast }) {
         <div>
           <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text3)", marginBottom: 6 }}>Custo mão de obra</div>
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={{ color: "var(--text3)" }}>$</span>
+            <span style={{ color: "var(--text3)" }}>{currencySymbol()}</span>
             <input className="input" type="number" step="0.5" min="0" style={{ width: 90, fontFamily: "var(--font-mono)" }}
               value={rate} onChange={e => setRate(e.target.value === "" ? 0 : +e.target.value)} />
             <span style={{ color: "var(--text3)", fontSize: 12 }}>/hora (carregado)</span>
@@ -9281,12 +9261,12 @@ function CEO({ tenantId, showToast }) {
               </div>
 
               <div style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 14px" }}>
-                {numField(m, "equip", "Equipamento", "", "$")}
-                {numField(m, "setup", "Instalação/frete", "", "$")}
+                {numField(m, "equip", "Equipamento", "", currencySymbol())}
+                {numField(m, "setup", "Instalação/frete", "", currencySymbol())}
                 {numField(m, "manual", "Tempo manual", "min/dia", "")}
                 {numField(m, "machine", "Tempo c/ máquina", "min/dia", "")}
                 {numField(m, "days", "Dias de uso", "/sem", "")}
-                {numField(m, "maint", "Manutenção", "/ano", "$")}
+                {numField(m, "maint", "Manutenção", "/ano", currencySymbol())}
               </div>
 
               <div style={{ padding: "16px 18px 18px", background: "var(--surface2)", borderTop: "1px solid var(--border)" }}>
@@ -9410,6 +9390,31 @@ export default function App() {
     if (!session) { setAuthorized(false); return; }
     getMyTenantIds().then(ids => setAuthorized(ids.includes(TENANT_ID) || ids.length > 0));
   }, [session]);
+
+  // Country pack reconciliation. initCountry() already applied the cached pack
+  // synchronously at module load, so this only does visible work the first time
+  // a tenant is opened on this device, or when its country actually changes in
+  // the DB. The bump forces one re-render because the pack is a module
+  // singleton that React can't see.
+  const [countryRev, bumpCountry] = useState(0);
+  useEffect(() => {
+    if (TENANT_ID === "demo") return;
+    if (!authorized) return;
+    let cancelled = false;
+    fetchTenant(TENANT_ID).then(t => {
+      if (cancelled || !t) return;
+      if (setCountryFromTenant(TENANT_ID, t)) bumpCountry(n => n + 1);
+    });
+    return () => { cancelled = true; };
+  }, [authorized]);
+
+  // A screen the active country doesn't support (stale state, or the pack
+  // arriving late and turning out to be BR) falls back to the dashboard rather
+  // than rendering a US-only report against BR data. Depends on countryRev so
+  // it re-checks when the pack swaps, not only when the user navigates.
+  useEffect(() => {
+    if (!supports(screen)) setScreen("dashboard");
+  }, [screen, countryRev]);
 
   const [transactions, setTransactions] = useState(SAMPLE_TRANSACTIONS);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
@@ -9663,7 +9668,7 @@ export default function App() {
     { id: "favobank", label: "Favo Bank", icon: "bank" },
     { id: "reconcile", label: "Reconciliation", icon: "reconcile" },
     { id: "tax", label: "Tax Summary", icon: "tax" },
-  ];
+  ].filter(item => supports(item.id));
 
   const renderScreen = () => {
     switch (screen) {
@@ -9788,7 +9793,7 @@ export default function App() {
               ) : (
                 <span style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ width: 6, height: 6, borderRadius: "50%", background: realtimeActive ? "var(--accent)" : "var(--text3)", display: "inline-block" }} title={realtimeActive ? "Real-time connected" : "Polling mode"} />
-                  {lastSync ? "Updated " + lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                  {lastSync ? "Updated " + ctryTime(lastSync) : ""}
                   {realtimeActive && <span style={{ color: "var(--accent)" }}>· Live</span>}
                 </span>
               )}
