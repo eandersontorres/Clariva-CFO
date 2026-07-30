@@ -7,7 +7,12 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: true, autoRefreshToken: true },
 })
 
-const TENANT = () => import.meta.env.VITE_TENANT_ID || 'demo'
+// Mirrors App.jsx TENANT_ID: the sidebar TenantSwitcher's localStorage override
+// wins over the deploy's env pin (multi-store manager, one deploy).
+const TENANT = () => {
+  try { return localStorage.getItem('cfo_active_tenant') || import.meta.env.VITE_TENANT_ID || 'demo' }
+  catch { return import.meta.env.VITE_TENANT_ID || 'demo' }
+}
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 // Tenant ids the logged-in user belongs to, via the SECURITY DEFINER function

@@ -3,7 +3,10 @@ import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fet
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser } from "./lib/supabase.js";
 
-const TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
+// Active tenant: localStorage override (set by the sidebar TenantSwitcher) wins
+// over the deploy's env pin, so one deploy can serve a multi-store manager.
+const ENV_TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
+const TENANT_ID = (() => { try { return localStorage.getItem("cfo_active_tenant") || ENV_TENANT_ID; } catch { return ENV_TENANT_ID; } })();
 
 // ─── STYLES ────────────────────────────────────────────────────────────────
 const STYLES = `
@@ -9331,6 +9334,56 @@ function CEO({ tenantId, showToast }) {
   );
 }
 
+// ─── TENANT SWITCHER — sidebar store selector for multi-store managers ────────
+// Replaces the static entity pill. Lists the tenants the logged-in user belongs
+// to (r7_user_tenants via RPC); picking one stores the override and reloads so
+// the whole app re-inits against the new tenant. Single-tenant users see the
+// plain pill, same as before.
+function TenantSwitcher() {
+  const [tenants, setTenants] = useState([]);
+  useEffect(() => {
+    if (ENV_TENANT_ID === "demo" && !localStorage.getItem("cfo_active_tenant")) return;
+    (async () => {
+      try {
+        const ids = await getMyTenantIds();
+        if (!ids || ids.length === 0) return;
+        // Stale override (membership revoked): fall back to the env tenant.
+        if (!ids.includes(TENANT_ID)) {
+          try { localStorage.removeItem("cfo_active_tenant"); } catch {}
+          window.location.reload();
+          return;
+        }
+        const { data } = await supabase.from("r7_tenants").select("id, name, slug").in("id", ids).order("name");
+        setTenants(data || []);
+      } catch (e) { console.warn("tenant list load failed", e); }
+    })();
+  }, []);
+  const current = tenants.find(t => t.id === TENANT_ID);
+  if (tenants.length < 2) {
+    return (
+      <div className="entity-pill">
+        <strong>{current?.name || "TorresBee"}</strong>
+        {current ? (current.slug || "") : "Round Rock, TX"}
+      </div>
+    );
+  }
+  return (
+    <div className="entity-pill">
+      <select
+        value={TENANT_ID}
+        onChange={e => {
+          try { localStorage.setItem("cfo_active_tenant", e.target.value); } catch {}
+          window.location.reload();
+        }}
+        title="Switch store"
+        style={{ width: "100%", background: "transparent", color: "var(--text)", border: "1px solid var(--border2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--font-sans)" }}
+      >
+        {tenants.map(t => <option key={t.id} value={t.id} style={{ color: "#111" }}>{t.name}</option>)}
+      </select>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
@@ -9707,10 +9760,7 @@ export default function App() {
           </div>
 
           <div className="sidebar-footer">
-            <div className="entity-pill">
-              <strong>TorresBee</strong>
-              Round Rock, TX
-            </div>
+            <TenantSwitcher />
             {TENANT_ID !== "demo" && (
               <button className="btn btn-ghost btn-sm" style={{ width: "100%", justifyContent: "center", marginTop: 8, color: "var(--text3)", fontSize: 11 }} onClick={() => signOutUser()}>
                 Sign out
