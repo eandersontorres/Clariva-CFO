@@ -8962,6 +8962,7 @@ function Trends({ tenantId, categories, allTransactions }) {
     { title: "Labor Cost %", metric: "labor",     target: 25, dir: "≤", lower: true,  bench: TREND_BENCH.labor },
     { title: "Prime Cost %", metric: "prime",     target: 55, dir: "≤", lower: true,  bench: TREND_BENCH.prime },
     { title: "Net Margin %", metric: "netMargin", target: 15, dir: "≥", lower: false, bench: TREND_BENCH.net_margin },
+    { title: "EBITDA %",     metric: "ebitda",    target: 20, dir: "≥", lower: false, bench: TREND_BENCH.ebitda },
   ];
   const deltaChip = (curr, before, lower) => {
     if (curr == null || before == null) return null;
