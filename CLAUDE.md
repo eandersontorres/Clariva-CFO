@@ -25,20 +25,40 @@ Bookkeeping & financial intelligence platform for restaurant operators. Part of 
 
 ```
 favo-cfo/
-├── api/
-│   └── anthropic.js          # Proxy to Anthropic API (PDF parsing, AI categorization)
+├── api/                            # 18 Vercel serverless functions
+│   ├── anthropic.js                # Anthropic proxy (generic)
+│   ├── parse-statement.js          # Bank statement PDF → transactions
+│   ├── parse-paystub.js            # Paychex payroll journal PDF → splits
+│   ├── parse-aggregator-statement.js  # DoorDash/UberEats/GrubHub/Wix payouts
+│   ├── plaid-link-token.js         # Plaid: Link token
+│   ├── plaid-exchange.js           # Plaid: public → access token
+│   ├── plaid-sync.js               # Plaid: /transactions/sync + categorization
+│   ├── sync-square-sales.js        # Canonical revenue (Orders API)
+│   ├── sync-square-tips.js         # Card tips + auto-gratuity per employee
+│   ├── sync-square-labor.js        # Shifts → hours, wage, loaded cost
+│   ├── sync-square-payouts.js      # Payouts matched to bank deposits
+│   ├── cron-sync-square.js         # Vercel Cron wrapper (08:00 UTC)
+│   ├── sync-marketing.js           # Ad spend from Favo Marketing
+│   ├── forecast-bookings.js        # Reservations → revenue forecast
+│   └── unit-*.js                   # Favo Bank (Unit BaaS): onboard/accounts/sync/transfer
 ├── src/
-│   ├── App.jsx               # ~3,300 lines, single-file SPA (all screens)
-│   ├── main.jsx              # Vite entry
+│   ├── App.jsx                     # ~9,800 lines, single-file SPA (all screens)
+│   ├── main.jsx                    # Vite entry
 │   └── lib/
-│       └── supabase.js       # All DB queries + Kitchen bridge functions
-├── supabase_migration.sql    # Initial schema (run on first setup)
-├── vercel.json               # Vercel config
+│       ├── supabase.js             # All DB queries + Kitchen bridge functions
+│       ├── constants.js            # UNCATEGORIZED id (mirrored in api/)
+│       ├── favoSso.js              # Session handoff from My Favo Team
+│       └── country/                # Country packs — see "Country Packs" below
+│           ├── index.js            # Resolution, formatters, statement parsing
+│           ├── us.js               # Schedule C, USD, ACH/Check/Zelle
+│           └── br.js               # DRE gerencial, BRL, Pix/Boleto
+├── supabase_*.sql                  # Migrations, applied manually and in order
+├── vercel.json                     # Rewrites + cron schedule
 ├── package.json
 └── index.html
 ```
 
-> **Important:** Follows the **single-file App.jsx pattern** from Restauran7. All screens, components, helpers, and styles in `src/App.jsx`. Avoid breaking into multiple files unless you're refactoring intentionally.
+> **Important:** Follows the **single-file App.jsx pattern** from Restauran7. All screens, components, helpers, and styles in `src/App.jsx`. Avoid breaking into multiple files unless you're refactoring intentionally. `src/lib/` is the deliberate exception: data access, SSO and country packs live there because the serverless functions and the browser both need them.
 
 ---
 
@@ -66,20 +86,29 @@ All tables live in the **shared Kitchen Supabase project** with `r7_ledger_*` pr
 | `r7_ledger_budgets` | Monthly/annual budgets per category |
 | `r7_ledger_bills` | Accounts Payable (bills to pay) |
 | `r7_ledger_projects` | Future projects & projections |
-| `r7_ledger_journal` | Manual journal entries (reserved for future) |
+| `r7_ledger_recurring` | Recurring rules (rent, payroll, subscriptions) |
+| `r7_ledger_bank_accounts` | Multi-account support |
+| `r7_ledger_plaid_items` | Plaid access tokens (RLS-locked, service role only) |
+| `r7_ledger_unit_accounts` | Favo Bank envelopes (operating / tax_vault / payroll) |
+| `r7_ledger_journal` | Manual journal entries — created in `supabase_migration.sql`, still unreferenced by code |
+| `r7_labor_shifts` | Square shifts → hours, wage, loaded cost |
+| `r7_labor_tips_daily` | Card tips + auto-gratuity per employee per day |
+| `r7_payroll_runs` | Payroll prep + Paychex CSV export |
+| `r7_square_payouts` | Square payouts matched to bank deposits |
+| `r7_aggregator_payouts` | DoorDash / UberEats / GrubHub / Wix settlements |
 
-### Kitchen Bridge (read-only access)
+### Ecosystem bridges (read-only access)
 
-These tables are **read** from the Kitchen side via the **Sync Kitchen** button:
+Read from sibling Favo modules:
 
-| Kitchen Table | Used For |
-|--------------|----------|
-| `r7_purchases` | Vendor invoices → expense transactions |
-| `r7_snapshots` | Daily Square POS revenue → income transactions |
-| `r7_vendors` | Vendor name lookup map |
-| `r7_staff` | (reserved) Payroll reference |
-| `r7_items` | (reserved) Food cost cross-reference |
-| `r7_tenants` | Tenant info |
+| Table | Module | Used For |
+|-------|--------|----------|
+| `r7_purchases` | Kitchen | Vendor invoices → expense transactions |
+| `r7_vendors` | Kitchen | Vendor name lookup map |
+| `r7_reservations` | Book | Bookings → revenue forecast |
+| `r7_tenants` | shared | Tenant info, Square creds, timezone, **country** |
+
+> `r7_snapshots` and `r7_staff` are NOT usable bridges — the old `fetchKitchenSnapshots` / `fetchKitchenStaff` selected columns that don't exist and were removed. Revenue comes from **Sync Sales**; labor rates from **Square Labor**.
 
 ### Key Schema Details
 
@@ -88,6 +117,8 @@ These tables are **read** from the Kitchen side via the **Sync Kitchen** button:
 - `r7_ledger_transactions.posted` and `posted_at` track posting workflow
 - `r7_ledger_transactions.category_id` references `r7_ledger_accounts(id)` ON DELETE SET NULL
 - `r7_ledger_transactions.id` is `TEXT` (not UUID) — uses prefixed IDs like `pdf_xxx`, `csv_xxx`, `kitchen_purchase_xxx`
+- **Closed periods** — `BOOKS_CLOSED_THROUGH` in `App.jsx` guards client-side; a `BEFORE INSERT` trigger on `r7_ledger_locks` enforces it server-side. That table has no versioned migration in this repo — it was applied directly to the DB.
+- **`country` / `currency` / `locale` / `tax_regime` on `r7_tenants`** (`supabase_country_migration.sql`) — read by every Favo module, not just CFO
 
 ---
 
@@ -107,21 +138,31 @@ These tables are **read** from the Kitchen side via the **Sync Kitchen** button:
 10. **KitchenSyncButton** component
 11. **Icon** component (inline SVG library)
 12. **Toast** component
-13. **Screen Components** (in order in NAV):
-    - `Dashboard`
+13. **Screen Components** (in NAV order — 21 entries, filtered by country pack):
+    - `Dashboard` (labelled "Overview")
     - `Insights` (CFO Insights — health scorecard, alerts, action checklists)
-    - `SalesReport` (Bank vs POS comparison)
-    - `Ledger` (Posting workflow with auto-match)
+    - `CEO` (CEO Cockpit — equipment ROI calculator)
+    - `Bookkeeper` 🇺🇸 (8 rules-based IRS Schedule C checks, compliance score)
+    - `Labor` 🇺🇸 (Square shifts, loaded cost, payroll variance)
+    - `Payroll` 🇺🇸 (nested under Labor — prep + Paychex CSV export)
+    - `Tips` 🇺🇸 (nested under Payroll — card tips, auto-grat, pooling)
     - `Projects` (future investments timeline/board/list)
-    - `Transactions` (with import drop zone)
+    - `Transactions` (review-first: Uncategorized / Categorized tabs, import drop zone)
     - `Categories` (Chart of Accounts CRUD)
-    - `PLReport`
+    - `PLReport` (Profit & Loss)
+    - `Performance`
+    - `Trends`
     - `CashFlow`
     - `Budget` (with alerts banner)
     - `Bills` (Accounts Payable)
+    - `Recurring`
+    - `BankAccounts`
+    - `FavoBank` 🇺🇸 (Unit BaaS envelopes)
     - `Reconciliation`
-    - `TaxSummary`
+    - `TaxSummary` 🇺🇸
 14. **MAIN APP** — `export default function App()` with all state, sync logic, and render switch
+
+🇺🇸 = US-only; hidden from the NAV when the tenant's country pack doesn't declare the capability. See **Country Packs** below.
 
 ### Data Synchronization
 
@@ -211,7 +252,8 @@ Use prefixed IDs to identify source:
 - `ofx_<fitid or random>` — OFX imports
 - `pdf_<timestamp>_<i>` — PDF (Anthropic) imports
 - `kitchen_purchase_<r7_purchase_id>` — Synced from Kitchen
-- `kitchen_snapshot_<r7_snapshot_id>` — Synced from Kitchen
+- `sq_sale_<date>` / `sq_tax_<date>` / `sq_tip_<date>` / `sq_fee_<date>` — Sync Sales (deterministic, one row per day per kind)
+- `plaid_<plaid_txn_id>` — Plaid sync
 - `payment_<bill_id>_<timestamp>` — Bill payments
 - `bill_manual_<timestamp>` — Manually added bills
 - `p_<timestamp>` — Manually added projects
@@ -230,6 +272,24 @@ setTransactions(prev => {
   return [...txns, ...localOnly];
 });
 ```
+
+### 8. Country packs — never hardcode a locale, currency or tax rule
+Anything that changes between markets lives in `src/lib/country/`. Do NOT add `en-US`, `USD`, a `$`, a US date assumption, or an IRS rule to `App.jsx`.
+
+```javascript
+import { money, formatDate, parseAmount, country, supports } from "./lib/country/index.js";
+```
+
+Rules:
+
+- **The active pack is a module singleton**, not React context — `fmt()` is called from ~300 render sites. It's safe because `TenantSwitcher` does a full `window.location.reload()` on store change, so the tenant is fixed for the page's life.
+- **Resolution is synchronous** at module load from `localStorage["cfo_country_<tenantId>"]`, then reconciled against `r7_tenants.country` on mount. Without the cache the first paint would be USD.
+- **Never capture the pack across renders** (`const p = country()` at module scope) — you'd pin the stale one. Call the accessor each time.
+- **Reporting-line strings are stable identifiers** persisted in `r7_ledger_accounts.tax_line`. Add, never rename — renaming unmaps existing categories from the reports.
+- **Adding a country** = new `src/lib/country/<xx>.js` + widen the `CHECK` constraint in `supabase_country_migration.sql`. The constraint exists so an unknown code can't silently fall back to US formatting.
+- Screens declare a capability; `capabilities: { bookkeeper: false }` drops it from the NAV entirely.
+
+Statement parsing goes through `parseDate()` / `parseAmount()` from the pack. Both failure modes they fix are silent: `new Date("03/04/2025")` always read March 4, and the old `/[$,\s()]/` cleaner turned `1.234,56` into `1.234`.
 
 ---
 
@@ -289,11 +349,12 @@ Golden rule: **deep tone on light background, signal tone on dark background.** 
 
 User clicks "Sync Kitchen" in top bar:
 1. `fetchKitchenPurchases()` — vendor invoices in date range
-2. `fetchKitchenSnapshots()` — daily Square POS revenue in date range
-3. `fetchKitchenVendors()` — for vendor name lookup
-4. Transforms to ledger transactions via `purchasesToTransactions()` and `snapshotsToTransactions()`
-5. De-duplicates against existing IDs
-6. Saves new ones to Supabase
+2. `fetchKitchenVendors()` — for vendor name lookup
+3. Transforms to ledger transactions via `purchasesToTransactions()`
+4. De-duplicates against existing IDs
+5. Saves new ones to Supabase
+
+**Purchases only.** Revenue comes from **Sync Sales** (`api/sync-square-sales`), which is the canonical source — it also re-tags bank-side Square deposits as `source='square_settlement'` so they don't double-count.
 
 ### Posting workflow (Ledger screen)
 
@@ -357,15 +418,20 @@ User clicks "Sync Kitchen" in top bar:
 
 ---
 
-## Roadmap (not yet implemented)
+## Roadmap
 
-- [ ] Multi-account support (multiple bank accounts per tenant)
-- [ ] Recurring transactions (rent, payroll, subscriptions auto-generated)
-- [ ] Receipt photo upload (similar to Kitchen invoice scanner) → attach to transaction
-- [ ] Multi-currency for Favo Industria/Brewing modules
-- [ ] Bank reconciliation (matching deposits to revenue accumulator)
-- [ ] Email reports (weekly P&L summary to owner)
-- [ ] Plaid integration (Phase 3 — when free tier no longer enough)
+`ROADMAP.md` is the source of truth — it tracks Recently Shipped / Now / Next / Later / Horizon with effort tags. Keep it updated there, not here.
+
+Already shipped (this list used to claim otherwise): multi-account, recurring, Plaid, bank reconciliation, Square sales/tips/labor/payouts, payroll + Paychex export, Bookkeeper, CEO Cockpit, multi-store tenant switcher, country packs Phase 0.
+
+Still open, highest leverage first:
+
+- [ ] **Brazil Phase 1** — DRE gerencial replacing Tax Summary; BR chart of accounts confirmed against the pilot's accountant
+- [ ] **Brazil Phase 2** — ingestion: BR bank OFX, Pluggy/Belvo (Open Finance), iFood/Rappi, Stone/Cielo
+- [ ] Multi-tenant + proper Auth (tenant-aware RLS, replacing `USING (true)`)
+- [ ] Receipt photo upload → AI extract → attach to transaction
+- [ ] Email reports (weekly P&L digest)
+- [ ] Bundle code-splitting (single chunk ~740KB, Vite warns every build)
 
 ---
 
