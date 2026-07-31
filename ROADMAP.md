@@ -10,6 +10,14 @@ Effort tags: `XS` < 2h · `S` half-day · `M` 1-2 days · `L` 3-5 days · `XL` 1
 
 ## RECENTLY SHIPPED
 
+### 2026-07-30 · Country packs (Brasil Fase 0)
+
+- **`src/lib/country/`** — pacote por país com formatação, parsing de extrato, linhas de relatório do plano de contas, meios de pagamento e capacidades. `us.js` é extração pura do que estava hardcoded (mesmos identificadores do Schedule C), então nenhum tenant existente precisou de migração de dados.
+- **`country` / `currency` / `locale` / `tax_regime` em `r7_tenants`** — dimensão do ecossistema, lida por todos os módulos Favo, não só o CFO. Aplicada como `country_as_tenant_dimension`.
+- **Dois bugs de corrupção silenciosa nos parsers**, que valiam independente do Brasil: `new Date("03/04/2025")` sempre lia March 4, e o cleaner `/[$,\s()]/` virava `1.234,56` em `1.234` (erro de 1000x) e `(123.45)` em positivo.
+- **NAV filtrado por capacidade** — 21 telas no US, 15 no BR.
+- **Alk Lancheteria** marcada como BR / BRL / pt-BR / Lucro Presumido / America/Sao_Paulo.
+
 ### 2026-05-23/24 · Square labor stack + theme parity
 
 - **Square Labor sync** (`r7_labor_shifts`) — hours, wage, fully-loaded cost (+15% employer tax burden, configurable per tenant). Labor screen with hours / wage / loaded cost / labor% KPIs + payroll variance card (projected vs ledger Wages) + by-employee table.
@@ -46,6 +54,63 @@ TorresBee living in the app surfaces the bugs no sweep finds. Flag anything off 
 
 ## NEXT — features that unblock real decisions
 
+### 0. Brasil — Alk Lancheteria · `XL` (multi-fase)
+
+**Piloto:** Alk Lancheteria (`slug: alk`, Lucro Presumido, `America/Sao_Paulo`). Vive hoje no projeto Supabase compartilhado (us-east), com 0 transações.
+
+**Posicionamento — o que NÃO construir.** No Brasil o contador é obrigatório e já faz escrituração e apuração. Reconstruir Bookkeeper/TaxSummary/Folha é gastar meses para entregar o que o cliente já paga R$ 300/mês para ter. O produto BR vende **gestão**: DRE gerencial, CMV, custo de mão de obra, margem por canal. Isso o contador não entrega.
+
+#### Fase 0 — country packs ✅ `feat(i18n)` c434c18
+
+Formatação, parsing de extrato e capacidades por país; `country`/`currency`/`locale`/`tax_regime` em `r7_tenants`. 6 telas US-only somem do NAV quando o pacote não declara a capacidade.
+
+#### Fase 1 — DRE gerencial · `L`
+
+**Bloqueado por:** plano de contas + DRE dos últimos 12 meses + confirmação do regime, tudo vindo do contador do Alk. As 28 contas em `br.js` são esqueleto; enquanto o piloto não lançar transação nelas, mudar os identificadores é barato.
+
+- DRE gerencial substituindo Tax Summary (`capabilities.tax`)
+- Semear o plano de contas do Alk **depois** da confirmação, não antes
+
+#### Fase 2 — Agente contador BR · `M`
+
+É a tela `Bookkeeper` com regras brasileiras, não um app novo — quando as regras existirem, `capabilities.bookkeeper: true` no `br.js` e ela reaparece no NAV.
+
+- **Limites são dados versionados, não números no código.** Teto do Simples já subiu de R$ 3,6M para R$ 4,8M e há discussão de subir de novo. Guardar como tabela com `from:` (vigência), nunca sobrescrever a linha antiga — relatório de período fechado tem que ser reprocessável com a regra da época.
+- Base de cálculo é **RBT12** (receita bruta dos 12 meses anteriores), não ano-calendário.
+- **O alerta que vale é o projetivo,** não o de cruzamento: "no ritmo dos últimos 3 meses, cruza R$ 4,8M em ~5 meses". Quando já cruzou, o contador sabe e o estrago está feito. O run rate já existe na tela de Trends.
+- Alerta inverso vale mais que o direto: tenant em Presumido que pagaria menos no Simples é dinheiro encontrado, não risco evitado.
+- **Limite de responsabilidade:** o agente sinaliza, o contador decide. Mesmo comportamento do Bookkeeper americano, que aponta e manda consultar um CPA. App que recomenda troca de regime está dando parecer fiscal.
+
+**Pergunta aberta para o contador do Alk:** lanchonete em Lucro Presumido é incomum — a maioria do food service pequeno fica no Simples. Saber *por quê* define o que o agente vigia: escolha deliberada é uma coisa, herança que ninguém revisou é outra.
+
+#### Fase 3 — ingestão · `XL`
+
+Nenhuma integração atual sobrevive: Plaid é `country_codes:["US"]` e não opera aqui, Square saiu do Brasil, Unit é US-only.
+
+- OFX dos bancos BR — o parser já é genérico (`DTPOSTED` é posicional), deve funcionar quase sem mexer
+- Pluggy ou Belvo (Open Finance) no lugar do Plaid
+- iFood / Rappi no lugar de DoorDash / UberEats
+- Stone / Cielo no lugar do Square
+
+#### Fase 4 — folha CLT · `XL`
+
+**Recomendação: integrar, não reimplementar** (Omie, Conta Azul, Contabilizei). O burden de 15% dos EUA vira ~70-80% no Brasil com INSS patronal, FGTS, 13º, férias + 1/3, DSR. Não é parâmetro, é outro modelo.
+
+#### Decisão em aberto — onde os tenants BR vivem
+
+`favo-brasil` (sa-east-1) existe com o schema completo replicado e **zero linhas**. O Alk está no projeto us-east.
+
+| | us-east (atual) | favo-brasil (sa-east-1) |
+|---|---|---|
+| Switcher de loja | cruza BR e US | não cruza instâncias |
+| Deploy do CFO | um só | separado, `VITE_SUPABASE_URL` própria |
+| Migrations | uma vez | duas vezes, sempre |
+| Residência de dados | via salvaguarda contratual | no Brasil |
+
+**A janela é agora.** Alk tem 0 transações, 0 categorias, 0 contas bancárias — mover custa um `INSERT`. Depois que o piloto importar extrato, custa migração com IDs referenciados em seis tabelas.
+
+> O CFO não vai sozinho: receita vem do POS, CMV vem do Kitchen. O caminho crítico do ecossistema BR é **NFC-e no POS** — obrigação legal, SEFAZ por estado, certificado A1, contingência offline. Semanas de trabalho regulatório, e não dá para entregar 80%. O CFO BR não depende disso e por isso vai primeiro.
+
 ### 1. Multi-tenant + proper Auth · `L`
 
 **Unblocks:** moving from "TorresBee's app" to a sellable SaaS product.
@@ -59,7 +124,6 @@ Today the tenant is `VITE_TENANT_ID` env var → one tenant per deploy. Target: 
 - Posting workflow + Reconciliation screen end-to-end against real data.
 - Bill payment workflow (Kitchen purchase → bill → payment transaction).
 - Per-account reconciliation (the screen is global today).
-- `CLAUDE.md` is stale — it documents a "Ledger / Posting" screen that doesn't exist in the current nav. Reconcile docs with reality.
 
 ### 3. Marketing bridge Phase 2 · `S`
 
@@ -81,7 +145,6 @@ Today the tenant is `VITE_TENANT_ID` env var → one tenant per deploy. Target: 
 | **Bridge Purchase → Bills** | `clariva-purchase` (in `dev`) ships | POs become the source of truth for Bills |
 | **Bridge POS → CFO** | `pos.clariva.cloud` ships | Canonical revenue + real avg_ticket for Bookings Forecast |
 | **Stack migration: TS + Tailwind** | Before second customer | Aligns with POS/Purchase (now that Day theme + fonts already match) |
-| **Brazil-compliant DRE** | Expanding to BR | multi-currency, NFC-e, Pix, Stone/Cielo |
 
 ### Product features
 
