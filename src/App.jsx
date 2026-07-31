@@ -8823,6 +8823,9 @@ const TREND_BENCH = {
   food:       { label: "Food Cost",   target: "≤28%", excellent: 28, critical: 40, lower: true,  weight: 0.20 },
   labor:      { label: "Labor Cost",  target: "≤25%", excellent: 25, critical: 40, lower: true,  weight: 0.15 },
 };
+// Scored KPIs live in TREND_BENCH (weights must sum to 1.0). OpEx is display-only —
+// it is already implied by prime + ebitda, so scoring it would double-count.
+const TREND_BENCH_OPEX = { label: "OpEx", target: "≤30%", excellent: 30, critical: 45, lower: true };
 const trendNorm = (value, { excellent, critical, lower }) => {
   if (lower) {
     if (value <= excellent) return 100;
@@ -8947,9 +8950,13 @@ function Trends({ tenantId, categories, allTransactions }) {
       const prime = food + labor;
       const netMargin = (netIncome / m.revenue) * 100;
       const ebitda = ((netIncome + m.addbacks) / m.revenue) * 100;
+      // Operating expenses = everything that is not prime cost and not an EBITDA add-back,
+      // so prime + opex + ebitda === 100. Deliberately excluded from the score: TREND_BENCH
+      // weights sum to 1.0 and must keep matching the P&L Operations Score.
+      const opex = ((m.expenses - m.cogs - m.labor - m.addbacks) / m.revenue) * 100;
       const vals = { net_margin: netMargin, ebitda, prime, food, labor };
       const score = Math.round(Object.entries(TREND_BENCH).reduce((s, [k, b]) => s + trendNorm(vals[k], b) * b.weight, 0));
-      return { key, label, revenue: m.revenue, netIncome, food, labor, prime, netMargin, ebitda, score };
+      return { key, label, revenue: m.revenue, netIncome, food, labor, prime, netMargin, ebitda, opex, score };
     });
   }, [rows, categories]);
 
@@ -8963,6 +8970,7 @@ function Trends({ tenantId, categories, allTransactions }) {
     { title: "Prime Cost %", metric: "prime",     target: 55, dir: "≤", lower: true,  bench: TREND_BENCH.prime },
     { title: "Net Margin %", metric: "netMargin", target: 15, dir: "≥", lower: false, bench: TREND_BENCH.net_margin },
     { title: "EBITDA %",     metric: "ebitda",    target: 20, dir: "≥", lower: false, bench: TREND_BENCH.ebitda },
+    { title: "OpEx %",       metric: "opex",      target: 30, dir: "≤", lower: true,  bench: TREND_BENCH_OPEX },
   ];
   const deltaChip = (curr, before, lower) => {
     if (curr == null || before == null) return null;
