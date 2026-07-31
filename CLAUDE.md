@@ -226,8 +226,10 @@ Normalization strips digits and special chars, keeps first 3 significant upperca
 
 ## Critical Patterns to Preserve
 
-### 1. Inline parsers (DO NOT extract)
-The `parseBoACSV` and `parseOFX` functions MUST stay inline in `App.jsx`. Past attempts to use a separate `src/lib/parsers.js` file broke builds because the regex with `\r\n` got mangled during git commits via the GitHub web editor. Keep them inline using `.split('\n').map(l => l.replace('\r', ''))` instead of regex.
+### 1. Inline parsers
+`parseBoACSV` and `parseOFX` live inline in `App.jsx`, and split lines with `.split('\n').map(l => l.replace('\r', ''))` rather than a `\r\n` regex.
+
+**The original reason is gone.** Extracting them to `src/lib/parsers.js` used to break builds because the GitHub web editor mangled the `\r\n` regex on paste; work is done in a local clone now, so that hazard no longer exists. They stay inline on the single-file convention alone — not because moving them is dangerous. The `.split('\n')` style is still worth keeping: it's immune to the whole class of problem and reads no worse.
 
 ### 2. Anthropic via proxy
 Never call Anthropic API directly from the browser. Always go through `/api/anthropic.js`. The `ANTHROPIC_API_KEY` is server-side only (no `VITE_` prefix) to keep it secret.
@@ -410,8 +412,8 @@ User clicks "Sync Kitchen" in top bar:
 
 ## Known Issues / Watch-outs
 
-- **GitHub web editor mangles regex with `\r\n`** — never put line-splitting regex in code that will be pasted via GitHub's editor. Use `.split('\n')` instead.
 - **Vite SPA routing** — `vercel.json` has rewrite for `/(.*)` → `/index.html`. Don't break this.
+- **Migrations are manual** — no migration runner. Merging a PR deploys code but does not touch the DB. Ship the SQL and the code that depends on it in an order where either half is safe alone.
 - **Sample data fallback** — when `VITE_TENANT_ID === "demo"`, app uses `SAMPLE_TRANSACTIONS`. Useful for testing without DB but make sure it doesn't leak to production.
 - **Real-time requires Replication enabled in Supabase** — Settings → Database → Replication → enable for all `r7_ledger_*` tables.
 - **Anthropic body size limit** — large PDFs may hit Vercel's 4.5MB body limit. The proxy passes through; if issues arise, may need to chunk or compress.
@@ -454,6 +456,13 @@ For PDF import testing locally, you also need to run `vercel dev` instead of `vi
 - Brazilian Portuguese is fine for chat; code/comments in English
 - Action-oriented language for American market positioning
 - Favo = professional / sophisticated tone
-- Always show actual file changes, not just descriptions
-- For multi-file changes, copy each output file separately rather than zipping
-- Anderson manages the GitHub via web editor (commits via copy-paste) — keep code paste-friendly
+- Report what was actually verified vs. assumed. A build that passed and a screen that rendered are different claims — say which one you have
+
+### Git workflow
+
+Work happens in the local clone, not through the GitHub web editor (that was the old flow — see the note on pattern #1).
+
+- Branch off `main` for anything non-trivial; `main` auto-deploys to production from Vercel
+- Commit and push only when asked
+- Commit messages: subject in Portuguese matching the existing log style (`feat(scope): …`, `fix(scope): …`, `docs: …`), body explaining **why**, `Co-Authored-By: Claude <noreply@anthropic.com>` at the end
+- SQL migrations are applied manually — a merged PR does NOT run them. Say so when a change needs one
