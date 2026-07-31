@@ -3,7 +3,7 @@
 Bookkeeping & financial intelligence platform for restaurant operators. Part of the Favo ecosystem (companion to **Favo Kitchen / Restauran7**).
 
 **Live:** [cfo.clariva.cloud](https://cfo.clariva.cloud)
-**Repo:** [github.com/eandersontorres/Favo-CFO](https://github.com/eandersontorres/Favo-CFO)
+**Repo:** [github.com/eandersontorres/Clariva-CFO](https://github.com/eandersontorres/Clariva-CFO)
 **Pilot tenant:** TorresBee Restaurant — Round Rock, TX (`tenant_id: 5dc58fa8-0a0a-4d24-8906-e32755e36e93`)
 
 ---
@@ -24,7 +24,7 @@ Bookkeeping & financial intelligence platform for restaurant operators. Part of 
 ## Project Structure
 
 ```
-Favo-CFO/
+favo-cfo/
 ├── api/
 │   └── anthropic.js          # Proxy to Anthropic API (PDF parsing, AI categorization)
 ├── src/
