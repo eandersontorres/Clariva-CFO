@@ -125,10 +125,17 @@ function merchantOf(t) {
 //
 // Everything else stays source='plaid' and counts normally.
 //
-// Deposits from delivery aggregators are deliberately NOT in this list: for a
-// tenant whose aggregator orders are injected into Square they would be
-// double-counted, but TorresBee's are not — its Square deposits reconcile to
-// Square gross on their own. They are booked as Revenue - Delivery instead.
+//   aggregator_settlement  Delivery-platform deposits (DoorDash/UberEats/
+//                      Grubhub...). Their orders ARE injected into Square by
+//                      the POS integrations (live since ~Apr 2026), so
+//                      sync-square-sales books the gross per channel
+//                      (sq_sale_<date>_uber_eats etc.) and the bank deposit
+//                      is the same money net of commission. Inflows only —
+//                      an Uber ride or a DoorDash order the owner placed is
+//                      an outflow and must keep counting as expense.
+//                      (Before the injection went live these deposits were
+//                      booked as Revenue - Delivery; that stopped once it
+//                      made them double-count.)
 const SQUARE_RE = /\bsquare\b|\bsq\s*\*/i;
 const AGGREGATOR_RE = /\b(doordash|door\s*dash|ubereats|uber\s*eats|uber|grubhub|grub\s*hub|postmates|seamless)\b/i;
 const TRANSFER_RES = [
@@ -142,6 +149,10 @@ const TRANSFER_PFC = new Set(["TRANSFER_IN_ACCOUNT_TRANSFER", "TRANSFER_OUT_ACCO
 
 function classifySource(t, description) {
   if (SQUARE_RE.test(description)) return "square_settlement";
+  // Aggregator INFLOWS are settlements of revenue already booked from the
+  // Square orders (gross, per channel). Plaid's convention: positive amount
+  // = money leaving the account, so an inflow is t.amount < 0.
+  if (Number(t.amount) < 0 && AGGREGATOR_RE.test(description)) return "aggregator_settlement";
   if (TRANSFER_RES.some((re) => re.test(description))) return "internal_transfer";
   if (TRANSFER_PFC.has(t.personal_finance_category?.detailed)) return "internal_transfer";
   return "plaid";
@@ -149,16 +160,13 @@ function classifySource(t, description) {
 
 // Returns a category_id for a txn, or null.
 //   - outflows  → merchant rules, then Plaid's personal_finance_category
-//   - inflows   → only aggregator deposits (Revenue - Delivery). Everything
-//                 else is left uncategorized so it surfaces for review rather
-//                 than being guessed into the P&L.
+//   - inflows   → left uncategorized so they surface for review rather than
+//                 being guessed into the P&L. (Aggregator deposits used to be
+//                 auto-filed as Revenue - Delivery — no longer: they are
+//                 settlements now that the gross comes in via Square.)
 function suggestCategoryId(t, nameToId) {
   const ledgerAmount = -Number(t.amount);
   if (ledgerAmount >= 0) {
-    const inflowDesc = merchantOf(t).toUpperCase();
-    if (ledgerAmount > 0 && AGGREGATOR_RE.test(inflowDesc)) {
-      return nameToId["revenue - delivery"] || null;
-    }
     return null;
   }
   const desc = merchantOf(t).toUpperCase();

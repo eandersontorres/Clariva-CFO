@@ -1135,8 +1135,18 @@ function SalesSyncButton({ tenantId, dateRange, onSync, showToast }) {
       // tax, tips, etc separately. Fall back to the old gross_sales field for
       // backward compat in case a stale deployment is still answering.
       const t = result.totals || {};
+      // by_channel arrived with the channel split — show where the net came
+      // from (POS vs delivery platforms vs own online ordering).
+      const CH_LABEL = { dine_in: "POS", wix: "Wix", square_online: "Sq Online", online: "Online", uber_eats: "Uber Eats", doordash: "DoorDash", grubhub: "Grubhub" };
+      const channelNote = t.by_channel
+        ? " (" + Object.entries(t.by_channel)
+            .filter(([, v]) => v.net_sales !== 0)
+            .sort((a, b) => b[1].net_sales - a[1].net_sales)
+            .map(([ch, v]) => `${CH_LABEL[ch] || ch} ${fmt(v.net_sales)}`)
+            .join(" · ") + ")"
+        : "";
       const headline = t.net_sales != null
-        ? `${result.days_with_sales} days · net ${fmt(t.net_sales)} · tax ${fmt(t.tax || 0)} · tips ${fmt((t.tips || 0) + (t.auto_gratuity || 0))} · fees ${fmt(t.processing_fees || 0)}`
+        ? `${result.days_with_sales} days · net ${fmt(t.net_sales)}${channelNote} · tax ${fmt(t.tax || 0)} · tips ${fmt((t.tips || 0) + (t.auto_gratuity || 0))} · fees ${fmt(t.processing_fees || 0)}`
         : `${result.days_with_sales} days · gross ${fmt(t.gross_sales || 0)} · fees ${fmt(t.processing_fees || 0)}`;
       const settlementNote = result.settlements_retagged > 0
         ? ` · ${result.settlements_retagged} bank deposit${result.settlements_retagged === 1 ? "" : "s"} marked as settlement`
@@ -3414,7 +3424,7 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
                   source={sources.revenueSource}
                   sourceTag="Square"
                   bank={null}
-                  note="Source = sum of square_net_sales (items + non-tip service charges − discounts − returns). Drift typically = aggregator double-count and/or legacy rows still tagged square_sale_gross."
+                  note="Source = sum of square_net_sales (items + non-tip service charges − discounts − returns), all channels — POS, online and aggregator gross. Drift typically = aggregator deposits still categorized as revenue (re-run Plaid sync / Sync Sales) or legacy rows still tagged square_sale_gross."
                   onAdjust={() => setAdjusting({
                     categoryHint: "Revenue - Dining",
                     suggestedDescription: `Revenue adjustment to match Square Sales Summary`,

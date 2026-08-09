@@ -254,7 +254,7 @@ Use prefixed IDs to identify source:
 - `ofx_<fitid or random>` — OFX imports
 - `pdf_<timestamp>_<i>` — PDF (Anthropic) imports
 - `kitchen_purchase_<r7_purchase_id>` — Synced from Kitchen
-- `sq_sale_<date>` / `sq_tax_<date>` / `sq_tip_<date>` / `sq_fee_<date>` — Sync Sales (deterministic, one row per day per kind)
+- `sq_sale_<date>` (POS) / `sq_sale_<date>_<channel>` (wix, square_online, uber_eats, doordash, grubhub) / `sq_tax_<date>` / `sq_tip_<date>` / `sq_fee_<date>` — Sync Sales (deterministic; sales split per channel, each platform gets its own auto-created `Revenue - <platform>` income category, marketplace tax NOT booked)
 - `plaid_<plaid_txn_id>` — Plaid sync
 - `payment_<bill_id>_<timestamp>` — Bill payments
 - `bill_manual_<timestamp>` — Manually added bills
