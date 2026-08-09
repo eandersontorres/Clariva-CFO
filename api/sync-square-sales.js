@@ -473,11 +473,21 @@ export default async function handler(req, res) {
       .lte("date", endDate)
       .gt("amount", 0);
     const isSquareDeposit = (desc) => /\bsquare\b|sq\*square|^sq\s|^sq\b/i.test(desc || "");
+    // Never re-tag rows this sync itself generates: their descriptions all
+    // start with "SQUARE ..." and used to get swallowed into
+    // square_settlement on every run (sq_tax_/sq_tip_ rows), inflating
+    // settlements_retagged and lying about their origin.
+    const OWN_SOURCES = new Set([
+      "square_net_sales",
+      "square_sale_gross", // legacy rows from before the source rename
+      "square_sales_tax",
+      "square_tips",
+      "square_fee",
+      "square_settlement",
+      "aggregator_settlement",
+    ]);
     const reTagIds = (candidates || [])
-      .filter(c => isSquareDeposit(c.description)
-        && c.source !== "square_net_sales"
-        && c.source !== "square_sale_gross" // legacy rows from before the source rename
-        && c.source !== "square_settlement")
+      .filter(c => isSquareDeposit(c.description) && !OWN_SOURCES.has(c.source))
       .map(c => c.id);
     let settlements_retagged = 0;
     if (reTagIds.length > 0) {
