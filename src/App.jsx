@@ -4986,11 +4986,36 @@ function Performance({ tenantId, transactions = [], categories = [], dateRange =
             />
           )}
 
-          {/* Channels come from the CFO ledger, not Kitchen: Sync Sales books one
-              row per day per channel under its own Revenue - <platform>
-              category. Kitchen's sales_channels block reads r7_orders, which
-              this tenant doesn't populate, so it always came back empty. */}
-          {tab === "channels" && (channelRows.length > 0 ? (
+          {/* Channel P&L — Kitchen's block when it carries the economics (it
+              prices each line item against the recipe, which the CFO ledger
+              can't do), the ledger's own per-channel revenue otherwise. Both
+              classify channels identically, so the two agree on the split and
+              differ only in how much detail they can show. */}
+          {tab === "channels" && data.sales_channels?.by_channel?.some(c => c.contribution != null) ? (
+            <PerformanceTable
+              title="Sales Channels — what each channel actually pays"
+              note={`Marketplace menus are marked up, so food cost % alone flatters delivery — only contribution (revenue − food cost − commission) compares channels fairly. Cost % is over the revenue that has a recipe. Commission rates are assumptions set in ${data.sales_channels.commission_source}, not measured: ${Object.entries(data.sales_channels.commission_rates || {}).map(([k, v]) => `${k} ${(v * 100).toFixed(1)}%`).join(" · ")}.`}
+              total={data.sales_channels.totals.contribution}
+              totalLabel="Total contribution"
+              pct={null}
+              extraTotals={[
+                { label: "Revenue", value: data.sales_channels.totals.revenue, format: "money" },
+                { label: "Food cost", value: data.sales_channels.totals.food_cost, format: "money" },
+                { label: "Commission", value: data.sales_channels.totals.commission, format: "money" },
+              ]}
+              rows={data.sales_channels.by_channel}
+              columns={[
+                { key: "channel",       label: "Channel" },
+                { key: "orders",        label: "Orders",       align: "right", format: "qty" },
+                { key: "revenue",       label: "Revenue",      align: "right", format: "money" },
+                { key: "food_cost",     label: "Food cost",    align: "right", format: "money" },
+                { key: "food_cost_pct", label: "Food cost %",  align: "right", format: "pct" },
+                { key: "commission",    label: "Commission",   align: "right", format: "money" },
+                { key: "contribution",  label: "Contribution", align: "right", format: "money" },
+                { key: "contribution_pct", label: "Contrib. %", align: "right", format: "pctHigh" },
+              ]}
+            />
+          ) : (channelRows.length > 0 ? (
             <PerformanceTable
               title="Sales Channels — where the revenue comes from"
               note="Net sales per channel from Sync Sales (Square Orders API), grouped by revenue category. Gross of platform commission and net of tax — marketplace commissions land as expenses when the platform statement is imported."
@@ -5065,6 +5090,13 @@ function PerformanceTable({ title, note, total, totalLabel, pct, pctTone, rows =
     if (format === "pct") {
       const n = parseFloat(val);
       const color = n > 35 ? "var(--red)" : n > 28 ? "var(--yellow)" : "var(--accent)";
+      return <span style={{ color }}>{n.toFixed(1)}%</span>;
+    }
+    // Same shape, opposite polarity: for a contribution margin more is better,
+    // so the cost thresholds above would paint the best channel red.
+    if (format === "pctHigh") {
+      const n = parseFloat(val);
+      const color = n >= 70 ? "var(--accent)" : n >= 55 ? "var(--yellow)" : "var(--red)";
       return <span style={{ color }}>{n.toFixed(1)}%</span>;
     }
     return val;
