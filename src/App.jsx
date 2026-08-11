@@ -4767,28 +4767,11 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
 // The math lives in restauran7/api/performance-summary.js — Kitchen owns the
 // recipe/inventory model so the source of truth stays single. CFO only
 // re-renders the JSON. See lib/supabase.js fetchPerformanceSummary().
-function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
+function Performance({ tenantId, transactions = [], categories = [], dateRange = {}, showToast }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState("usage"); // usage | theoretical | production | menu
-  const [rangePreset, setRangePreset] = useState("monthly"); // weekly | monthly | custom
-
-  const applyPreset = (preset) => {
-    setRangePreset(preset);
-    if (!setDateRange) return;
-    const today = new Date();
-    const todayStr = today.toISOString().slice(0, 10);
-    if (preset === "weekly") {
-      const start = new Date(today);
-      start.setDate(start.getDate() - 6);
-      setDateRange({ start: start.toISOString().slice(0, 10), end: todayStr });
-    } else if (preset === "monthly") {
-      const start = new Date(today.getFullYear(), today.getMonth(), 1);
-      const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-      setDateRange({ start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) });
-    }
-  };
+  const [tab, setTab] = useState("usage"); // usage | theoretical | production | menu | channels
 
   useEffect(() => {
     if (!tenantId || tenantId === "demo") return;
@@ -4810,6 +4793,48 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
     return "var(--red)";
   };
 
+  // ── Net sales — the denominator every cost-% on this screen divides by ──
+  // Kitchen's period_net_sales sums its own r7_orders table, which this tenant
+  // never populates (revenue arrives through Sync Sales into the CFO ledger),
+  // so it returns 0 and every cost-% renders "—". Use the CFO's own canonical
+  // figure instead — source='square_net_sales', the same basis the Insights
+  // source-reconciliation panel holds the ledger against. Closed months exist
+  // only as imported P&L summaries with no Square rows, so fall back to ledger
+  // income there, and to Kitchen's number last.
+  const isLedger = useMemo(() => makeLedgerFilter(categories, transactions), [categories, transactions]);
+  const netSales = useMemo(() => {
+    const square = transactions
+      .filter(t => t.source === "square_net_sales" || t.source === "square_sale_gross")
+      .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
+    if (square > 0) return { value: square, basis: "Square net sales (Sync Sales)" };
+    const income = transactions
+      .filter(t => parseFloat(t.amount || 0) > 0 && isLedger(t))
+      .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
+    if (income > 0) return { value: income, basis: "ledger income (no Square rows in this window)" };
+    return { value: data?.period_net_sales || 0, basis: "Favo Kitchen orders" };
+  }, [transactions, isLedger, data]);
+  const pctOfSales = (value) =>
+    netSales.value > 0 && value != null ? (parseFloat(value) / netSales.value * 100) : null;
+
+  // Revenue by channel, straight from the ledger: Sync Sales books one row per
+  // day per channel, each under its own "Revenue - <platform>" category.
+  const channelRows = useMemo(() => {
+    const nameById = {};
+    for (const c of categories) nameById[c.id] = c.name;
+    const byChannel = {};
+    for (const t of transactions) {
+      if (t.source !== "square_net_sales" && t.source !== "square_sale_gross") continue;
+      const channel = (nameById[t.category] || "Revenue - Unmapped").replace(/^Revenue - /, "");
+      if (!byChannel[channel]) byChannel[channel] = { channel, days: 0, revenue: 0 };
+      byChannel[channel].days += 1;
+      byChannel[channel].revenue += parseFloat(t.amount || 0);
+    }
+    return Object.values(byChannel)
+      .map(r => ({ ...r, revenue: Math.round(r.revenue * 100) / 100 }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [transactions, categories]);
+  const channelTotal = channelRows.reduce((s, r) => s + r.revenue, 0);
+
   return (
     <div className="page">
       <div className="page-header">
@@ -4817,29 +4842,10 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
           <div className="page-title">Performance</div>
           <div className="page-subtitle">
             {dateRange?.start} → {dateRange?.end} · TorresBee · powered by Favo Kitchen
-            {data?.period_net_sales != null && <> · Net sales {fmt(data.period_net_sales)}</>}
+            {netSales.value > 0 && (
+              <span title={`Basis: ${netSales.basis}`}> · Net sales {fmt(netSales.value)}</span>
+            )}
           </div>
-        </div>
-        <div className="flex gap-8">
-          {[
-            { id: "weekly",  label: "Weekly" },
-            { id: "monthly", label: "Monthly" },
-            { id: "custom",  label: "Custom" },
-          ].map(p => (
-            <button
-              key={p.id}
-              className="btn btn-sm"
-              onClick={() => applyPreset(p.id)}
-              style={{
-                background: rangePreset === p.id ? "var(--accentBg)" : "transparent",
-                color: rangePreset === p.id ? "var(--accent)" : "var(--text3)",
-                border: "1px solid " + (rangePreset === p.id ? "var(--accentBorder)" : "var(--border)"),
-                fontSize: 11,
-              }}
-            >
-              {p.label}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -4902,7 +4908,7 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
               <KpiTile label="Purchases" value={fmt(data.cogs.purchases_value)} />
               <KpiTile label={`Closing (${data.cogs.closing_snapshot === "live_stock" ? "live stock" : data.cogs.closing_snapshot?.date || "—"})`} value={fmt(data.cogs.closing_value)} />
               <KpiTile label="COGS" value={fmt(data.cogs.cogs)} />
-              <KpiTile label="Food Cost %" value={data.cogs.food_cost_pct != null ? data.cogs.food_cost_pct + "%" : "—"} />
+              <KpiTile label="Food Cost %" value={pctOfSales(data.cogs.cogs) != null ? pctOfSales(data.cogs.cogs).toFixed(1) + "%" : "—"} />
             </div>
           )}
 
@@ -4912,8 +4918,8 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
               note={`Used = opening count + purchases − closing count, valued per stock unit. Counts paired by Favo Kitchen (${data.cogs.opening_snapshot?.date} → ${data.cogs.closing_snapshot === "live_stock" ? "live stock" : data.cogs.closing_snapshot?.date}). Cost% compares used value to net sales.`}
               total={data.usage_report.totals.used_value}
               totalLabel="Total used"
-              pct={data.usage_report.totals.cost_pct_of_revenue}
-              pctTone={pctTone(data.usage_report.totals.cost_pct_of_revenue, 35)}
+              pct={pctOfSales(data.usage_report.totals.used_value)}
+              pctTone={pctTone(pctOfSales(data.usage_report.totals.used_value), 35)}
               rows={data.usage_report.by_category}
               columns={[
                 { key: "cat_name",        label: "Category" },
@@ -4922,7 +4928,7 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
                 { key: "end_value",       label: "Closing",    align: "right", format: "money" },
                 { key: "used_value",      label: "Used",       align: "right", format: "money" },
                 { key: "pct",             label: "% of sales", align: "right", format: "pct",
-                  derive: (r) => data.period_net_sales > 0 ? ((r.used_value || 0) / data.period_net_sales * 100) : null },
+                  derive: (r) => pctOfSales(r.used_value || 0) },
               ]}
             />
           ) : (
@@ -4931,15 +4937,15 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
               note="Sum of vendor invoices in the window grouped by inventory category. Used as a proxy for 'consumed' — take opening/closing inventory counts in Favo Kitchen to unlock exact usage here. Cost% compares to net sales."
               total={data.usage_report.totals.purchased_value}
               totalLabel="Total purchased"
-              pct={data.usage_report.totals.cost_pct_of_revenue}
-              pctTone={pctTone(data.usage_report.totals.cost_pct_of_revenue, 35)}
+              pct={pctOfSales(data.usage_report.totals.purchased_value)}
+              pctTone={pctTone(pctOfSales(data.usage_report.totals.purchased_value), 35)}
               rows={data.usage_report.by_category}
               columns={[
                 { key: "cat_name",        label: "Category" },
                 { key: "item_count",      label: "Items",      align: "right" },
                 { key: "purchased_value", label: "Purchased",  align: "right", format: "money" },
                 { key: "pct",             label: "% of sales", align: "right", format: "pct",
-                  derive: (r) => data.period_net_sales > 0 ? (r.purchased_value / data.period_net_sales * 100) : null },
+                  derive: (r) => pctOfSales(r.purchased_value) },
               ]}
             />
           ))}
@@ -4952,8 +4958,8 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
                 : "Computed from active recipes × times sold (Square line items). Compare against actual purchased value to spot over-portioning or waste. Positive diff = inventory dropped more than recipes predicted."}
               total={data.theoretical_usage.totals.theoretical_value}
               totalLabel="Total theoretical"
-              pct={data.theoretical_usage.totals.cost_pct_of_revenue}
-              pctTone={pctTone(data.theoretical_usage.totals.cost_pct_of_revenue, 32)}
+              pct={pctOfSales(data.theoretical_usage.totals.theoretical_value)}
+              pctTone={pctTone(pctOfSales(data.theoretical_usage.totals.theoretical_value), 32)}
               rows={data.theoretical_usage.by_category}
               columns={[
                 { key: "cat_name",          label: "Category" },
@@ -4980,26 +4986,29 @@ function Performance({ tenantId, dateRange = {}, setDateRange, showToast }) {
             />
           )}
 
-          {tab === "channels" && (data.sales_channels ? (
+          {/* Channels come from the CFO ledger, not Kitchen: Sync Sales books one
+              row per day per channel under its own Revenue - <platform>
+              category. Kitchen's sales_channels block reads r7_orders, which
+              this tenant doesn't populate, so it always came back empty. */}
+          {tab === "channels" && (channelRows.length > 0 ? (
             <PerformanceTable
               title="Sales Channels — where the revenue comes from"
-              note="Orders grouped by origin (Square POS, Square Online, DoorDash, Uber Eats, …). Revenue is net of tax, before platform commissions."
-              total={data.sales_channels.totals.revenue}
+              note="Net sales per channel from Sync Sales (Square Orders API), grouped by revenue category. Gross of platform commission and net of tax — marketplace commissions land as expenses when the platform statement is imported."
+              total={channelTotal}
               totalLabel="Total revenue"
               pct={null}
-              rows={data.sales_channels.by_channel}
+              rows={channelRows}
               columns={[
                 { key: "channel", label: "Channel" },
-                { key: "orders",  label: "Orders",       align: "right", format: "qty" },
-                { key: "items",   label: "Items sold",   align: "right", format: "qty" },
-                { key: "revenue", label: "Revenue",      align: "right", format: "money" },
-                { key: "pct",     label: "% of revenue", align: "right", format: "pct",
-                  derive: (r) => data.sales_channels.totals.revenue > 0 ? (r.revenue / data.sales_channels.totals.revenue * 100) : null },
+                { key: "days",    label: "Days with sales", align: "right", format: "qty" },
+                { key: "revenue", label: "Revenue",         align: "right", format: "money" },
+                { key: "pct",     label: "% of revenue",    align: "right", format: "pct",
+                  derive: (r) => channelTotal > 0 ? (r.revenue / channelTotal * 100) : null },
               ]}
             />
           ) : (
             <div className="card" style={{ padding: 20, color: "var(--text3)", fontSize: 13 }}>
-              Channel data needs the latest Favo Kitchen API — redeploy Kitchen to enable this tab.
+              No Square sales in this window. Run <strong>Sync Sales</strong> for the period to populate channels.
             </div>
           ))}
 
@@ -9702,7 +9711,7 @@ export default function App() {
       case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} payrollRuns={payrollRuns} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} setTransactions={setTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} payrollRuns={payrollRuns} tenantId={TENANT_ID} showToast={showToast} />;
-      case "performance":  return <Performance tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} />;
+      case "performance":  return <Performance tenantId={TENANT_ID} transactions={filteredByDate} categories={categories} dateRange={dateRange} showToast={showToast} />;
       case "trends":       return <Trends tenantId={TENANT_ID} categories={categories} allTransactions={transactions} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
