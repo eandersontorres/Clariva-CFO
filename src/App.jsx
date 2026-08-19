@@ -9441,14 +9441,29 @@ export default function App() {
   const [authorized, setAuthorized] = useState(TENANT_ID === "demo");
   useEffect(() => {
     if (TENANT_ID === "demo") return;
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, s) => setSession(s));
+    // Supabase hands back a brand-new session object on every auth event, and
+    // TOKEN_REFRESHED fires on a timer and on tab focus. Storing it verbatim
+    // re-ran the membership check below for a session that had not actually
+    // changed, so keep the previous object while the access token is the same.
+    const store = (next) => setSession(prev =>
+      prev && next && prev.access_token === next.access_token ? prev : next);
+    supabase.auth.getSession().then(({ data }) => store(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, s) => store(s));
     return () => sub.subscription.unsubscribe();
   }, []);
   useEffect(() => {
     if (TENANT_ID === "demo") return;
     if (!session) { setAuthorized(false); return; }
-    getMyTenantIds().then(ids => setAuthorized(ids.includes(TENANT_ID) || ids.length > 0));
+    let cancelled = false;
+    // ids === null means the RPC failed (commonly: token mid-refresh, so
+    // auth.uid() is null and the query returns nothing). Revoking on that
+    // unmounted the whole app for a frame and made the screen blink. Only an
+    // actual logout — the !session branch above — closes the gate.
+    getMyTenantIds().then(ids => {
+      if (cancelled || ids === null) return;
+      setAuthorized(ids.includes(TENANT_ID) || ids.length > 0);
+    });
+    return () => { cancelled = true; };
   }, [session]);
 
   // Country pack reconciliation. initCountry() already applied the cached pack

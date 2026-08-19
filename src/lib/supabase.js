@@ -17,9 +17,14 @@ const TENANT = () => {
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 // Tenant ids the logged-in user belongs to, via the SECURITY DEFINER function
 // that reads r7_user_tenants. Same path Favo Purchase uses.
+// Returns null when the lookup FAILED and [] when the user genuinely belongs to
+// no tenant. Collapsing the two used to be the cause of the app "blinking": the
+// RPC reads auth.uid(), so a token mid-refresh returns zero rows, the caller
+// read that as "not authorized" and unmounted the whole authenticated tree for
+// a frame. Callers must treat null as "don't know — keep the current gate".
 export async function getMyTenantIds() {
   const { data, error } = await supabase.rpc('r7_get_my_tenant_ids')
-  if (error) { console.error('getMyTenantIds', error); return [] }
+  if (error) { console.error('getMyTenantIds', error); return null }
   return data || []
 }
 
