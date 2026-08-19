@@ -9,9 +9,10 @@
 // As linhas abaixo são identificadores estáveis (gravadas em
 // r7_ledger_accounts.tax_line). Acrescente, nunca renomeie.
 //
-// PENDENTE — o plano definitivo sai do contador da lanchonete piloto. Estas
-// contas são o esqueleto de um restaurante de pequeno porte e devem ser
-// confirmadas contra a DRE real antes de rodar o piloto.
+// As linhas do DRE foram confirmadas contra o fechamento real da ALK
+// Lancheteria (mai–jun 2026, planilha do escritório contábil). defaultCategories
+// abaixo continua sendo só um esqueleto de partida para um tenant novo — a ALK
+// usa o plano de contas do próprio contador, importado junto com o fechamento.
 
 import { UNCATEGORIZED } from "../constants.js";
 
@@ -31,6 +32,7 @@ export const BR = {
   compactMoney: (k) => "R$ " + k + " mil",
 
   reportingLineLabel: "Conta do DRE",
+  cogsLine: "CMV",
   reportingLines: {
     incomeLabel: "Receitas",
     expenseLabel: "Custos e Despesas",
@@ -42,10 +44,12 @@ export const BR = {
     expense: [
       "CMV",
       "Embalagens e Descartáveis",
+      "Custos de Entrega",
       "Salários e Ordenados",
       "Encargos Sociais",
       "Benefícios",
       "Pró-labore",
+      "Distribuição de Lucros",
       "Serviços de Terceiros",
       "Aluguel",
       "Condomínio e IPTU",
@@ -59,10 +63,15 @@ export const BR = {
       "Manutenção e Conservação",
       "Material de Limpeza",
       "Material de Escritório",
+      "Uniformes e Utensílios",
+      "Software e Sistemas",
+      "Despesas com Veículos",
       "Serviços Contábeis",
       "Seguros",
       "Impostos e Taxas",
+      "Parcelamentos de Impostos",
       "Depreciação",
+      "Investimentos - Ativo Imobilizado",
       "Despesas Financeiras",
       "Outras Despesas",
     ],

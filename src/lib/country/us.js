@@ -25,6 +25,9 @@ export const US = {
   // IRS Schedule C 2024/2025. Income = Part I lines, COGS = Part III aggregate,
   // Expenses = Part II lines 8–27.
   reportingLineLabel: "Tax Line (Schedule C)",
+  // Which reporting line the P&L treats as cost of goods sold. Everything
+  // else lands in operating expenses, so this drives gross margin.
+  cogsLine: "COGS",
   reportingLines: {
     incomeLabel: "Income (Part I)",
     expenseLabel: "Expenses (Part II) & COGS (Part III)",
