@@ -28,6 +28,10 @@ export const US = {
   // Which reporting line the P&L treats as cost of goods sold. Everything
   // else lands in operating expenses, so this drives gross margin.
   cogsLine: "COGS",
+  // Every reporting line that is really the cost of putting people to work.
+  // Prime cost = cogsLine + these, so a line missing here understates it.
+  laborLines: ["Wages", "Employee Benefits", "Contract Labor", "Pension & Profit-Sharing"],
+  rentLine: "Rent",
   reportingLines: {
     incomeLabel: "Income (Part I)",
     expenseLabel: "Expenses (Part II) & COGS (Part III)",
