@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser, fetchTenant } from "./lib/supabase.js";
-import { initCountry, setCountryFromTenant, country, supports, isCogs, cogsLine, money, moneyCompact, currencySymbol, formatNumber as ctryNumber, formatDate as ctryDate, formatDateShort as ctryDateShort, formatMonth as ctryMonth, formatTime as ctryTime, parseDate as ctryParseDate, parseAmount as ctryParseAmount } from "./lib/country/index.js";
+import { initCountry, setCountryFromTenant, country, supports, isCogs, cogsLine, isLabor, isRent, money, moneyCompact, currencySymbol, formatNumber as ctryNumber, formatDate as ctryDate, formatDateShort as ctryDateShort, formatMonth as ctryMonth, formatTime as ctryTime, parseDate as ctryParseDate, parseAmount as ctryParseAmount } from "./lib/country/index.js";
 
 // Active tenant: localStorage override (set by the sidebar TenantSwitcher) wins
 // over the deploy's env pin, so one deploy can serve a multi-store manager.
@@ -2936,12 +2936,13 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
       paystubRunsUsed++;
     }
 
-    // Labor ledger: every txn in any expense category whose name matches
-    // "payroll|labor|wage" — same heuristic the KPI tiles use now.
-    const laborCat = categories.find(c => /payroll|labor|wage/i.test(c.name || ""));
-    const laborLedger = laborCat
-      ? Math.abs(transactions.filter(t => t.category === laborCat.id && isLedger(t)).reduce((s, t) => s + parseFloat(t.amount || 0), 0))
-      : 0;
+    // Labor ledger: every txn in every category on the country pack's labor
+    // lines. In Brazil that is wages + statutory charges + benefits + pró-labore
+    // + hiring/training, which together are more than twice the payroll alone.
+    const laborIds = new Set(categories.filter(isLabor).map(c => c.id));
+    const laborLedger = Math.abs(transactions
+      .filter(t => laborIds.has(t.category) && isLedger(t))
+      .reduce((s, t) => s + parseFloat(t.amount || 0), 0));
 
     // Bank-side labor: same category but only txns that look like a bank ACH
     // (source=csv or pdf, amount < 0, description matching payroll/paychex).
@@ -3016,8 +3017,8 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
 
   const opsScore = useMemo(() => {
     if (totalIncome <= 0) return null;
-    const laborCat = categories.find(c => /payroll|labor|wage/i.test(c.name || ""));
-    const laborAmt = laborCat ? Math.abs(getAmount(laborCat.id)) : 0;
+    const laborAmt = categories.filter(isLabor)
+      .reduce((s, c) => s + Math.abs(getAmount(c.id)), 0);
     const foodCostPct = (totalCOGS / totalIncome) * 100;
     const laborPct = (laborAmt / totalIncome) * 100;
     const primePct = foodCostPct + laborPct;
@@ -3370,10 +3371,8 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
               of accounts was seeded with integer keys; the migration to
               UUIDs broke the lookup and Labor%/Rent% silently rendered 0). */}
           {(() => {
-            const laborCat   = categories.find(c => /payroll|labor|wage/i.test(c.name || ""));
-            const rentCat    = categories.find(c => /rent/i.test(c.name || ""));
-            const laborAmt   = laborCat ? Math.abs(getAmount(laborCat.id)) : 0;
-            const rentAmt    = rentCat  ? Math.abs(getAmount(rentCat.id))  : 0;
+            const laborAmt = categories.filter(isLabor).reduce((s, c) => s + Math.abs(getAmount(c.id)), 0);
+            const rentAmt  = categories.filter(isRent).reduce((s, c) => s + Math.abs(getAmount(c.id)), 0);
             return (
           <div className="mt-16" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             {[
@@ -5629,15 +5628,17 @@ function Insights({ transactions, categories, budgets, recurring = [], tenantId,
   const netIncome    = totalIncome - totalExpense;
   const netMargin    = totalIncome > 0 ? (netIncome/totalIncome)*100 : 0;
   const getCat = (id) => id ? Math.abs(realTxns.filter(t => t.category === id).reduce((s,t) => s+t.amount, 0)) : 0;
-  // Resolve categories by name match instead of the legacy integer ids
-  // ("1","2","3"...). Those were the original seed keys; once the chart of
-  // accounts migrated to UUIDs the lookups silently returned 0 for every
-  // KPI tile. The /(food|beverage|cogs)/ and /(payroll|labor|wage)/
-  // patterns also match the migration's renaming attempts.
+  // Food cost, labor and rent come from the country pack's reporting lines and
+  // are SUMMED, not picked. Matching one category by an English name regex
+  // returned 0 for every tile on a BR tenant, and even in English it stopped at
+  // the first hit — so a chart of accounts that splits payroll from its charges
+  // reported only the first slice. Marketing and insurance below are still
+  // name-based; the packs do not declare those lines yet.
   const findCatId = (re) => (categories.find(c => re.test(c.name || "")) || {}).id;
-  const foodCost = getCat(findCatId(/food|beverage|cogs/i));
-  const labor    = getCat(findCatId(/payroll|labor|wage/i));
-  const rent     = getCat(findCatId(/rent/i));
+  const sumCats  = (pred) => categories.filter(pred).reduce((s, c) => s + getCat(c.id), 0);
+  const foodCost = sumCats(isCogs);
+  const labor    = sumCats(isLabor);
+  const rent     = sumCats(isRent);
   const marketing= getCat(findCatId(/marketing|advertis/i));
   const insurance= getCat(findCatId(/insurance/i));
   const foodCostPct  = totalIncome > 0 ? (foodCost/totalIncome)*100 : 0;
@@ -8969,7 +8970,7 @@ function Trends({ tenantId, categories, allTransactions }) {
     const mapped = rows.map(t => ({ ...t, category: t.category ?? (t.category_id || UNCATEGORIZED) }));
     const isLedger = makeLedgerFilter(categories, mapped);
     const cogsCatIds = new Set((categories || []).filter(isCogs).map(c => c.id));
-    const laborCat = (categories || []).find(c => /payroll|labor|wage/i.test(c.name || ""));
+    const laborCatIds = new Set((categories || []).filter(isLabor).map(c => c.id));
     const findCatIds = (pred) => new Set((categories || []).filter(pred).map(c => c.id));
     const ebitdaAddbackIds = new Set([
       ...findCatIds(c => /interest/i.test(c.name || "") || (c.taxLine ?? c.tax_line) === "Interest"),
@@ -8989,7 +8990,7 @@ function Trends({ tenantId, categories, allTransactions }) {
       const amt = parseFloat(t.amount || 0);
       if (amt > 0) m.revenue += amt; else m.expenses += -amt;
       if (amt < 0 && cogsCatIds.has(t.category)) m.cogs += -amt;
-      if (amt < 0 && laborCat && t.category === laborCat.id) m.labor += -amt;
+      if (amt < 0 && laborCatIds.has(t.category)) m.labor += -amt;
       if (amt < 0 && ebitdaAddbackIds.has(t.category)) m.addbacks += -amt;
     }
 

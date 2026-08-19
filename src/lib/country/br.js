@@ -33,6 +33,19 @@ export const BR = {
 
   reportingLineLabel: "Conta do DRE",
   cogsLine: "CMV",
+  // No Brasil o custo de pessoal é muito maior que a folha: encargos
+  // (INSS, FGTS, rescisões), benefícios (VT, convênio, refeição),
+  // adiantamentos e pró-labore. Na ALK o salário puro é 41% do custo real
+  // de mão de obra — olhar só ele erra por R$ 68 mil no mês. A composição
+  // abaixo reproduz o bloco "4.1 - Pessoal" da DRE do escritório contábil.
+  laborLines: [
+    "Salários e Ordenados",
+    "Encargos Sociais",
+    "Benefícios",
+    "Pró-labore",
+    "Treinamento e Recrutamento",
+  ],
+  rentLine: "Aluguel",
   reportingLines: {
     incomeLabel: "Receitas",
     expenseLabel: "Custos e Despesas",
@@ -49,6 +62,7 @@ export const BR = {
       "Encargos Sociais",
       "Benefícios",
       "Pró-labore",
+      "Treinamento e Recrutamento",
       "Distribuição de Lucros",
       "Serviços de Terceiros",
       "Aluguel",

@@ -74,6 +74,23 @@ export function isCogs(cat) {
   return (cat?.taxLine ?? cat?.tax_line) === active.cogsLine;
 }
 
+// Labor is a SET of reporting lines, never a single category: the payroll of a
+// restaurant is split across wages, statutory charges and benefits, and which
+// buckets exist changes by country. The old code looked for one category whose
+// name matched /payroll|labor|wage/, which found nothing at all in Portuguese
+// and, even in English, stopped at the first match.
+export function laborLines() { return active.laborLines; }
+
+export function isLabor(cat) {
+  return active.laborLines.includes(cat?.taxLine ?? cat?.tax_line);
+}
+
+// Same story as labor, one line instead of a set: /rent/i never matched
+// "Aluguel", so the Rent% tile rendered 0.0% for a BR tenant paying rent.
+export function isRent(cat) {
+  return (cat?.taxLine ?? cat?.tax_line) === active.rentLine;
+}
+
 // Screens the active country has no meaning for are dropped from the NAV
 // entirely (see App.jsx). Unknown keys default to visible, so adding a screen
 // never silently hides it.
