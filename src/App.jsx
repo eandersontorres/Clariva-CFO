@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser, fetchTenant } from "./lib/supabase.js";
-import { initCountry, setCountryFromTenant, country, supports, money, moneyCompact, currencySymbol, formatNumber as ctryNumber, formatDate as ctryDate, formatDateShort as ctryDateShort, formatMonth as ctryMonth, formatTime as ctryTime, parseDate as ctryParseDate, parseAmount as ctryParseAmount } from "./lib/country/index.js";
+import { initCountry, setCountryFromTenant, country, supports, isCogs, cogsLine, money, moneyCompact, currencySymbol, formatNumber as ctryNumber, formatDate as ctryDate, formatDateShort as ctryDateShort, formatMonth as ctryMonth, formatTime as ctryTime, parseDate as ctryParseDate, parseAmount as ctryParseAmount } from "./lib/country/index.js";
 
 // Active tenant: localStorage override (set by the sidebar TenantSwitcher) wins
 // over the deploy's env pin, so one deploy can serve a multi-store manager.
@@ -2877,9 +2877,9 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
   const getAmount = (catId) => transactions.filter(t => t.category === catId && isLedger(t)).reduce((s, t) => s + t.amount, 0);
 
   const totalIncome = incomeCats.reduce((s, c) => s + Math.max(0, getAmount(c.id)), 0);
-  const totalCOGS = expenseCats.filter(c => c.taxLine === "COGS").reduce((s, c) => s + Math.abs(Math.min(0, getAmount(c.id))), 0);
+  const totalCOGS = expenseCats.filter(isCogs).reduce((s, c) => s + Math.abs(Math.min(0, getAmount(c.id))), 0);
   const grossProfit = totalIncome - totalCOGS;
-  const totalOpex = expenseCats.filter(c => c.taxLine !== "COGS").reduce((s, c) => s + Math.abs(Math.min(0, getAmount(c.id))), 0);
+  const totalOpex = expenseCats.filter(c => !isCogs(c)).reduce((s, c) => s + Math.abs(Math.min(0, getAmount(c.id))), 0);
   const netIncome = grossProfit - totalOpex;
 
   // ── Source reconciliation ──────────────────────────────────────────────
@@ -3077,15 +3077,15 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
     lines.push(["Income", "TOTAL", "", totalIncome.toFixed(2)].map(esc).join(","));
     lines.push("");
 
-    expenseCats.filter(c => c.taxLine === "COGS").forEach(c => {
+    expenseCats.filter(isCogs).forEach(c => {
       const amt = Math.abs(Math.min(0, getAmount(c.id)));
-      if (amt > 0) lines.push(["COGS", c.name, c.taxLine || "", `-${amt.toFixed(2)}`].map(esc).join(","));
+      if (amt > 0) lines.push([cogsLine(), c.name, c.taxLine || "", `-${amt.toFixed(2)}`].map(esc).join(","));
     });
-    lines.push(["COGS", "TOTAL", "", `-${totalCOGS.toFixed(2)}`].map(esc).join(","));
+    lines.push([cogsLine(), "TOTAL", "", `-${totalCOGS.toFixed(2)}`].map(esc).join(","));
     lines.push(["Subtotal", "Gross Profit", "", grossProfit.toFixed(2)].map(esc).join(","));
     lines.push("");
 
-    expenseCats.filter(c => c.taxLine !== "COGS").forEach(c => {
+    expenseCats.filter(c => !isCogs(c)).forEach(c => {
       const amt = Math.abs(Math.min(0, getAmount(c.id)));
       if (amt > 0) lines.push(["OpEx", c.name, c.taxLine || "", `-${amt.toFixed(2)}`].map(esc).join(","));
     });
@@ -3211,7 +3211,7 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
               <span>Cost of Goods Sold</span>
               <span className="mono" style={{ color: "var(--red)" }}>({fmt(totalCOGS)})</span>
             </div>
-            {expanded.cogs && expenseCats.filter(c => c.taxLine === "COGS").map(c => {
+            {expanded.cogs && expenseCats.filter(isCogs).map(c => {
               const amt = Math.abs(Math.min(0, getAmount(c.id)));
               const open = expandedCats.has(c.id);
               const txns = open ? txnsForCategory(c.id, { sign: "negative" }) : [];
@@ -3248,7 +3248,7 @@ function PLReport({ transactions, allTransactions, categories, dateRange = {}, s
               <span>Operating Expenses</span>
               <span className="mono" style={{ color: "var(--red)" }}>({fmt(totalOpex)})</span>
             </div>
-            {expanded.opex && expenseCats.filter(c => c.taxLine !== "COGS").map(c => {
+            {expanded.opex && expenseCats.filter(c => !isCogs(c)).map(c => {
               const amt = Math.abs(Math.min(0, getAmount(c.id)));
               if (amt === 0) return null;
               const open = expandedCats.has(c.id);
@@ -8964,7 +8964,7 @@ function Trends({ tenantId, categories, allTransactions }) {
     if (!rows) return [];
     const mapped = rows.map(t => ({ ...t, category: t.category ?? (t.category_id || UNCATEGORIZED) }));
     const isLedger = makeLedgerFilter(categories, mapped);
-    const cogsCatIds = new Set((categories || []).filter(c => (c.taxLine ?? c.tax_line) === "COGS").map(c => c.id));
+    const cogsCatIds = new Set((categories || []).filter(isCogs).map(c => c.id));
     const laborCat = (categories || []).find(c => /payroll|labor|wage/i.test(c.name || ""));
     const findCatIds = (pred) => new Set((categories || []).filter(pred).map(c => c.id));
     const ebitdaAddbackIds = new Set([

@@ -62,6 +62,18 @@ export function country() { return active; }
 
 export function countryCode() { return active.code; }
 
+// The reporting line that counts as cost of goods sold — "COGS" under
+// Schedule C, "CMV" in the DRE gerencial. The P&L splits gross margin on
+// this, so comparing against the literal "COGS" silently reported zero CMV
+// and folded the whole cost of goods into operating expenses for BR tenants.
+export function cogsLine() { return active.cogsLine; }
+
+// Categories arrive both as camelCase (client state) and snake_case (raw DB
+// rows), so accept either.
+export function isCogs(cat) {
+  return (cat?.taxLine ?? cat?.tax_line) === active.cogsLine;
+}
+
 // Screens the active country has no meaning for are dropped from the NAV
 // entirely (see App.jsx). Unknown keys default to visible, so adding a screen
 // never silently hides it.
