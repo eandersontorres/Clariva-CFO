@@ -9,6 +9,10 @@ import { initCountry, setCountryFromTenant, country, supports, isCogs, cogsLine,
 const ENV_TENANT_ID = import.meta.env.VITE_TENANT_ID || "demo";
 const TENANT_ID = (() => { try { return localStorage.getItem("cfo_active_tenant") || ENV_TENANT_ID; } catch { return ENV_TENANT_ID; } })();
 
+// Guards the one reload TenantSwitcher is allowed to do when the stored tenant
+// override turns out to be stale. See the comment at that call site.
+const TENANT_RELOAD_FLAG = "cfo_tenant_reload_once";
+
 // Resolve the country pack synchronously, from the per-tenant localStorage
 // cache, BEFORE any component renders. The authoritative value comes from
 // r7_tenants and is reconciled on mount (see the country effect in App).
@@ -9390,9 +9394,25 @@ function TenantSwitcher() {
         // Stale override (membership revoked): fall back to the env tenant.
         if (!ids.includes(TENANT_ID)) {
           try { localStorage.removeItem("cfo_active_tenant"); } catch {}
+          // Reload AT MOST ONCE. Dropping the override lands us on
+          // ENV_TENANT_ID, and nothing guarantees the user belongs to that one
+          // either — when they don't, this reloads, fails the same check, and
+          // reloads again forever. That is what the page "blinking" is. The
+          // flag lives in sessionStorage so it survives the reload but not the
+          // tab, and a genuinely stale override still self-heals on one pass.
+          let reloadedBefore = false;
+          try {
+            reloadedBefore = !!sessionStorage.getItem(TENANT_RELOAD_FLAG);
+            sessionStorage.setItem(TENANT_RELOAD_FLAG, "1");
+          } catch {}
+          if (reloadedBefore) {
+            console.warn("TenantSwitcher: já recarreguei uma vez e o tenant segue fora da lista — parando para não entrar em loop.", { TENANT_ID, ENV_TENANT_ID, ids });
+            return;
+          }
           window.location.reload();
           return;
         }
+        try { sessionStorage.removeItem(TENANT_RELOAD_FLAG); } catch {}
         const { data } = await supabase.from("r7_tenants").select("id, name, slug").in("id", ids).order("name");
         setTenants(data || []);
       } catch (e) { console.warn("tenant list load failed", e); }
