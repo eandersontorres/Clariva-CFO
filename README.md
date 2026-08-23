@@ -2,7 +2,7 @@
 
 Bookkeeping & financial intelligence for restaurant operators. Part of the Favo ecosystem (companion to Favo Kitchen / Restauran7).
 
-**Live:** [cfo.clariva.cloud](https://cfo.clariva.cloud)
+**Live:** [cfo.favo.team](https://cfo.favo.team)
 
 ## Stack
 
@@ -50,4 +50,4 @@ Run `supabase_migration.sql` in the Supabase SQL Editor to create all `r7_ledger
 
 ## Deployment
 
-Auto-deploys from `main` branch via Vercel. Custom domain: `cfo.clariva.cloud` (GoDaddy → Vercel CNAME).
+Auto-deploys from `main` branch via Vercel. Custom domain: `cfo.favo.team` (Cloudflare DNS → Vercel). `cfo.clariva.cloud` (GoDaddy) still resolves as legacy.

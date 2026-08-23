@@ -9,6 +9,9 @@
 //   PLAID_ENV         — "sandbox" (default) | "development" | "production"
 //   PLAID_REDIRECT_URI— (production/OAuth only) e.g. https://cfo.clariva.cloud/
 //                       Required for Bank of America, which forces OAuth.
+//                       Deliberately still clariva.cloud, not favo.team: this
+//                       value has to match the Plaid dashboard allowed list.
+//                       Change it there FIRST or OAuth links break.
 //
 // Bank of America note: BoA only works in PLAID_ENV=production with OAuth, and
 // the redirect URI must be registered in the Plaid dashboard. In sandbox you log

@@ -40,7 +40,7 @@ export default async function handler(req, res) {
   ).replace(/\/+$/, "");
   const base = candidate && !/\.vercel\.app$/i.test(new URL(candidate).hostname)
     ? candidate
-    : "https://cfo.clariva.cloud";
+    : "https://cfo.favo.team";
 
   const endpoints = [
     "sync-square-sales",

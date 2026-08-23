@@ -2,7 +2,7 @@
 
 Bookkeeping & financial intelligence platform for restaurant operators. Part of the Favo ecosystem (companion to **Favo Kitchen / Restauran7**).
 
-**Live:** [cfo.clariva.cloud](https://cfo.clariva.cloud)
+**Live:** [cfo.favo.team](https://cfo.favo.team)
 **Repo:** [github.com/eandersontorres/Clariva-CFO](https://github.com/eandersontorres/Clariva-CFO)
 **Pilot tenant:** TorresBee Restaurant — Round Rock, TX (`tenant_id: 5dc58fa8-0a0a-4d24-8906-e32755e36e93`)
 
@@ -17,7 +17,7 @@ Bookkeeping & financial intelligence platform for restaurant operators. Part of 
 | Database | Supabase US (`huurnewugpwerkeusolt.supabase.co`) — same project as Kitchen |
 | AI | Anthropic API via `/api/anthropic.js` proxy |
 | Deploy | Vercel Pro · auto-deploys from `main` |
-| Domain | `cfo.clariva.cloud` (GoDaddy → Vercel CNAME) |
+| Domain | `cfo.favo.team` (Cloudflare DNS → Vercel). `cfo.clariva.cloud` (GoDaddy) still resolves as legacy |
 
 ---
 
@@ -25,11 +25,13 @@ Bookkeeping & financial intelligence platform for restaurant operators. Part of 
 
 ```
 favo-cfo/
-├── api/                            # 18 Vercel serverless functions
+├── api/                            # 19 Vercel serverless functions
 │   ├── anthropic.js                # Anthropic proxy (generic)
 │   ├── parse-statement.js          # Bank statement PDF → transactions
 │   ├── parse-paystub.js            # Paychex payroll journal PDF → splits
+│   ├── _aggregator.js              # Shared statement→JSON extraction (not a route)
 │   ├── parse-aggregator-statement.js  # DoorDash/UberEats/GrubHub/Wix payouts
+│   ├── ingest-aggregator-email.js  # Same, but fed by the payout email webhook
 │   ├── plaid-link-token.js         # Plaid: Link token
 │   ├── plaid-exchange.js           # Plaid: public → access token
 │   ├── plaid-sync.js               # Plaid: /transactions/sync + categorization
@@ -52,6 +54,8 @@ favo-cfo/
 │           ├── index.js            # Resolution, formatters, statement parsing
 │           ├── us.js               # Schedule C, USD, ACH/Check/Zelle
 │           └── br.js               # DRE gerencial, BRL, Pix/Boleto
+├── infra/
+│   └── cloudflare-email-worker.js  # Email Routing → JSON → /api/ingest-aggregator-email
 ├── supabase_*.sql                  # Migrations, applied manually and in order
 ├── vercel.json                     # Rewrites + cron schedule
 ├── package.json
@@ -69,6 +73,9 @@ VITE_SUPABASE_URL=https://huurnewugpwerkeusolt.supabase.co
 VITE_SUPABASE_ANON_KEY=<from Supabase → Settings → API>
 VITE_TENANT_ID=5dc58fa8-0a0a-4d24-8906-e32755e36e93
 ANTHROPIC_API_KEY=<sk-ant-... server-side, no VITE_ prefix>
+SUPABASE_SERVICE_ROLE_KEY=<server-side only — every /api/* that writes uses it>
+AGGREGATOR_INGEST_SECRET=<authenticates the mail relay to /api/ingest-aggregator-email>
+AGGREGATOR_INGEST_TENANT_ID=<legacy single-tenant fallback; per-tenant addresses supersede it>
 ```
 
 ---
@@ -96,6 +103,8 @@ All tables live in the **shared Kitchen Supabase project** with `r7_ledger_*` pr
 | `r7_payroll_runs` | Payroll prep + Paychex CSV export |
 | `r7_square_payouts` | Square payouts matched to bank deposits |
 | `r7_aggregator_payouts` | DoorDash / UberEats / GrubHub / Wix settlements |
+| `r7_ingest_addresses` | Per-tenant inbound email addresses (`<token>@payouts.favo.team`) |
+| `r7_ingest_events` | Log of every inbound email and what happened to it |
 
 ### Ecosystem bridges (read-only access)
 
@@ -357,6 +366,52 @@ User clicks "Sync Kitchen" in top bar:
 5. Saves new ones to Supabase
 
 **Purchases only.** Revenue comes from **Sync Sales** (`api/sync-square-sales`), which is the canonical source — it also re-tags bank-side Square deposits as `source='square_settlement'` so they don't double-count.
+
+### Aggregator payout email ingest
+
+Every tenant gets its own inbound address — `<token>@payouts.favo.team` — so onboarding is "paste this into the DoorDash portal as a notification recipient". No per-tenant infrastructure, no forwarding rules.
+
+```
+DoorDash/Uber/GrubHub/Wix email
+   ↓  MX on payouts.favo.team (Email Routing subdomain; apex routes real mail — don't catch-all it)
+[Cloudflare Email Routing] catch-all
+   ↓
+[infra/cloudflare-email-worker.js]  MIME → JSON, forwards SPF/DMARC verdicts
+   ↓  POST + x-ingest-secret
+[/api/ingest-aggregator-email]  address → tenant, allowlist, parse, upsert
+   ↓
+r7_aggregator_payouts (source='email_inbox', unposted)
+```
+
+The JSON contract is transport-agnostic on purpose — SendGrid Inbound Parse or Make can replace the Worker without touching the endpoint:
+
+```json
+{
+  "to": "a3f91c27be40d5f8a1b6@payouts.favo.team",
+  "message_id": "<CAF...@mail.gmail.com>",
+  "from": "no-reply@doordash.com",
+  "subject": "Your weekly payout summary",
+  "spf": "pass", "dmarc": "pass",
+  "text": "plain-text body, used when there is no attachment",
+  "attachments": [
+    { "filename": "payout.pdf", "content_type": "application/pdf", "content_base64": "JVBERi0..." }
+  ],
+  "tenant_id": "5dc58fa8-..."
+}
+```
+
+**Two credentials, easy to conflate:** `x-ingest-secret` authenticates the *relay* to the endpoint; the address token identifies the *tenant*.
+
+- **Tenant resolution** — `body.tenant_id` → `r7_ingest_addresses` lookup on the recipient's local-part → `AGGREGATOR_INGEST_TENANT_ID`. The env fallback is pre-addressing legacy; a failing lookup falls through to it rather than erroring, which is what makes the code safe to deploy before `supabase_ingest_addresses.sql` is applied.
+- **Mint an address** with `SELECT r7_mint_ingest_address('<tenant-uuid>')`. Never commit a token — it's a credential.
+- **The address is semi-public** (it sits in the DoorDash portal, it travels in headers), so the sender is the real gate: `senderAllowed()` in `_aggregator.js` checks the From domain, and a hard SPF/DMARC fail is rejected. Without the second check the first is just a list of strings anyone can forge.
+- **Every inbound email is logged** to `r7_ingest_events` with its outcome (`accepted` / `duplicate` / `rejected_sender` / `parse_failed` / …). A financial module that silently eats a statement burns trust faster than one that rejects it loudly.
+- **Dedupe** is on `message_id` → `r7_aggregator_payouts.email_message_id`. That column is `UNIQUE`, so on a multi-payout statement only the first row carries it; every row keeps the id in `raw`. Re-delivery returns `200 {skipped:true}`.
+- **Platform** comes from the filename first, then the sender + subject, and only then from what Claude guessed.
+- **Rows land unposted on purpose.** The endpoint writes `source='email_inbox'` and does NOT create ledger entries — AI read a money document, so a human confirms. Reconciliation shows a "N payouts not posted" banner; the operator clicks **Post to ledger** and the same `buildAggregatorAdjustments()` the manual upload uses writes the commission/marketing expenses. This is also what contains a forged email: worst case is a bogus unposted row, not a corrupted P&L.
+- "Posted" is derived, not stored: a payout is pending when it owes commission/marketing and no transaction id starts with `agg_<payout_id>_`.
+- Vercel caps the request body at 4.5MB; a bigger statement has to go through the manual upload.
+- **Still US-only.** `PLATFORM_HINTS` and `SENDER_DOMAINS` in `_aggregator.js`, plus the `platform` `CHECK` on `r7_aggregator_payouts`, hardcode DoorDash/Uber/GrubHub/Wix. They move to the country pack together (iFood/Rappi for BR) — that's Phase 3, and until then this violates the country-pack rule below.
 
 ### Posting workflow (Ledger screen)
 
