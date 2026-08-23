@@ -10,6 +10,15 @@ Effort tags: `XS` < 2h · `S` half-day · `M` 1-2 days · `L` 3-5 days · `XL` 1
 
 ## RECENTLY SHIPPED
 
+### 2026-08-21 · Ingestão automática dos extratos de aggregator `S`
+
+- **`api/ingest-aggregator-email.js`** — webhook que recebe o e-mail de payout do DoorDash / UberEats / GrubHub / Wix e grava direto em `r7_aggregator_payouts`. Some o passo manual de baixar o PDF e arrastar na tela de Reconciliation. Transport-agnóstico: SendGrid Inbound Parse, Mailgun Routes, Cloudflare Email Worker ou Zapier/Make em cima de um label do Gmail — o contrato é um JSON só. Dedupe por `message_id`.
+- **Não lança no razão sozinho.** IA leu documento de dinheiro, então humano confirma: os payouts entram como `source='email_inbox'` e a Reconciliation mostra "N payouts not posted" com botão de postar. "Postado" é derivado (existe `agg_<payout_id>_*` no ledger), sem migração.
+- **`api/_aggregator.js`** — extração compartilhada entre o upload manual e o webhook, para os dois lerem extrato do mesmo jeito.
+- **Bug corrigido:** `saveAggregatorPayouts` referenciava `payoutKey` fora de escopo — `ReferenceError` engolido por promise sem catch. Efeito: o upload manual salvava os payouts mas **nunca criava as despesas de comissão/marketing**, sem nenhum erro visível. Comissão de delivery estava fora do P&L desde que a tela subiu.
+- **Fase 1 da fixture (mesmo dia)** — deixou de ser um hack de um tenant só. `r7_ingest_addresses` dá a cada tenant um `<token>@payouts.clariva.cloud`; o onboarding vira "cola esse endereço no portal do DoorDash como destinatário de notificação", sem infra por restaurante. Transporte é `infra/cloudflare-email-worker.js` (Email Routing grátis, subdomínio delegado por NS, apex fica no GoDaddy). Como o endereço é semi-público, o portão real é o remetente: allowlist de domínio + rejeição em SPF/DMARC fail. `r7_ingest_events` registra todo e-mail recebido com o desfecho.
+- **Não fechado:** DoorDash tem Reporting API (Payout Summary + Transaction Details) aberta a merchant via formulário de acesso — vale pedir e trocar o e-mail por API. Uber Eats exige NDA + partner manager, não compensa para uma loja.
+
 ### 2026-07-30 · Country packs (Brasil Fase 0)
 
 - **`src/lib/country/`** — pacote por país com formatação, parsing de extrato, linhas de relatório do plano de contas, meios de pagamento e capacidades. `us.js` é extração pura do que estava hardcoded (mesmos identificadores do Schedule C), então nenhum tenant existente precisou de migração de dados.
@@ -110,6 +119,12 @@ Nenhuma integração atual sobrevive: Plaid é `country_codes:["US"]` e não ope
 **A janela é agora.** Alk tem 0 transações, 0 categorias, 0 contas bancárias — mover custa um `INSERT`. Depois que o piloto importar extrato, custa migração com IDs referenciados em seis tabelas.
 
 > O CFO não vai sozinho: receita vem do POS, CMV vem do Kitchen. O caminho crítico do ecossistema BR é **NFC-e no POS** — obrigação legal, SEFAZ por estado, certificado A1, contingência offline. Semanas de trabalho regulatório, e não dá para entregar 80%. O CFO BR não depende disso e por isso vai primeiro.
+
+### 0.5 Ingest por e-mail — Fases 2 e 3 · `S` cada
+
+- **Fase 2** — UI do endereço: card (provavelmente uma tela **Settings**, que não existe) com o endereço + botão copiar, últimos e-mails recebidos com desfecho lido de `r7_ingest_events`, e botão de rotacionar (revoga o token e emite outro). Sem isso o tenant não tem como saber se o extrato dele foi lido.
+- **Fase 3** — plataformas para o country pack. Hoje `PLATFORM_HINTS` + `SENDER_DOMAINS` em `api/_aggregator.js` e o `CHECK` de `r7_aggregator_payouts.platform` fixam DoorDash/Uber/GrubHub/Wix. Vira `aggregators: [{ id, label, senders, hints }]` no pack, e o BR ganha iFood/Rappi sem tocar no endpoint. Enquanto isso, é uma violação declarada da regra de country pack.
+- **Reuso previsto:** `r7_ingest_addresses.kind` já existe para o Kitchen fazer o mesmo com nota de fornecedor.
 
 ### 1. Multi-tenant + proper Auth · `L`
 
