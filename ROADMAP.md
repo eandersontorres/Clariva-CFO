@@ -1,6 +1,6 @@
 # Favo CFO — Roadmap
 
-Live: [cfo.clariva.cloud](https://cfo.clariva.cloud) · Pilot tenant: TorresBee (Round Rock, TX)
+Live: [cfo.favo.team](https://cfo.favo.team) · Pilot tenant: TorresBee (Round Rock, TX)
 
 Source of truth for what's next. Grouped **Recently Shipped / Now / Next / Later / Horizon**.
 

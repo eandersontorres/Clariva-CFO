@@ -2,7 +2,7 @@
 
 Bookkeeping & financial intelligence platform for restaurant operators. Part of the Favo ecosystem (companion to **Favo Kitchen / Restauran7**).
 
-**Live:** [cfo.clariva.cloud](https://cfo.clariva.cloud)
+**Live:** [cfo.favo.team](https://cfo.favo.team)
 **Repo:** [github.com/eandersontorres/Clariva-CFO](https://github.com/eandersontorres/Clariva-CFO)
 **Pilot tenant:** TorresBee Restaurant — Round Rock, TX (`tenant_id: 5dc58fa8-0a0a-4d24-8906-e32755e36e93`)
 
@@ -17,7 +17,7 @@ Bookkeeping & financial intelligence platform for restaurant operators. Part of 
 | Database | Supabase US (`huurnewugpwerkeusolt.supabase.co`) — same project as Kitchen |
 | AI | Anthropic API via `/api/anthropic.js` proxy |
 | Deploy | Vercel Pro · auto-deploys from `main` |
-| Domain | `cfo.clariva.cloud` (GoDaddy → Vercel CNAME) |
+| Domain | `cfo.favo.team` (Cloudflare DNS → Vercel). `cfo.clariva.cloud` (GoDaddy) still resolves as legacy |
 
 ---
 
