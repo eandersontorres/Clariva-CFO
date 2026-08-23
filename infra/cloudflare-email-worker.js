@@ -1,26 +1,30 @@
 // Cloudflare Email Worker — the transport half of the aggregator payout ingest.
 //
-// Cloudflare Email Routing catch-alls payouts.clariva.cloud into this Worker.
+// Cloudflare Email Routing catch-alls payouts.favo.team into this Worker.
 // It turns the raw MIME message into the JSON contract that
 // /api/ingest-aggregator-email expects, and POSTs it.
 //
-// Why a Worker instead of a mail provider's inbound-parse: Email Routing is
-// free with no practical volume cap, and delegating NS for the payouts
-// subdomain leaves the apex clariva.cloud alone at GoDaddy.
+// Why a Worker instead of a mail provider's inbound-parse: favo.team is
+// already a Cloudflare zone with Email Routing enabled (its MX points at
+// route{1,2,3}.mx.cloudflare.net), so this needs no new vendor, no new DNS
+// delegation and no per-tenant setup. It's also free with no practical cap.
 //
 // ── Deploy ───────────────────────────────────────────────────────────────────
-//   1. Cloudflare → add site → clariva.cloud is NOT moved; instead delegate
-//      only the subdomain: at GoDaddy add NS records for `payouts` pointing at
-//      the Cloudflare nameservers for the zone payouts.clariva.cloud.
-//   2. Cloudflare → Email → Email Routing → enable for payouts.clariva.cloud
-//      (it writes its own MX + SPF records into that zone).
-//   3. Workers & Pages → create Worker → paste this file → deploy.
-//   4. Worker → Settings → Variables:
-//        INGEST_URL     https://cfo.clariva.cloud/api/ingest-aggregator-email
+//   1. Cloudflare → favo.team → Email → Email Routing → Settings → Subdomains
+//      → add `payouts`. Cloudflare writes the MX + SPF records itself.
+//      DO NOT touch the apex: favo.team already routes real mail, and an
+//      apex catch-all would swallow it.
+//   2. Workers & Pages → create Worker → paste this file → deploy.
+//   3. Worker → Settings → Variables:
+//        INGEST_URL     https://cfo.favo.team/api/ingest-aggregator-email
 //        INGEST_SECRET  (same value as AGGREGATOR_INGEST_SECRET on Vercel — secret)
-//      INGEST_URL must be the custom domain. *.vercel.app is behind Vercel
+//      INGEST_URL must be a custom domain. *.vercel.app is behind Vercel
 //      Authentication in this org and answers 401 to anything server-to-server.
-//   5. Email Routing → Routes → catch-all → Send to Worker → this Worker.
+//   4. Email Routing → Routes → catch-all ON THE `payouts` SUBDOMAIN →
+//      Send to Worker → this Worker.
+//
+// Cloudflare supports subaddressing (RFC 5233), and the endpoint strips the
+// `+suffix`, so token+doordash@payouts.favo.team resolves to the same tenant.
 //
 // ── Install a dependency ─────────────────────────────────────────────────────
 // MIME parsing is not something to hand-roll. Add postal-mime:

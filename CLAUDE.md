@@ -103,7 +103,7 @@ All tables live in the **shared Kitchen Supabase project** with `r7_ledger_*` pr
 | `r7_payroll_runs` | Payroll prep + Paychex CSV export |
 | `r7_square_payouts` | Square payouts matched to bank deposits |
 | `r7_aggregator_payouts` | DoorDash / UberEats / GrubHub / Wix settlements |
-| `r7_ingest_addresses` | Per-tenant inbound email addresses (`<token>@payouts.clariva.cloud`) |
+| `r7_ingest_addresses` | Per-tenant inbound email addresses (`<token>@payouts.favo.team`) |
 | `r7_ingest_events` | Log of every inbound email and what happened to it |
 
 ### Ecosystem bridges (read-only access)
@@ -369,11 +369,11 @@ User clicks "Sync Kitchen" in top bar:
 
 ### Aggregator payout email ingest
 
-Every tenant gets its own inbound address — `<token>@payouts.clariva.cloud` — so onboarding is "paste this into the DoorDash portal as a notification recipient". No per-tenant infrastructure, no forwarding rules.
+Every tenant gets its own inbound address — `<token>@payouts.favo.team` — so onboarding is "paste this into the DoorDash portal as a notification recipient". No per-tenant infrastructure, no forwarding rules.
 
 ```
 DoorDash/Uber/GrubHub/Wix email
-   ↓  MX on payouts.clariva.cloud (NS-delegated subdomain, apex stays at GoDaddy)
+   ↓  MX on payouts.favo.team (Email Routing subdomain; apex routes real mail — don't catch-all it)
 [Cloudflare Email Routing] catch-all
    ↓
 [infra/cloudflare-email-worker.js]  MIME → JSON, forwards SPF/DMARC verdicts
@@ -387,7 +387,7 @@ The JSON contract is transport-agnostic on purpose — SendGrid Inbound Parse or
 
 ```json
 {
-  "to": "a3f91c27be40d5f8a1b6@payouts.clariva.cloud",
+  "to": "a3f91c27be40d5f8a1b6@payouts.favo.team",
   "message_id": "<CAF...@mail.gmail.com>",
   "from": "no-reply@doordash.com",
   "subject": "Your weekly payout summary",

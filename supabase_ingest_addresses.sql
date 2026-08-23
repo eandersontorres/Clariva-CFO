@@ -1,7 +1,7 @@
 -- Per-tenant inbound email addresses + the log of what arrived on them.
 --
 -- Turns the aggregator payout ingest from a one-tenant hack into a module
--- fixture: every tenant gets <token>@payouts.clariva.cloud, and onboarding is
+-- fixture: every tenant gets <token>@payouts.favo.team, and onboarding is
 -- "paste this address into the DoorDash portal as a notification recipient".
 -- No per-tenant infrastructure, no forwarding rules.
 --
@@ -71,7 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_r7_ingest_events_message
 -- of it is that it isn't written down anywhere public.
 --
 --   SELECT r7_mint_ingest_address('5dc58fa8-0a0a-4d24-8906-e32755e36e93');
---   -> 'a3f91c27be40d5f8a1b6'  =>  a3f91c27be40d5f8a1b6@payouts.clariva.cloud
+--   -> 'a3f91c27be40d5f8a1b6'  =>  a3f91c27be40d5f8a1b6@payouts.favo.team
 --
 -- 20 hex chars = 80 bits, from gen_random_uuid()'s CSPRNG. Deliberately NOT
 -- random() — that's a seeded PRNG, and this token is a credential: it ends up

@@ -1,7 +1,7 @@
 // Inbound webhook for delivery-platform payout emails.
 //
 // DoorDash / UberEats / GrubHub / Wix all email a payout summary every week.
-// Every tenant gets its own address — <token>@payouts.clariva.cloud — so
+// Every tenant gets its own address — <token>@payouts.favo.team — so
 // onboarding is "paste this into the DoorDash portal as a notification
 // recipient" and nothing has to be set up per restaurant. Cloudflare Email
 // Routing catch-alls the domain into a Worker (infra/cloudflare-email-worker.js)
@@ -19,7 +19,7 @@
 //
 // Expected body (JSON):
 //   {
-//     "to":         "k3f9x2m8qp1w7v4nzb6t@payouts.clariva.cloud",
+//     "to":         "k3f9x2m8qp1w7v4nzb6t@payouts.favo.team",
 //     "message_id": "<abc@mail>",      required — the dedupe key
 //     "from":       "no-reply@doordash.com",
 //     "subject":    "Your weekly payout summary",
@@ -79,7 +79,7 @@ const attachmentBody = (a) => a?.content_base64 || a?.content || a?.data || null
 // when the same email is delivered twice.
 const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 10);
 
-// "Favo CFO <k3f9x2m@payouts.clariva.cloud>" → "k3f9x2m". Plus-addressing is
+// "Favo CFO <k3f9x2m@payouts.favo.team>" → "k3f9x2m". Plus-addressing is
 // stripped so a tenant can tag their own forwards (token+doordash@…).
 const localPart = (addr = '') => {
   const m = String(addr).match(/([^\s<>@,;]+)@[^\s<>,;]+/);
