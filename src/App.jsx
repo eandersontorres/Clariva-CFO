@@ -4087,6 +4087,93 @@ function TaxSummary({ transactions, categories, allTransactions, dateRange = {} 
 }
 
 // ─── RECONCILIATION ───────────────────────────────────────────────────────────
+
+const AGG_PLATFORM_LABELS = {
+  doordash: "DoorDash", ubereats: "UberEats",
+  grubhub:  "GrubHub",  wix: "Wix Restaurants",
+  other:    "Aggregator",
+};
+
+// Ledger id every aggregator adjustment hangs off. Kept in one place because
+// three call sites derive it: creation, deletion, and the "is this payout
+// already posted?" check.
+const aggLedgerPrefix = (payoutRowId) => `agg_${payoutRowId}_`;
+
+// Turns saved r7_aggregator_payouts rows into the expense entries that put the
+// platform's cut in the P&L. Two callers: the manual statement upload (right
+// after upsert) and the "post" action for payouts the email ingest wrote.
+//
+// Gross sales are NOT booked — the orders are already in the ledger as
+// sq_sale_<date>_<channel> from Sync Sales, so booking them here would
+// double-count. Refunds + tax are passthrough (the platform settles tax as
+// Marketplace Facilitator).
+//
+//   commission  → Delivery Commissions (expense)
+//   marketing   → Marketing (expense)
+//   other_fees  → Delivery Commissions (lumped — usually misc platform fees)
+function buildAggregatorAdjustments({ payouts, categories, sourceLabel }) {
+  const findCat = (re, type = "expense") =>
+    (categories.find(c => c.type === type && re.test(c.name || "")) || {}).id;
+  const commCat = findCat(/delivery\s*commission|aggregator\s*commission/i)
+               || findCat(/commission|fee/i);
+  const mktCat  = findCat(/marketing|advertis/i);
+
+  const adjustments = [];
+  for (const row of payouts) {
+    const platform = row.platform;
+    const platformLabel = AGG_PLATFORM_LABELS[platform] || platform;
+    const payoutRowId = row.id;
+    // Human-readable half of the row id — `doordash_ST-1234` reads as `ST-1234`.
+    const payoutKey = String(payoutRowId).replace(new RegExp("^" + platform + "_"), "");
+    const baseId = `agg_${payoutRowId}`;
+    const filename = row.filename || "";
+    const origin = filename ? `statement ${filename}` : (sourceLabel || "statement");
+    const baseNotes = `From ${platformLabel} ${origin}. Gross $${(+row.gross_sales || 0).toFixed(2)} → Net payout $${(+row.net_payout || 0).toFixed(2)}.`;
+
+    const commTotal = (+row.commission || 0) + (+row.other_fees || 0);
+    if (commTotal > 0 && commCat) {
+      adjustments.push({
+        id: `${baseId}_commission`,
+        date: row.arrival_date,
+        description: `${platformLabel} commission — payout ${payoutKey}`,
+        amount: -Math.round(commTotal * 100) / 100,
+        category: commCat, category_id: commCat,
+        account: platformLabel, source: "aggregator_breakdown",
+        reconciled: true, tags: ["aggregator", platform],
+        notes: baseNotes,
+      });
+    }
+    if ((+row.marketing_fee || 0) > 0 && mktCat) {
+      adjustments.push({
+        id: `${baseId}_marketing`,
+        date: row.arrival_date,
+        description: `${platformLabel} marketing fee — payout ${payoutKey}`,
+        amount: -Math.round((+row.marketing_fee) * 100) / 100,
+        category: mktCat, category_id: mktCat,
+        account: platformLabel, source: "aggregator_breakdown",
+        reconciled: true, tags: ["aggregator", platform],
+        notes: baseNotes,
+      });
+    }
+  }
+
+  const missingCat = [];
+  if (!commCat) missingCat.push("Delivery Commissions");
+  if (!mktCat && payouts.some(p => +p.marketing_fee > 0)) missingCat.push("Marketing");
+
+  return { adjustments, missingCat };
+}
+
+// A payout counts as posted once its ledger entries exist. Payouts with no
+// commission and no marketing fee have nothing to post, so they're never
+// "pending" — otherwise a $0-fee Wix payout would nag forever.
+function aggPayoutNeedsPosting(payout, transactions) {
+  const owed = (+payout.commission || 0) + (+payout.other_fees || 0) + (+payout.marketing_fee || 0);
+  if (owed <= 0) return false;
+  const prefix = aggLedgerPrefix(payout.id);
+  return !transactions.some(t => String(t.id).startsWith(prefix));
+}
+
 function Reconciliation({ transactions, setTransactions, saveTransactions, categories, tenantId, dateRange, showToast }) {
   const [kitchenInvoices, setKitchenInvoices] = useState([]);
   const [squarePayouts, setSquarePayouts] = useState([]);
@@ -4094,6 +4181,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
   const [loading, setLoading] = useState(false);
   const [syncingPayouts, setSyncingPayouts] = useState(false);
   const [parsingStatement, setParsingStatement] = useState(false);
+  const [postingPayouts, setPostingPayouts] = useState(false);
   const [statementPreview, setStatementPreview] = useState(null);
   const aggregatorFileInputRef = useRef(null);
 
@@ -4185,8 +4273,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     if (setTransactions) {
       const platform = aggregatorPayouts.find(p => p.id === payoutId)?.platform;
       if (platform) {
-        const payoutKey = String(payoutId).replace(new RegExp("^" + platform + "_"), "");
-        const prefix = `agg_${platform}_${payoutKey}_`;
+        const prefix = aggLedgerPrefix(payoutId);
         setTransactions(prev => prev.map(t => String(t.id).startsWith(prefix) ? { ...t, date: editingDate } : t));
       }
     }
@@ -4206,8 +4293,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     if (setTransactions) {
       const platform = aggregatorPayouts.find(p => p.id === payoutId)?.platform;
       if (platform) {
-        const payoutKey = String(payoutId).replace(new RegExp("^" + platform + "_"), "");
-        const prefix = `agg_${platform}_${payoutKey}_`;
+        const prefix = aggLedgerPrefix(payoutId);
         setTransactions(prev => prev.filter(t => !String(t.id).startsWith(prefix)));
       }
     }
@@ -4218,11 +4304,6 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     if (!statementPreview?.payouts?.length) return;
     const platform = statementPreview.platform;
     const filename = statementPreview.filename || "";
-    const platformLabel = {
-      doordash: "DoorDash", ubereats: "UberEats",
-      grubhub: "GrubHub",   wix: "Wix Restaurants",
-      other: "Aggregator",
-    }[platform] || platform;
 
     // 1) Save the payout rows themselves (repository of statement data)
     const rows = statementPreview.payouts.map((p, i) => ({
@@ -4252,53 +4333,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     }
 
     // 2) Create per-payout ledger entries so the P&L reflects the breakdown.
-    // Each cost bucket lands in its real category:
-    //   commission  → Delivery Commissions (expense)
-    //   marketing   → Marketing (expense)
-    //   other_fees  → Delivery Commissions (lumped — usually misc platform fees)
-    // Gross sales are NOT booked because the orders are already in
-    // sq_sale_<date> via Square's "Other tender" line — adding here would
-    // double-count. Refunds + tax are passthrough (the platform settles tax
-    // as Marketplace Facilitator).
-    const findCat = (re, type = "expense") =>
-      (categories.find(c => c.type === type && re.test(c.name || "")) || {}).id;
-    const commCat   = findCat(/delivery\s*commission|aggregator\s*commission/i)
-                   || findCat(/commission|fee/i);
-    const mktCat    = findCat(/marketing|advertis/i);
-    const adjustments = [];
-    for (let i = 0; i < statementPreview.payouts.length; i++) {
-      const p = statementPreview.payouts[i];
-      const payoutRowId = rows[i].id; // matches the upserted r7_aggregator_payouts row exactly
-      const baseId = `agg_${payoutRowId}`;
-      const baseAccount = platformLabel;
-      const baseNotes = `From ${platformLabel} statement ${filename}. Gross $${(+p.gross_sales || 0).toFixed(2)} → Net payout $${(+p.net_payout || 0).toFixed(2)}.`;
-
-      const commTotal = (+p.commission || 0) + (+p.other_fees || 0);
-      if (commTotal > 0 && commCat) {
-        adjustments.push({
-          id: `${baseId}_commission`,
-          date: p.arrival_date,
-          description: `${platformLabel} commission — payout ${payoutKey}`,
-          amount: -Math.round(commTotal * 100) / 100,
-          category: commCat, category_id: commCat,
-          account: baseAccount, source: "aggregator_breakdown",
-          reconciled: true, tags: ["aggregator", platform],
-          notes: baseNotes,
-        });
-      }
-      if ((+p.marketing_fee || 0) > 0 && mktCat) {
-        adjustments.push({
-          id: `${baseId}_marketing`,
-          date: p.arrival_date,
-          description: `${platformLabel} marketing fee — payout ${payoutKey}`,
-          amount: -Math.round((+p.marketing_fee) * 100) / 100,
-          category: mktCat, category_id: mktCat,
-          account: baseAccount, source: "aggregator_breakdown",
-          reconciled: true, tags: ["aggregator", platform],
-          notes: baseNotes,
-        });
-      }
-    }
+    const { adjustments, missingCat } = buildAggregatorAdjustments({ payouts: rows, categories });
 
     if (adjustments.length > 0) {
       const adjRes = await upsertTransactions(adjustments, tenantId);
@@ -4311,9 +4346,6 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
             return [...adjustments, ...filtered];
           });
         }
-        const missingCat = [];
-        if (!commCat) missingCat.push("Delivery Commissions");
-        if (!mktCat && statementPreview.payouts.some(p => +p.marketing_fee > 0)) missingCat.push("Marketing");
         const note = missingCat.length ? ` · ⚠️ missing cat: ${missingCat.join(", ")}` : "";
         showToast(`${rows.length} ${platform} payout${rows.length === 1 ? "" : "s"} saved · ${adjustments.length} ledger entries created${note}`, "success");
       } else {
@@ -4326,6 +4358,47 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
     const fresh = await fetchAggregatorPayouts(tenantId, dateRange);
     setAggregatorPayouts(fresh || []);
     setStatementPreview(null);
+  };
+
+  // Payouts the email ingest wrote land unposted on purpose — AI read a money
+  // document, so a human confirms before it hits the P&L. This posts them
+  // through the exact same builder the manual upload uses.
+  const pendingPayouts = aggregatorPayouts.filter(p => aggPayoutNeedsPosting(p, transactions));
+
+  const postPendingPayouts = async () => {
+    if (!pendingPayouts.length || postingPayouts) return;
+    setPostingPayouts(true);
+    try {
+      const { adjustments, missingCat } = buildAggregatorAdjustments({
+        payouts: pendingPayouts,
+        categories,
+        sourceLabel: "payout email",
+      });
+      if (!adjustments.length) {
+        showToast(
+          missingCat.length
+            ? `Nothing posted — no category matches ${missingCat.join(" / ")}. Create it in Categories first.`
+            : "Nothing to post",
+          "error",
+        );
+        return;
+      }
+      const adjRes = await upsertTransactions(adjustments, tenantId);
+      if (!adjRes.ok) {
+        showToast("Posting failed: " + (adjRes.error || "unknown"), "error");
+        return;
+      }
+      if (setTransactions) {
+        setTransactions(prev => {
+          const ids = new Set(adjustments.map(a => a.id));
+          return [...adjustments, ...prev.filter(t => !ids.has(t.id))];
+        });
+      }
+      const note = missingCat.length ? ` · ⚠️ missing cat: ${missingCat.join(", ")}` : "";
+      showToast(`${pendingPayouts.length} payout${pendingPayouts.length === 1 ? "" : "s"} posted · ${adjustments.length} ledger entries${note}`, "success");
+    } finally {
+      setPostingPayouts(false);
+    }
   };
 
   const handleSyncPayouts = async () => {
@@ -4591,12 +4664,36 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
             {aggregatorPayouts.length} payout{aggregatorPayouts.length === 1 ? "" : "s"} in window
           </div>
         </div>
+
+        {/* Email-ingested payouts wait here for a human before touching the
+            P&L — see the note on ingest-aggregator-email.js. */}
+        {pendingPayouts.length > 0 && (
+          <div
+            className="flex items-center justify-between gap-10"
+            style={{ marginBottom: 16, padding: "10px 12px", borderRadius: 6, background: "var(--yellowBg)", border: "1px solid rgba(240,200,74,0.2)" }}
+          >
+            <div style={{ fontSize: 12, color: "var(--text2)" }}>
+              <strong style={{ color: "var(--yellow)" }}>
+                {pendingPayouts.length} payout{pendingPayouts.length === 1 ? "" : "s"} not posted to the ledger
+              </strong>
+              {" — "}commission and marketing fees are missing from the P&L until you post them.
+            </div>
+            <button
+              className="btn btn-primary"
+              onClick={postPendingPayouts}
+              disabled={postingPayouts}
+              style={{ whiteSpace: "nowrap" }}
+            >
+              {postingPayouts ? "Posting…" : `Post ${pendingPayouts.length} to ledger`}
+            </button>
+          </div>
+        )}
         {aggregatorPayouts.length === 0 ? (
           <div className="empty" style={{ padding: 30 }}>
             <div className="empty-icon">🛵</div>
             <div className="empty-title">No aggregator payouts ingested for this window</div>
             <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>
-              Click <strong>📄 Import aggregator statement</strong> above and drop a DoorDash / UberEats / GrubHub / Wix file (PDF or CSV). AI extracts every payout's breakdown.
+              Click <strong>📄 Import aggregator statement</strong> above and drop a DoorDash / UberEats / GrubHub / Wix file (PDF or CSV). AI extracts every payout's breakdown. Payouts forwarded to the ingest mailbox land here on their own, waiting to be posted.
             </div>
           </div>
         ) : (
@@ -4606,6 +4703,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                 <tr>
                   <th>Arrival</th>
                   <th>Platform</th>
+                  <th>Source</th>
                   <th style={{ textAlign: "right" }}>Gross</th>
                   <th style={{ textAlign: "right" }}>Commission</th>
                   <th style={{ textAlign: "right" }}>Marketing</th>
@@ -4627,6 +4725,7 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                     other:    "var(--text3)",
                   }[p.platform] || "var(--text3)";
                   const isEditing = editingPayoutId === p.id;
+                  const needsPosting = aggPayoutNeedsPosting(p, transactions);
                   return (
                     <tr key={p.id}>
                       <td className="mono" style={{ color: "var(--text3)" }}>
@@ -4659,6 +4758,24 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
                         <span className="tag" style={{ fontSize: 10, color: platformColor, border: `1px solid ${platformColor}40`, background: "transparent", textTransform: "uppercase" }}>
                           {p.platform}
                         </span>
+                      </td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <span
+                          className="mono"
+                          style={{ fontSize: 11, color: "var(--text3)" }}
+                          title={p.source === "email_inbox" ? `Ingested from the payout email${p.filename ? ` (${p.filename})` : ""}` : "Uploaded manually"}
+                        >
+                          {p.source === "email_inbox" ? "📧 email" : "📄 upload"}
+                        </span>
+                        {needsPosting && (
+                          <span
+                            className="tag"
+                            title="Commission / marketing not in the P&L yet"
+                            style={{ marginLeft: 6, fontSize: 10, color: "var(--yellow)", border: "1px solid rgba(240,200,74,0.3)", background: "transparent" }}
+                          >
+                            not posted
+                          </span>
+                        )}
                       </td>
                       <td className="mono text-right" style={{ color: "var(--accent)" }}>{fmt(gross)}</td>
                       <td className="mono text-right" style={{ color: "var(--red)" }}>−{fmt(parseFloat(p.commission || 0))}</td>
