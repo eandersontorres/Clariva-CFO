@@ -123,6 +123,7 @@ Nenhuma integração atual sobrevive: Plaid é `country_codes:["US"]` e não ope
 ### 0.5 Ingest por e-mail — Fases 2 e 3 · `S` cada
 
 - **Fase 2** — UI do endereço: card (provavelmente uma tela **Settings**, que não existe) com o endereço + botão copiar, últimos e-mails recebidos com desfecho lido de `r7_ingest_events`, e botão de rotacionar (revoga o token e emite outro). Sem isso o tenant não tem como saber se o extrato dele foi lido.
+- **Fase 2, obrigatório junto com o mint:** o Email Routing do Cloudflare **não tem catch-all por subdomínio** (o form de rota só aceita `a-z 0-9 _ - . +`), então cada endereço precisa da sua rota explícita `<token>@payouts.favo.team → favo-payout-ingest`. Para o TorresBee foi feita à mão no dashboard; quando o mint virar botão, criar a rota via API do Cloudflare (`POST /zones/{zone}/email/routing/rules`) no mesmo fluxo — sem isso o endereço mintado não recebe nada.
 - **Fase 3** — plataformas para o country pack. Hoje `PLATFORM_HINTS` + `SENDER_DOMAINS` em `api/_aggregator.js` e o `CHECK` de `r7_aggregator_payouts.platform` fixam DoorDash/Uber/GrubHub/Wix. Vira `aggregators: [{ id, label, senders, hints }]` no pack, e o BR ganha iFood/Rappi sem tocar no endpoint. Enquanto isso, é uma violação declarada da regra de country pack.
 - **Reuso previsto:** `r7_ingest_addresses.kind` já existe para o Kitchen fazer o mesmo com nota de fornecedor.
 
