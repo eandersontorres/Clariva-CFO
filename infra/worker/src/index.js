@@ -64,7 +64,13 @@ export default {
 
     const payload = {
       to: message.to,
-      from: message.from,
+      // Header From, not the envelope. A Gmail filter-forward rewrites the
+      // envelope sender to torresbeebrazil+caf_...@gmail.com (SRS-style), but
+      // the header keeps the original no-reply@doordash.com — and the header
+      // is what the endpoint's sender allowlist must judge. The envelope
+      // rides along for audit.
+      from: parsed.from?.address || message.from,
+      envelope_from: message.from,
       subject: parsed.subject || message.headers.get('subject') || null,
       message_id: message.headers.get('message-id') || parsed.messageId || null,
       spf: verdict('spf'),
