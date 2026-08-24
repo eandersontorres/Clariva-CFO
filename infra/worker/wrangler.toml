@@ -1,0 +1,22 @@
+# Favo payout ingest — the Email Routing worker for payouts.favo.team.
+# Deployed with Wrangler because the dashboard editor can't install npm
+# packages, and src/index.js depends on postal-mime.
+#
+#   cd infra/worker
+#   npm install
+#   npx wrangler login                     # opens the browser once
+#   npx wrangler deploy
+#   npx wrangler secret put INGEST_SECRET  # paste the AGGREGATOR_INGEST_SECRET value
+#
+# Then wire it up in the dashboard: favo.team → Email Routing → add the
+# `payouts` subdomain → catch-all route ON THE SUBDOMAIN → Send to Worker →
+# favo-payout-ingest. Never catch-all the apex — it routes real company mail.
+
+name = "favo-payout-ingest"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# Not a secret — the endpoint URL is public knowledge. The secret half
+# (INGEST_SECRET) goes in via `wrangler secret put`, never in this file.
+[vars]
+INGEST_URL = "https://cfo.favo.team/api/ingest-aggregator-email"

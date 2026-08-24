@@ -1,0 +1,15 @@
+{
+  "name": "favo-payout-ingest",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "postal-mime": "^2.4.3"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

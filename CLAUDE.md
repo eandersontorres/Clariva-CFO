@@ -55,7 +55,7 @@ favo-cfo/
 │           ├── us.js               # Schedule C, USD, ACH/Check/Zelle
 │           └── br.js               # DRE gerencial, BRL, Pix/Boleto
 ├── infra/
-│   └── cloudflare-email-worker.js  # Email Routing → JSON → /api/ingest-aggregator-email
+│   └── worker/                     # Wrangler project: Email Routing → JSON → /api/ingest-aggregator-email
 ├── supabase_*.sql                  # Migrations, applied manually and in order
 ├── vercel.json                     # Rewrites + cron schedule
 ├── package.json
@@ -376,7 +376,7 @@ DoorDash/Uber/GrubHub/Wix email
    ↓  MX on payouts.favo.team (Email Routing subdomain; apex routes real mail — don't catch-all it)
 [Cloudflare Email Routing] catch-all
    ↓
-[infra/cloudflare-email-worker.js]  MIME → JSON, forwards SPF/DMARC verdicts
+[infra/worker/ — favo-payout-ingest]  MIME → JSON, forwards SPF/DMARC verdicts
    ↓  POST + x-ingest-secret
 [/api/ingest-aggregator-email]  address → tenant, allowlist, parse, upsert
    ↓

@@ -9,26 +9,18 @@
 // route{1,2,3}.mx.cloudflare.net), so this needs no new vendor, no new DNS
 // delegation and no per-tenant setup. It's also free with no practical cap.
 //
-// ── Deploy ───────────────────────────────────────────────────────────────────
-//   1. Cloudflare → favo.team → Email → Email Routing → Settings → Subdomains
-//      → add `payouts`. Cloudflare writes the MX + SPF records itself.
-//      DO NOT touch the apex: favo.team already routes real mail, and an
-//      apex catch-all would swallow it.
-//   2. Workers & Pages → create Worker → paste this file → deploy.
-//   3. Worker → Settings → Variables:
-//        INGEST_URL     https://cfo.favo.team/api/ingest-aggregator-email
-//        INGEST_SECRET  (same value as AGGREGATOR_INGEST_SECRET on Vercel — secret)
-//      INGEST_URL must be a custom domain. *.vercel.app is behind Vercel
-//      Authentication in this org and answers 401 to anything server-to-server.
-//   4. Email Routing → Routes → catch-all ON THE `payouts` SUBDOMAIN →
-//      Send to Worker → this Worker.
+// ── Deploy ───────────────────────────────────────────────────────────────────────────────
+// This folder is a Wrangler project — see wrangler.toml for the commands.
+// The dashboard editor can't install npm packages (postal-mime below), so
+// deploys go through `npx wrangler deploy` from infra/worker/.
+//
+// After deploying: favo.team → Email Routing → Settings → Subdomains → add
+// `payouts`, then Routes → catch-all ON THE SUBDOMAIN → Send to Worker →
+// favo-payout-ingest. DO NOT catch-all the apex: favo.team routes real
+// company mail, and an apex catch-all would swallow it.
 //
 // Cloudflare supports subaddressing (RFC 5233), and the endpoint strips the
 // `+suffix`, so token+doordash@payouts.favo.team resolves to the same tenant.
-//
-// ── Install a dependency ─────────────────────────────────────────────────────
-// MIME parsing is not something to hand-roll. Add postal-mime:
-//   npm i postal-mime      (in the Worker project, or via the dashboard editor)
 
 import PostalMime from 'postal-mime';
 
