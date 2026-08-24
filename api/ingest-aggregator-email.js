@@ -169,6 +169,18 @@ export default async function handler(req, res) {
     return reject('parse_failed', 400, { error: 'message_id is required — it is the dedupe key' });
   }
 
+  // Gmail forwarding-address verification. Platforms that only email the
+  // portal user (DoorDash financial reports) reach us via a Gmail forward,
+  // and Gmail won't enable one until a confirmation code sent TO this address
+  // is entered. The sender is google.com — not allowlisted — so without this
+  // carve-out the code would die in the bounce. Log the body (which carries
+  // the code + link) and swallow the email; nothing here is ever parsed as
+  // a statement, so the allowlist stays meaningful.
+  if (/forwarding-noreply@google\.com/i.test(from || '')) {
+    await logEvent('rejected_sender', { detail: 'GMAIL FORWARD CONFIRMATION: ' + String(body.text || '').slice(0, 900) });
+    return res.status(200).json({ ok: true, note: 'forwarding confirmation logged to r7_ingest_events' });
+  }
+
   // The address is semi-public by design, so the sender is the real gate.
   if (!senderAllowed(from)) {
     return reject('rejected_sender', 403,
