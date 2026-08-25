@@ -89,12 +89,16 @@ export default {
     });
 
     if (!res.ok) {
-      // Bounce so the platform (and Cloudflare's own logs) show the failure
-      // instead of the email vanishing. The endpoint already recorded the
-      // reason in r7_ingest_events for anything it could attribute to a tenant.
       const detail = (await res.text()).slice(0, 200);
       console.error('ingest rejected', res.status, detail);
-      message.setReject(`Favo CFO ingest failed (${res.status})`);
+      // Bounce ONLY when the endpoint couldn't log the failure itself —
+      // 401 (secret mismatch) and 5xx (endpoint down). Everything else
+      // (rejected sender, marketing noise, parse failures) is already in
+      // r7_ingest_events; bouncing those too just sprays NDRs into the
+      // forwarding mailbox every time DoorDash sends a promo blast.
+      if (res.status === 401 || res.status >= 500) {
+        message.setReject(`Favo CFO ingest failed (${res.status})`);
+      }
     }
   },
 };

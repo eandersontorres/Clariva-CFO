@@ -100,6 +100,13 @@ Return ONLY a JSON object — no preamble, no markdown. Schema:
 }
 
 Rules:
+- ONLY a payout/settlement document counts. A payout needs explicit settlement
+  context: words like payout, payment, deposit, transfer, settlement, paid to
+  you. Sales/performance summaries ("Daily Summary", total sales, order counts),
+  promotions and marketing emails are NOT payouts — for those return
+  {"platform": "other", "payouts": [], "totals": null} and nothing else.
+- NEVER guess a year. If a date has no year, or you cannot read a full
+  YYYY-MM-DD from the document, use null — an invented date corrupts a ledger.
 - All money values are POSITIVE numbers (no signs, no parentheses).
 - net_payout = gross_sales - commission - marketing_fee - refunds - other_fees + delivery_fee_passthrough (varies per platform).
 - If a field isn't in the document, use 0 (don't invent it).

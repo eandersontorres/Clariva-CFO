@@ -214,6 +214,18 @@ export default async function handler(req, res) {
   const hint = `${from || ''} ${subject || ''}`;
   const filename = attachment?.filename || `${(subject || 'payout-email').slice(0, 60)}.txt`;
 
+  // Cheap gate before the AI call. The Gmail filter forwards EVERYTHING the
+  // platforms send — marketing blasts, daily sales summaries — and each one
+  // otherwise costs an Anthropic call and risks a hallucinated payout (a
+  // "Daily Summary" once became a payout dated 2020). Attachments always go
+  // through: a real statement can arrive under any subject.
+  const NOISE_SUBJECT_RE = /daily summary|weekly summary|promotion|promo\b|marketing|new customers|menu|refer|deactivat|feedback|review|webinar|survey/i;
+  if (!attachment && NOISE_SUBJECT_RE.test(subject || '')) {
+    return reject('parse_failed', 422,
+      { error: 'Not a payout email (subject filter)', subject },
+      'skipped_non_financial_subject');
+  }
+
   let pdfBase64 = null;
   let csvText = null;
   if (attachment) {
@@ -283,13 +295,22 @@ export default async function handler(req, res) {
     raw: { ...p, email_message_id: messageId, email_from: from, email_subject: subject },
   }));
 
-  const missingDate = rows.filter((r) => !r.arrival_date);
-  if (missingDate.length) {
+  // Date sanity: a payout can't be from years ago or from the future. The
+  // model is told never to guess a year, but this is the deterministic
+  // backstop — a hallucinated date corrupts every window query that follows.
+  const now = Date.now();
+  const MS_DAY = 86400000;
+  const dateSane = (d) => {
+    const t = Date.parse(d);
+    return !isNaN(t) && t > now - 400 * MS_DAY && t < now + 7 * MS_DAY;
+  };
+  const badDate = rows.filter((r) => !r.arrival_date || !dateSane(r.arrival_date));
+  if (badDate.length) {
     return reject('parse_failed', 422, {
-      error: `${missingDate.length} payout(s) had no usable arrival date — statement needs a manual look`,
+      error: `${badDate.length} payout(s) had a missing or implausible arrival date — statement needs a manual look`,
       platform,
       message_id: messageId,
-    }, 'missing arrival_date');
+    }, 'bad arrival_date: ' + badDate.map((r) => r.arrival_date || 'null').join(', '));
   }
 
   const { error: upsertErr } = await supabase
