@@ -9281,7 +9281,11 @@ function Trends({ tenantId, categories, allTransactions }) {
 }
 
 // ─── CEO COCKPIT ──────────────────────────────────────────────────────────────
-const CEO_DEFAULT_MACHINES = [
+// TorresBee's equipment list. It is a SEED for the deployment's home tenant
+// (VITE_TENANT_ID) only — every other store starts empty. Seeding it globally
+// made the switcher show another restaurant's machines, prices and payback as
+// if they were yours, which reads as real data on a finance screen.
+const CEO_SEED_MACHINES = [
   { id: "pizza",  name: "Boleadora de massa de pizza", now: "Hoje: porcionado e boleado à mão",
     desc: "Divisora/boleadora que corta e arredonda as bolas de massa em uma prensada.",
     equip: 2500, setup: 150, days: 6, manual: 45, machine: 12, maint: 120 },
@@ -9294,6 +9298,14 @@ const CEO_DEFAULT_MACHINES = [
 ];
 
 const roiStorageKey = (tid) => `favo_ceo_roi_${tid || "demo"}`;
+
+// A record left by the old global seeding: the seed list, untouched, written to
+// localStorage by the save effect on the first render of the screen. Nobody
+// typed it, so it is safe to drop on tenants that shouldn't have it.
+const roiIsPristineSeed = (ms) =>
+  Array.isArray(ms) && ms.length === CEO_SEED_MACHINES.length &&
+  ms.every((m, i) => m && Object.keys(CEO_SEED_MACHINES[i])
+    .every(k => String(m[k]) === String(CEO_SEED_MACHINES[i][k])));
 
 const roiCalc = (m, rate, weeks) => {
   const capex = (+m.equip || 0) + (+m.setup || 0);
@@ -9315,27 +9327,40 @@ const roiVerdict = (mo) => {
 const roiMonths = (mo) => !isFinite(mo) ? "∞" : mo < 24 ? mo.toFixed(mo < 10 ? 1 : 0) : (mo / 12).toFixed(1);
 const roiMonthsUnit = (mo) => !isFinite(mo) ? "" : mo < 24 ? "meses" : "anos";
 
-function CEO({ tenantId, showToast }) {
+function CEO({ tenantId, tenantName, showToast }) {
   const KEY = roiStorageKey(tenantId);
+  const isHomeTenant = tenantId === ENV_TENANT_ID;
   const [rate, setRate] = useState(18);
   const [weeks, setWeeks] = useState(52);
-  const [machines, setMachines] = useState(CEO_DEFAULT_MACHINES);
+  const [machines, setMachines] = useState(isHomeTenant ? CEO_SEED_MACHINES : []);
+  // Nothing is written back before the stored record has been read, otherwise
+  // the save effect's first run would overwrite it with the empty default.
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
+    let next = { rate: 18, weeks: 52, machines: isHomeTenant ? CEO_SEED_MACHINES : [] };
     try {
       const raw = localStorage.getItem(KEY);
       if (raw) {
         const d = JSON.parse(raw);
-        if (Array.isArray(d.machines) && d.machines.length) setMachines(d.machines);
-        if (typeof d.rate === "number") setRate(d.rate);
-        if (typeof d.weeks === "number") setWeeks(d.weeks);
+        if (!isHomeTenant && roiIsPristineSeed(d.machines)) {
+          localStorage.removeItem(KEY);
+        } else {
+          // An empty array is a real choice ("removi todas") — honour it.
+          if (Array.isArray(d.machines)) next.machines = d.machines;
+          if (typeof d.rate === "number") next.rate = d.rate;
+          if (typeof d.weeks === "number") next.weeks = d.weeks;
+        }
       }
     } catch { /* ignore */ }
-  }, [KEY]);
+    setMachines(next.machines); setRate(next.rate); setWeeks(next.weeks);
+    setHydrated(true);
+  }, [KEY, isHomeTenant]);
 
   useEffect(() => {
+    if (!hydrated) return;
     try { localStorage.setItem(KEY, JSON.stringify({ rate, weeks, machines })); } catch { /* ignore */ }
-  }, [KEY, rate, weeks, machines]);
+  }, [hydrated, KEY, rate, weeks, machines]);
 
   const upd = (id, key, val) => setMachines(ms => ms.map(m => m.id === id ? { ...m, [key]: val } : m));
   const addMachine = () => setMachines(ms => [...ms, {
@@ -9343,8 +9368,10 @@ function CEO({ tenantId, showToast }) {
     equip: 0, setup: 0, days: 6, manual: 0, machine: 0, maint: 0,
   }]);
   const removeMachine = (id) => setMachines(ms => ms.filter(m => m.id !== id));
+  // Premissas only. Restoring the machine list here would push TorresBee's
+  // equipment onto whatever store is open — the bug this screen just had.
   const resetDefaults = () => {
-    setMachines(CEO_DEFAULT_MACHINES); setRate(18); setWeeks(52);
+    setRate(18); setWeeks(52);
     if (showToast) showToast("Premissas de ROI restauradas", "success");
   };
 
@@ -9373,10 +9400,10 @@ function CEO({ tenantId, showToast }) {
       <div className="page-header">
         <div>
           <div className="page-title">CEO Cockpit</div>
-          <div className="page-subtitle">Decisões de dono · ROI de investimentos · TorresBee</div>
+          <div className="page-subtitle">Decisões de dono · ROI de investimentos{tenantName ? ` · ${tenantName}` : ""}</div>
         </div>
         <div className="flex gap-8">
-          <button className="btn btn-outline btn-sm" onClick={resetDefaults}>↺ Restaurar padrão</button>
+          <button className="btn btn-outline btn-sm" onClick={resetDefaults}>↺ Restaurar premissas</button>
           <button className="btn btn-primary btn-sm" onClick={addMachine}><Icon name="plus" size={13} /> Máquina</button>
         </div>
       </div>
@@ -9425,6 +9452,16 @@ function CEO({ tenantId, showToast }) {
           <div className="kpi-delta" style={{ color: "var(--text3)" }}>carteira combinada</div>
         </div>
       </div>
+
+      {machines.length === 0 && (
+        <div className="card" style={{ textAlign: "center", padding: "34px 20px" }}>
+          <div style={{ fontFamily: "var(--font-sans)", fontWeight: 600, fontSize: 15, marginBottom: 6 }}>Nenhuma máquina avaliada</div>
+          <div style={{ fontSize: 12.5, color: "var(--text3)", maxWidth: 420, margin: "0 auto 16px", lineHeight: 1.5 }}>
+            Adicione um equipamento que você está considerando comprar e informe o tempo gasto hoje à mão. O payback é calculado com as premissas acima.
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={addMachine}><Icon name="plus" size={13} /> Adicionar máquina</button>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 16 }}>
         {results.map(({ m, r }) => {
@@ -9610,12 +9647,14 @@ export default function App() {
   // the DB. The bump forces one re-render because the pack is a module
   // singleton that React can't see.
   const [countryRev, bumpCountry] = useState(0);
+  const [tenantName, setTenantName] = useState("");
   useEffect(() => {
     if (TENANT_ID === "demo") return;
     if (!authorized) return;
     let cancelled = false;
     fetchTenant(TENANT_ID).then(t => {
       if (cancelled || !t) return;
+      setTenantName(t.name || "");
       if (setCountryFromTenant(TENANT_ID, t)) bumpCountry(n => n + 1);
     });
     return () => { cancelled = true; };
@@ -9886,7 +9925,7 @@ export default function App() {
   const renderScreen = () => {
     switch (screen) {
       case "insights":     return <Insights transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} recurring={recurring} tenantId={TENANT_ID} dateRange={dateRange} />;
-      case "ceo":          return <CEO tenantId={TENANT_ID} showToast={showToast} />;
+      case "ceo":          return <CEO tenantId={TENANT_ID} tenantName={tenantName} showToast={showToast} />;
       case "bookkeeper":   return <Bookkeeper transactions={filteredByAccrual} allTransactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} dateRange={dateRange} setScreen={setScreen} showToast={showToast} />;
       case "labor":        return <Labor shifts={laborShifts} transactions={filteredByDate} categories={categories} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(true)} showToast={showToast} />;
       case "tips":         return <Tips tipsDaily={tipsDaily} shifts={laborShifts} tenantId={TENANT_ID} dateRange={dateRange} onSync={() => loadAll(false)} showToast={showToast} />;
