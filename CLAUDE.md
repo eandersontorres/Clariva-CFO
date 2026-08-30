@@ -98,6 +98,7 @@ All tables live in the **shared Kitchen Supabase project** with `r7_ledger_*` pr
 | `r7_ledger_plaid_items` | Plaid access tokens (RLS-locked, service role only) |
 | `r7_ledger_unit_accounts` | Favo Bank envelopes (operating / tax_vault / payroll) |
 | `r7_ledger_journal` | Manual journal entries — created in `supabase_migration.sql`, still unreferenced by code |
+| `r7_ledger_ceo_roi` | CEO Cockpit: premissas + lista de equipamentos (uma linha por tenant, máquinas em JSONB) |
 | `r7_labor_shifts` | Square shifts → hours, wage, loaded cost |
 | `r7_labor_tips_daily` | Card tips + auto-gratuity per employee per day |
 | `r7_payroll_runs` | Payroll prep + Paychex CSV export |

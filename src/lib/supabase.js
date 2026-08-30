@@ -380,6 +380,44 @@ export async function fetchTenant(tenantId) {
   return data
 }
 
+// ─── CEO COCKPIT (ROI) ────────────────────────────────────────────────────────
+// One row per tenant. Returns { ok, row } and NOT just the row, because the
+// caller has to tell "this tenant has nothing saved yet, migrate the browser's
+// copy up" from "the read failed" — uploading local state on a failed read
+// would overwrite good remote data from whichever device happened to be open.
+// ok=false also covers the table not existing yet (migration not applied), in
+// which case the screen keeps running on localStorage exactly like before.
+export async function fetchCeoRoi(tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return { ok: false, row: null }
+  const { data, error } = await supabase.from('r7_ledger_ceo_roi')
+    .select('rate, weeks, machines').eq('tenant_id', tid).maybeSingle()
+  if (error) { console.error('fetchCeoRoi', error); return { ok: false, row: null } }
+  if (!data) return { ok: true, row: null }
+  return {
+    ok: true,
+    row: {
+      rate: Number(data.rate),
+      weeks: Number(data.weeks),
+      machines: Array.isArray(data.machines) ? data.machines : [],
+    },
+  }
+}
+
+export async function saveCeoRoi({ rate, weeks, machines }, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return true
+  const { error } = await supabase.from('r7_ledger_ceo_roi').upsert({
+    tenant_id: tid,
+    rate: Number(rate) || 0,
+    weeks: Number(weeks) || 0,
+    machines: Array.isArray(machines) ? machines : [],
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'tenant_id' })
+  if (error) console.error('saveCeoRoi', error)
+  return !error
+}
+
 // ─── LABOR TIPS ───────────────────────────────────────────────────────────────
 export async function fetchTipsDaily(tenantId, { start, end } = {}) {
   let q = supabase.from('r7_labor_tips_daily').select('*').eq('tenant_id', tenantId).order('date', { ascending: false })

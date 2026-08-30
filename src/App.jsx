@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
-import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser, fetchTenant } from "./lib/supabase.js";
+import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser, fetchTenant, fetchCeoRoi, saveCeoRoi } from "./lib/supabase.js";
 import { initCountry, setCountryFromTenant, country, supports, isCogs, cogsLine, isLabor, isRent, money, moneyCompact, currencySymbol, formatNumber as ctryNumber, formatDate as ctryDate, formatDateShort as ctryDateShort, formatMonth as ctryMonth, formatTime as ctryTime, parseDate as ctryParseDate, parseAmount as ctryParseAmount } from "./lib/country/index.js";
 
 // Active tenant: localStorage override (set by the sidebar TenantSwitcher) wins
@@ -9333,34 +9333,78 @@ function CEO({ tenantId, tenantName, showToast }) {
   const [rate, setRate] = useState(18);
   const [weeks, setWeeks] = useState(52);
   const [machines, setMachines] = useState(isHomeTenant ? CEO_SEED_MACHINES : []);
-  // Nothing is written back before the stored record has been read, otherwise
+  // Nothing is written back before the stored state has been read, otherwise
   // the save effect's first run would overwrite it with the empty default.
   const [hydrated, setHydrated] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  // What the server already has. Keeps hydration from bouncing straight back as
+  // a write, and keeps a failed read from being answered with an upload.
+  const savedRef = useRef(null);
+
+  const roiPayload = (r, w, ms) => ({ rate: r, weeks: w, machines: ms });
 
   useEffect(() => {
-    let next = { rate: 18, weeks: 52, machines: isHomeTenant ? CEO_SEED_MACHINES : [] };
+    let cancelled = false;
+
+    // Local copy first: it paints immediately and it is the offline fallback.
+    let local = null;
     try {
       const raw = localStorage.getItem(KEY);
       if (raw) {
         const d = JSON.parse(raw);
-        if (!isHomeTenant && roiIsPristineSeed(d.machines)) {
-          localStorage.removeItem(KEY);
-        } else {
-          // An empty array is a real choice ("removi todas") — honour it.
-          if (Array.isArray(d.machines)) next.machines = d.machines;
-          if (typeof d.rate === "number") next.rate = d.rate;
-          if (typeof d.weeks === "number") next.weeks = d.weeks;
-        }
+        // Legacy record from when the seed was global — drop it, don't migrate
+        // TorresBee's machines into another store's row.
+        if (!isHomeTenant && roiIsPristineSeed(d.machines)) localStorage.removeItem(KEY);
+        else local = d;
       }
     } catch { /* ignore */ }
-    setMachines(next.machines); setRate(next.rate); setWeeks(next.weeks);
-    setHydrated(true);
-  }, [KEY, isHomeTenant]);
+
+    const fromLocal = roiPayload(
+      typeof local?.rate === "number" ? local.rate : 18,
+      typeof local?.weeks === "number" ? local.weeks : 52,
+      // An empty array is a real choice ("removi todas") — honour it.
+      Array.isArray(local?.machines) ? local.machines : (isHomeTenant ? CEO_SEED_MACHINES : []),
+    );
+    setRate(fromLocal.rate); setWeeks(fromLocal.weeks); setMachines(fromLocal.machines);
+
+    setSyncing(true);
+    fetchCeoRoi(tenantId).then(({ ok, row }) => {
+      if (cancelled) return;
+      if (ok && row) {
+        // The store's row wins over whatever this browser remembered.
+        setRate(row.rate); setWeeks(row.weeks); setMachines(row.machines);
+        savedRef.current = JSON.stringify(roiPayload(row.rate, row.weeks, row.machines));
+      } else if (!ok) {
+        // Read failed (offline, or the table isn't there yet): treat local as
+        // already-saved so we don't push it over a row we couldn't see.
+        savedRef.current = JSON.stringify(fromLocal);
+      }
+      // ok && !row: first time this store opens the cockpit — savedRef stays
+      // null so the save effect migrates the local copy up.
+      setSyncing(false);
+      setHydrated(true);
+    });
+
+    return () => { cancelled = true; };
+  }, [KEY, tenantId, isHomeTenant]);
 
   useEffect(() => {
     if (!hydrated) return;
-    try { localStorage.setItem(KEY, JSON.stringify({ rate, weeks, machines })); } catch { /* ignore */ }
-  }, [hydrated, KEY, rate, weeks, machines]);
+    const payload = roiPayload(rate, weeks, machines);
+    const json = JSON.stringify(payload);
+    // localStorage is written on every keystroke — it is the cache that
+    // survives a reload before the debounce fires.
+    try { localStorage.setItem(KEY, json); } catch { /* ignore */ }
+    if (json === savedRef.current) return;
+    const t = setTimeout(() => {
+      setSyncing(true);
+      saveCeoRoi(payload, tenantId).then(ok => {
+        if (ok) savedRef.current = json;
+        setSyncing(false);
+      });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [hydrated, KEY, tenantId, rate, weeks, machines]);
 
   const upd = (id, key, val) => setMachines(ms => ms.map(m => m.id === id ? { ...m, [key]: val } : m));
   const addMachine = () => setMachines(ms => [...ms, {
@@ -9402,7 +9446,8 @@ function CEO({ tenantId, tenantName, showToast }) {
           <div className="page-title">CEO Cockpit</div>
           <div className="page-subtitle">Decisões de dono · ROI de investimentos{tenantName ? ` · ${tenantName}` : ""}</div>
         </div>
-        <div className="flex gap-8">
+        <div className="flex gap-8 items-center">
+          {syncing && <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text3)" }}>sincronizando…</span>}
           <button className="btn btn-outline btn-sm" onClick={resetDefaults}>↺ Restaurar premissas</button>
           <button className="btn btn-primary btn-sm" onClick={addMachine}><Icon name="plus" size={13} /> Máquina</button>
         </div>
@@ -9525,7 +9570,7 @@ function CEO({ tenantId, tenantName, showToast }) {
         <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--accent)", marginBottom: 10 }}>Como ler</div>
         <ul style={{ margin: 0, paddingLeft: 18, color: "var(--text2)", fontSize: 12.5, lineHeight: 1.6 }}>
           <li><b style={{ color: "var(--text)" }}>Payback ≤ 18 meses</b> = compra recomendada · <b style={{ color: "var(--yellow)" }}>18–36</b> = avaliar volume · <b style={{ color: "var(--red)" }}>&gt; 36</b> = não compensa hoje.</li>
-          <li>Preencha os minutos com o tempo <b style={{ color: "var(--text)" }}>real</b> gasto por dia hoje (manual) e o esperado com a máquina. Tudo é salvo neste dispositivo.</li>
+          <li>Preencha os minutos com o tempo <b style={{ color: "var(--text)" }}>real</b> gasto por dia hoje (manual) e o esperado com a máquina. Tudo é salvo na loja — aparece igual em qualquer dispositivo em que você entrar.</li>
           <li>Preços de referência (EUA, jul/2026): boleadora de massa US$1.150 (manual) a US$8.400 (semi-auto) · descascadora 20–22 lb US$1.430–1.680 · porcionadora de brigadeiro (encrustadeira) US$6.800–8.400.</li>
         </ul>
       </div>
