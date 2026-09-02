@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
+import { fetchPurchaseBudgetPolicy, savePurchaseBudgetPolicy, fetchPurchaseWeekBudget } from "./lib/supabase.js";
 import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser, fetchTenant, fetchCeoRoi, saveCeoRoi } from "./lib/supabase.js";
@@ -3811,6 +3812,100 @@ function CashFlow({ transactions, categories, recurring = [], dateRange = {} }) 
   );
 }
 
+// ─── PURCHASE WEEKLY BUDGET ───────────────────────────────────────────────────
+// O teto de compras não é um valor fixo: é % da receita prevista da semana, que
+// sobe e desce junto com o movimento. Quem gasta é o Purchase; quem define é
+// aqui (ou no CEO). Estourou, o PO para e vai pra fila do CEO.
+function PurchaseBudgetCard({ tenantId, showToast }) {
+  const [policy, setPolicy] = useState(null);
+  const [week, setWeek] = useState(null);
+  const [pct, setPct] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const reload = () => {
+    Promise.all([fetchPurchaseBudgetPolicy(tenantId), fetchPurchaseWeekBudget(tenantId)])
+      .then(([p, w]) => {
+        setPolicy(p);
+        setWeek(w);
+        setPct(p ? String(p.pct_of_forecast) : "30");
+      })
+      .catch(() => {});
+  };
+  useEffect(() => { reload(); }, [tenantId]);
+
+  const save = async (next) => {
+    setSaving(true);
+    const ok = await savePurchaseBudgetPolicy(next, tenantId);
+    setSaving(false);
+    if (ok) { showToast("Purchase budget saved", "success"); reload(); }
+    else showToast("Could not save purchase budget", "error");
+  };
+
+  const enabled = policy ? policy.enabled : true;
+  const ceiling = week && week.budget != null ? Number(week.budget) : null;
+  const committed = week ? Number(week.committed || 0) : 0;
+  const basis = !week ? "" :
+    week.forecast_source === "forecast"
+      ? `${week.pct}% of ${fmt(Number(week.forecast_revenue))} forecast revenue for the week`
+      : week.forecast_source === "last_week_actual"
+        ? `${week.pct}% of ${fmt(Number(week.forecast_revenue))} — last week's actual sales, no forecast filled for this week`
+        : "no sales forecast and no sales last week — the ceiling is off until one exists";
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div className="flex items-center gap-10" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Weekly purchase budget</div>
+          <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 3 }}>
+            Percent of the week's forecast sales that Purchase can commit. Over it, the PO stops and goes to
+            the CEO to approve.
+          </div>
+        </div>
+        <div className="flex items-center gap-10">
+          <input
+            className="input"
+            style={{ width: 80, textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12, padding: "5px 8px" }}
+            value={pct}
+            onChange={(e) => setPct(e.target.value)}
+            onBlur={() => {
+              const n = parseFloat(pct);
+              if (!isFinite(n) || n < 0 || n > 100) { setPct(policy ? String(policy.pct_of_forecast) : "30"); return; }
+              if (policy && n === Number(policy.pct_of_forecast)) return;
+              save({ pct: n, enabled });
+            }}
+          />
+          <span style={{ fontSize: 12, color: "var(--text2)" }}>% of forecast sales</span>
+          <label className="flex items-center gap-10" style={{ fontSize: 11, color: "var(--text2)" }}>
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={saving}
+              onChange={(e) => save({ pct: parseFloat(pct) || 30, enabled: e.target.checked })}
+            />
+            enforce
+          </label>
+        </div>
+      </div>
+      {week && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)", fontSize: 12 }}>
+          {ceiling == null ? (
+            <span style={{ color: "var(--text3)" }}>This week: {basis}</span>
+          ) : (
+            <>
+              <span className="mono" style={{ fontSize: 14 }}>{fmt(ceiling)}</span>
+              <span style={{ color: "var(--text3)" }}> this week · {fmt(committed)} already committed · </span>
+              <span style={{ color: committed > ceiling ? "var(--red)" : "var(--accent)" }}>
+                {fmt(ceiling - committed)} left
+              </span>
+              <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4 }}>{basis}</div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── BUDGET ───────────────────────────────────────────────────────────────────
 function Budget({ transactions, categories, budgets, setBudgets, saveBudget, showToast }) {
   const [period, setPeriod] = useState("monthly");
@@ -3869,6 +3964,8 @@ function Budget({ transactions, categories, budgets, setBudgets, saveBudget, sho
           </div>
         </div>
       </div>
+
+      <PurchaseBudgetCard tenantId={TENANT_ID} showToast={showToast} />
 
       <div className="card">
         {/* Header */}

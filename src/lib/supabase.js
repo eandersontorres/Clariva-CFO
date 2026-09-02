@@ -208,6 +208,42 @@ export async function upsertBudget(row, tenantId) {
   return !error
 }
 
+// ─── PURCHASE WEEKLY BUDGET ───────────────────────────────────────────────────
+// Teto semanal de compras: percentual da receita PREVISTA da semana, não um
+// valor fixo. Mora em r7_purchase_budget_policy porque três apps mexem nele —
+// CFO e CEO definem, Purchase obedece na hora de enviar PO.
+export async function fetchPurchaseBudgetPolicy(tenantId) {
+  const tid = tenantId || TENANT()
+  const { data, error } = await supabase.from('r7_purchase_budget_policy').select('*').eq('tenant_id', tid).maybeSingle()
+  if (error) { console.error('fetchPurchaseBudgetPolicy', error); return null }
+  return data
+}
+
+export async function savePurchaseBudgetPolicy({ pct, enabled }, tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return true
+  const { data: userData } = await supabase.auth.getUser()
+  const { error } = await supabase.from('r7_purchase_budget_policy').upsert({
+    tenant_id: tid,
+    pct_of_forecast: pct,
+    enabled,
+    updated_by: userData?.user?.id || null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'tenant_id' })
+  if (error) console.error('savePurchaseBudgetPolicy', error)
+  return !error
+}
+
+// Quanto o percentual dá em dólares NESTA semana, e quanto já foi comprometido.
+// Mesma RPC que o Purchase usa pra decidir — um número só, sem segunda conta.
+export async function fetchPurchaseWeekBudget(tenantId) {
+  const tid = tenantId || TENANT()
+  if (tid === 'demo') return null
+  const { data, error } = await supabase.rpc('pur_week_budget', { p_tenant: tid, p_week_start: null })
+  if (error) { console.error('fetchPurchaseWeekBudget', error); return null }
+  return data
+}
+
 // ─── BILLS ────────────────────────────────────────────────────────────────────
 export async function fetchBills(tenantId) {
   const { data, error } = await supabase.from('r7_ledger_bills').select('*').eq('tenant_id', tenantId).order('due_date', { ascending: true })
