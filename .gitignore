@@ -8,3 +8,12 @@ dist
 # Worker project deps
 infra/worker/node_modules/
 infra/worker/.wrangler/
+
+# Config local do agente
+.claude/
+
+# Arquivos que sempre viveram só na máquina: screenshot de referência da tela
+# de auth e a planilha do modelo de receita. Se um dia virarem documentação
+# oficial do repo, tirar daqui em vez de commitar por cima.
+auth.jpg
+clariva_bank_revenue_model.xlsx
