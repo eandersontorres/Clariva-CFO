@@ -148,7 +148,7 @@ Read from sibling Favo modules:
 10. **KitchenSyncButton** component
 11. **Icon** component (inline SVG library)
 12. **Toast** component
-13. **Screen Components** (in NAV order — 21 entries, filtered by country pack):
+13. **Screen Components** (in NAV order — 20 entries, filtered by country pack):
     - `Dashboard` (labelled "Overview")
     - `Insights` (CFO Insights — health scorecard, alerts, action checklists)
     - `CEO` (CEO Cockpit — equipment ROI calculator)
@@ -157,10 +157,9 @@ Read from sibling Favo modules:
     - `Payroll` 🇺🇸 (nested under Labor — prep + Paychex CSV export)
     - `Tips` 🇺🇸 (nested under Payroll — card tips, auto-grat, pooling)
     - `Projects` (future investments timeline/board/list)
-    - `Transactions` (review-first: Uncategorized / Categorized tabs, import drop zone)
+    - `Transactions` (review-first: Uncategorized / Categorized tabs, import drop zone, 🧾 match-invoice → mark bill paid)
     - `Categories` (Chart of Accounts CRUD)
     - `PLReport` (Profit & Loss)
-    - `Performance`
     - `Trends`
     - `CashFlow`
     - `Budget` (with alerts banner)
@@ -426,15 +425,17 @@ The JSON contract is transport-agnostic on purpose — SendGrid Inbound Parse or
 3. Transactions move from "Unposted" tab to "Posted" tab with `posted_at` timestamp
 4. **Unpost** available for corrections
 
-### Bill payment workflow (Bills screen)
+### Bill payment workflow
 
-1. Bills auto-populate from Kitchen purchases (via Sync Kitchen)
-2. User clicks "Pay Bill" on any bill
-3. Modal collects: payment date, method (Bank Transfer / Check / ACH / Credit Card / Zelle / Wire), notes
-4. On confirm:
-   - Bill marked as `paid` with `paid_date` and `paid_method`
-   - New ledger transaction created for the payment
-   - Original `kitchen_purchase` transaction is replaced
+Bills auto-populate from Kitchen purchases. The derivation (`kitchen_purchase` transaction → bill) lives in **App**, not in the Bills screen — it used to run only when that tab was open, which left the Transactions matcher with nothing to match against on a cold load. Derived bills are not persisted: a bill only reaches `r7_ledger_bills` once something happens to it.
+
+There are three ways a bill gets paid, in order of how much the operator has to do:
+
+1. **Auto-reconcile (Bills screen)** — when the real bank debit shows up, an open bill is matched on amount + vendor token + date window and marked paid automatically. The Kitchen invoice shadow is deleted so the expense isn't counted twice; the bank row is the record.
+2. **Match invoice (Transactions screen, 🧾 on an expense row)** — for when that heuristic won't fire: the vendor reads differently on the statement, the amount carries a fee, the payment landed weeks late. Every open bill is listed, **ranked, not filtered** (amount 50 / date 30 / vendor 20) because a manual match is a human decision. On confirm the bill is marked paid on the transaction's date with its account as the method, the row is reconciled and inherits the bill's category if it was uncategorized, and the Kitchen shadow is deleted — same rule as auto-reconcile. Matched rows show a `🧾 pays <vendor>` badge and lose the button.
+3. **Pay Bill (Bills screen)** — no bank row exists yet. Modal collects date + method, and this one **creates** a `payment_*` ledger transaction, replacing the `kitchen_purchase` row.
+
+Nothing un-pays a bill yet, on any of the three paths.
 
 ---
 

@@ -663,24 +663,6 @@ export async function parseAggregatorStatement({ pdfBase64, csvText, filename, p
   return await res.json()
 }
 
-// Kitchen Performance summary — usage / theoretical / production / menu.
-// The math lives in the Kitchen repo (kitchen.favo.team/api/performance-summary)
-// since that's the system of record for items, recipes, snapshots and production.
-// CFO consumes the rolled-up JSON and renders natively.
-export async function fetchPerformanceSummary(tenantId, { start, end }) {
-  const base = import.meta.env.VITE_KITCHEN_URL || 'https://kitchen.favo.team'
-  const qs = new URLSearchParams({ tenant_id: tenantId, start, end })
-  const res = await fetch(`${base}/api/performance-summary?${qs}`, {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' },
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'HTTP ' + res.status }))
-    throw new Error(err.error || 'Performance summary failed (' + res.status + ')')
-  }
-  return await res.json()
-}
-
 export async function syncSquarePayouts(tenantId, range = {}) {
   const res = await fetch('/api/sync-square-payouts', {
     method: 'POST',

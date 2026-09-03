@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { fetchPurchaseBudgetPolicy, savePurchaseBudgetPolicy, fetchPurchaseWeekBudget } from "./lib/supabase.js";
-import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchPerformanceSummary, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
+import { supabase, fetchTransactions, upsertTransactions, deleteTransaction, fetchCategories, upsertCategory, deleteCategory, fetchBudgets, upsertBudget, fetchBills, upsertBill, deleteBill, fetchProjects, upsertProject, deleteProject, fetchRecurring, upsertRecurring, deleteRecurring, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchKitchenPurchases, fetchKitchenVendors, purchasesToTransactions, fetchMarketingSpend, fetchBookingsForecast, fetchLaborShifts, fetchPosPunchShifts, syncSquareLabor, fetchPayrollRuns, upsertPayrollRun, deletePayrollRun, fetchTipsDaily, syncSquareTips, applyTipPool, syncSquareSales, createPlaidLinkToken, exchangePlaidPublicToken, syncPlaidTransactions, fetchSquarePayouts, syncSquarePayouts, splitTransaction, unsplitTransaction, fetchAggregatorPayouts, upsertAggregatorPayouts, parseAggregatorStatement, deleteAggregatorPayout, updateAggregatorPayoutDate, onboardFavoBank, fetchFavoBankState, syncFavoBank, transferFavoBank } from "./lib/supabase.js";
 import { UNCATEGORIZED } from "./lib/constants.js";
 import { getMyTenantIds, signInWithPassword, sendMagicLink, signOutUser, fetchTenant, fetchCeoRoi, saveCeoRoi } from "./lib/supabase.js";
 import { initCountry, setCountryFromTenant, country, supports, isCogs, cogsLine, isLabor, isRent, money, moneyCompact, currencySymbol, formatNumber as ctryNumber, formatDate as ctryDate, formatDateShort as ctryDateShort, formatMonth as ctryMonth, formatTime as ctryTime, parseDate as ctryParseDate, parseAmount as ctryParseAmount } from "./lib/country/index.js";
@@ -1859,7 +1859,7 @@ function SplitModal({ txn, categories, payrollRuns = [], onClose, onSave, transa
 }
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, deleteTxn, categories, recurring, bankAccounts, tenantId, dateRange, setDateRange, showToast, payrollRuns = [] }) {
+function Transactions({ transactions, allTransactions, setTransactions, saveTransactions, deleteTxn, categories, recurring, bankAccounts, bills = [], setBills, saveBill, tenantId, dateRange, setDateRange, showToast, payrollRuns = [] }) {
   // Split modal state — opens when the operator clicks ⫶ on a row.
   const [splittingTxn, setSplittingTxn] = useState(null);
   const handleOpenSplit = (id) => {
@@ -2169,6 +2169,86 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     showToast(`Categorized as ${foodCat?.name || "expense"} · reconciled with ${invoice.vendor}`, "success");
   };
 
+  // ── Manual invoice matching ────────────────────────────────────────────────
+  // The Bills screen auto-reconciles a bill against a bank debit when its
+  // heuristic is confident (amount + vendor token + date window). When it is
+  // not — the vendor reads differently on the statement, the amount carries a
+  // fee, the payment landed weeks late — there was no way to say "this debit
+  // pays that invoice". This is that way: the operator picks, the score only
+  // orders the list.
+  const [matchingTxn, setMatchingTxn] = useState(null);
+  const [invoiceSearch, setInvoiceSearch] = useState("");
+
+  // Bank debit → the invoice it paid, so a matched row shows what it settled.
+  const billByTxnId = useMemo(() => {
+    const m = new Map();
+    (bills || []).forEach(b => { if (b.status === "paid" && b.txnId) m.set(b.txnId, b); });
+    return m;
+  }, [bills]);
+
+  const scoreBill = (txn, bill) => {
+    const amt = Math.abs(parseFloat(txn.amount) || 0);
+    const diff = Math.abs(amt - (Math.abs(parseFloat(bill.amount)) || 0));
+    let score = 0;
+    if (diff <= Math.max(1, amt * 0.01)) score += 50;
+    else if (diff <= Math.max(5, amt * 0.05)) score += 25;
+    const days = Math.abs(new Date(txn.date).getTime() - new Date(bill.dueDate).getTime()) / 86400000;
+    if (days <= 5) score += 30;
+    else if (days <= 30) score += 15;
+    const desc = String(txn.description || "").toUpperCase();
+    const tokens = String(bill.vendor || "").toUpperCase().split(/\s+/).filter(w => w.length >= 4);
+    if (tokens.some(w => desc.includes(w))) score += 20;
+    return score;
+  };
+
+  const matchCandidates = (txn) => {
+    if (!txn) return [];
+    const q = invoiceSearch.trim().toUpperCase();
+    return (bills || [])
+      .filter(b => b.status !== "paid")
+      .filter(b => !q || String(b.vendor || "").toUpperCase().includes(q))
+      .map(b => ({ bill: b, score: scoreBill(txn, b) }))
+      .sort((a, b) => b.score - a.score
+        || Math.abs(Math.abs(txn.amount) - a.bill.amount) - Math.abs(Math.abs(txn.amount) - b.bill.amount));
+  };
+
+  const payBillWithTxn = (txn, bill) => {
+    const method = txn.account && txn.account !== "Plaid" ? txn.account : country().defaultPaymentMethod;
+    const paid = {
+      ...bill,
+      status: "paid",
+      paidDate: txn.date,
+      paidMethod: method,
+      txnId: txn.id,
+      notes: (bill.notes ? bill.notes + " · " : "") + "Matched manually to bank transaction",
+    };
+    setBills?.(prev => prev.map(b => (b.id === bill.id ? paid : b)));
+    saveBill?.(paid);
+
+    // The Kitchen invoice shadow and the bank debit are the same expense. The
+    // bank row is the system of record, so the shadow goes — the same rule the
+    // Bills auto-reconcile follows, and without it the P&L counts it twice.
+    const shadowId = bill.source === "kitchen" && bill.txnId && bill.txnId !== txn.id ? bill.txnId : null;
+    const inheritCat = (!txn.category || txn.category === UNCATEGORIZED)
+      && bill.category && bill.category !== UNCATEGORIZED;
+    const updated = {
+      ...txn,
+      reconciled: true,
+      category: inheritCat ? bill.category : txn.category,
+      autoCategorized: false,
+      notes: (txn.notes ? txn.notes + " · " : "") + `Pays invoice ${bill.vendor} ${bill.dueDate}`,
+    };
+    setTransactions(prev => prev
+      .filter(t => t.id !== shadowId)
+      .map(t => (t.id === txn.id ? updated : t)));
+    saveTransactions?.([updated]);
+    if (shadowId) deleteTxn?.(shadowId);
+
+    showToast(`Invoice marked paid — ${bill.vendor} · ${fmt(bill.amount)}`, "success");
+    setMatchingTxn(null);
+    setInvoiceSearch("");
+  };
+
   const togglePriorPeriod = (id) => {
     setTransactions(prev => {
       const updated = prev.map(t => t.id === id ? { ...t, prior_period: !t.prior_period } : t);
@@ -2322,6 +2402,16 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                   <td className="mono" style={{ color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
                   <td style={{ maxWidth: 320 }}>
                     <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.description}</div>
+                    {(() => {
+                      const paidBill = billByTxnId.get(t.id);
+                      if (!paidBill) return null;
+                      return (
+                        <div style={{ marginTop: 4, fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--accent)" }}
+                          title={`Marked invoice "${paidBill.vendor}" as paid · ${fmt(paidBill.amount)} due ${paidBill.dueDate}`}>
+                          🧾 pays {paidBill.vendor} · {fmt(paidBill.amount)}
+                        </div>
+                      );
+                    })()}
                     {t.category === UNCATEGORIZED && (() => {
                       const inv = findInvoiceFor(t);
                       if (!inv) return null;
@@ -2412,6 +2502,16 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                     </div>
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
+                    {t.amount < 0 && t.source !== "kitchen_purchase" && !billByTxnId.has(t.id) && (
+                      <button
+                        className="btn btn-ghost"
+                        style={{ padding: "4px 6px", color: "var(--text3)", marginRight: 2 }}
+                        title="Match this payment to an open invoice and mark the invoice paid"
+                        onClick={() => { setInvoiceSearch(""); setMatchingTxn(t); }}
+                      >
+                        <span style={{ fontSize: 12, lineHeight: 1 }}>🧾</span>
+                      </button>
+                    )}
                     <button
                       className="btn btn-ghost"
                       style={{ padding: "4px 6px", color: "var(--text3)", marginRight: 2 }}
@@ -2441,6 +2541,79 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
           onSave={handleSaveSplit}
         />
       )}
+
+      {matchingTxn && (() => {
+        const cands = matchCandidates(matchingTxn);
+        const txnAmt = Math.abs(parseFloat(matchingTxn.amount) || 0);
+        return (
+          <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setMatchingTxn(null)}>
+            <div className="modal" style={{ maxWidth: 620 }}>
+              <div className="modal-header">
+                <div>
+                  <div className="modal-title">Match invoice</div>
+                  <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4, fontFamily: "var(--font-mono)" }}>
+                    {fmtDate(matchingTxn.date)} · {(matchingTxn.description || "").slice(0, 44)} · {fmt(matchingTxn.amount)}
+                  </div>
+                </div>
+                <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={() => setMatchingTxn(null)}>
+                  <Icon name="close" size={15} />
+                </button>
+              </div>
+              <div className="modal-body">
+                <div style={{ fontSize: 12, color: "var(--text2)", lineHeight: 1.5, marginBottom: 14 }}>
+                  The invoice is marked paid on this transaction's date and this row becomes reconciled.
+                  A Kitchen invoice's synthetic expense row is removed — the bank line takes over as the
+                  record, so the expense is counted once.
+                </div>
+
+                <input
+                  className="input"
+                  placeholder="Filter by vendor…"
+                  value={invoiceSearch}
+                  onChange={e => setInvoiceSearch(e.target.value)}
+                  style={{ marginBottom: 12 }}
+                />
+
+                {cands.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "var(--text3)", lineHeight: 1.6, padding: "10px 0" }}>
+                    {invoiceSearch
+                      ? "No open invoice matches that vendor."
+                      : "No open invoices. Run Sync Kitchen to pull vendor invoices, or add a bill on Bills & Payments."}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
+                    {cands.map(({ bill, score }) => {
+                      const delta = txnAmt - Math.abs(parseFloat(bill.amount) || 0);
+                      const tone = score >= 80 ? "var(--accent)" : score >= 50 ? "var(--yellow)" : "var(--text3)";
+                      const label = score >= 80 ? "provável" : score >= 50 ? "possível" : "sem sinal";
+                      return (
+                        <div key={bill.id} className="card card-sm"
+                          style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, borderColor: score >= 80 ? "var(--accentBorder)" : "var(--border)" }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {bill.vendor}
+                            </div>
+                            <div style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", color: "var(--text3)", marginTop: 3 }}>
+                              {fmt(bill.amount)} · vence {bill.dueDate}
+                              {Math.abs(delta) >= 0.01 && (
+                                <span style={{ color: "var(--yellow)" }}> · difere {fmt(delta)}</span>
+                              )}
+                            </div>
+                          </div>
+                          <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: tone, whiteSpace: "nowrap" }}>{label}</span>
+                          <button className="btn btn-primary btn-sm" onClick={() => payBillWithTxn(matchingTxn, bill)}>
+                            Marcar paga
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -4972,416 +5145,6 @@ function Reconciliation({ transactions, setTransactions, saveTransactions, categ
 }
 
 
-// ─── PERFORMANCE ──────────────────────────────────────────────────────────────
-// Reads the consolidated Kitchen performance summary endpoint and renders
-// four reports natively in the CFO theme:
-//   - Usage Report — purchased value by inventory category in the window
-//   - Theoretical Usage — recipe ingredients × sales (what SHOULD have been
-//     used), vs actual purchased value
-//   - Production Use — what completed production orders pulled from inventory
-//   - Menu Analysis — per-recipe sales, cost, margin and cost%
-//
-// The math lives in restauran7/api/performance-summary.js — Kitchen owns the
-// recipe/inventory model so the source of truth stays single. CFO only
-// re-renders the JSON. See lib/supabase.js fetchPerformanceSummary().
-function Performance({ tenantId, transactions = [], categories = [], dateRange = {}, showToast }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-  const [tab, setTab] = useState("usage"); // usage | theoretical | production | menu | channels
-
-  useEffect(() => {
-    if (!tenantId || tenantId === "demo") return;
-    if (!dateRange?.start || !dateRange?.end) return;
-    let cancelled = false;
-    setLoading(true);
-    setErr("");
-    fetchPerformanceSummary(tenantId, dateRange)
-      .then(json => { if (!cancelled) setData(json); })
-      .catch(e => { if (!cancelled) { setErr(e.message || String(e)); showToast?.(e.message || "Performance fetch failed", "error"); } })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [tenantId, dateRange?.start, dateRange?.end]);
-
-  const pctTone = (pct, target) => {
-    if (pct == null) return "var(--text3)";
-    if (pct <= target) return "var(--accent)";
-    if (pct <= target * 1.15) return "var(--yellow)";
-    return "var(--red)";
-  };
-
-  // ── Net sales — the denominator every cost-% on this screen divides by ──
-  // Kitchen's period_net_sales sums its own r7_orders table, which this tenant
-  // never populates (revenue arrives through Sync Sales into the CFO ledger),
-  // so it returns 0 and every cost-% renders "—". Use the CFO's own canonical
-  // figure instead — source='square_net_sales', the same basis the Insights
-  // source-reconciliation panel holds the ledger against. Closed months exist
-  // only as imported P&L summaries with no Square rows, so fall back to ledger
-  // income there, and to Kitchen's number last.
-  const isLedger = useMemo(() => makeLedgerFilter(categories, transactions), [categories, transactions]);
-  const netSales = useMemo(() => {
-    const square = transactions
-      .filter(t => t.source === "square_net_sales" || t.source === "square_sale_gross")
-      .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
-    if (square > 0) return { value: square, basis: "Square net sales (Sync Sales)" };
-    const income = transactions
-      .filter(t => parseFloat(t.amount || 0) > 0 && isLedger(t))
-      .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
-    if (income > 0) return { value: income, basis: "ledger income (no Square rows in this window)" };
-    return { value: data?.period_net_sales || 0, basis: "Favo Kitchen orders" };
-  }, [transactions, isLedger, data]);
-  const pctOfSales = (value) =>
-    netSales.value > 0 && value != null ? (parseFloat(value) / netSales.value * 100) : null;
-
-  // Revenue by channel, straight from the ledger: Sync Sales books one row per
-  // day per channel, each under its own "Revenue - <platform>" category.
-  const channelRows = useMemo(() => {
-    const nameById = {};
-    for (const c of categories) nameById[c.id] = c.name;
-    const byChannel = {};
-    for (const t of transactions) {
-      if (t.source !== "square_net_sales" && t.source !== "square_sale_gross") continue;
-      const channel = (nameById[t.category] || "Revenue - Unmapped").replace(/^Revenue - /, "");
-      if (!byChannel[channel]) byChannel[channel] = { channel, days: 0, revenue: 0 };
-      byChannel[channel].days += 1;
-      byChannel[channel].revenue += parseFloat(t.amount || 0);
-    }
-    return Object.values(byChannel)
-      .map(r => ({ ...r, revenue: Math.round(r.revenue * 100) / 100 }))
-      .sort((a, b) => b.revenue - a.revenue);
-  }, [transactions, categories]);
-  const channelTotal = channelRows.reduce((s, r) => s + r.revenue, 0);
-
-  return (
-    <div className="page">
-      <div className="page-header">
-        <div>
-          <div className="page-title">Performance</div>
-          <div className="page-subtitle">
-            {dateRange?.start} → {dateRange?.end} · TorresBee · powered by Favo Kitchen
-            {netSales.value > 0 && (
-              <span title={`Basis: ${netSales.basis}`}> · Net sales {fmt(netSales.value)}</span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Tab switcher */}
-      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 20 }}>
-        {[
-          { id: "usage",       label: "📊 Usage Report" },
-          { id: "theoretical", label: "⚗️ Theoretical Usage" },
-          { id: "production",  label: "🏭 Production Use" },
-          { id: "menu",        label: "🍽 Menu Analysis" },
-          { id: "channels",    label: "📡 Sales Channels" },
-        ].map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            style={{
-              background: "none", border: "none", padding: "10px 18px",
-              fontSize: 12, fontWeight: 600, cursor: "pointer",
-              color: tab === t.id ? "var(--accent)" : "var(--text3)",
-              borderBottom: tab === t.id ? "2px solid var(--accent)" : "2px solid transparent",
-              fontFamily: "var(--font-sans)",
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {loading && (
-        <div className="empty" style={{ padding: 60 }}>
-          <div className="empty-icon">⏳</div>
-          <div className="empty-title">Loading from Favo Kitchen…</div>
-        </div>
-      )}
-
-      {err && !loading && (
-        <div className="card" style={{ padding: 20, color: "var(--red)" }}>
-          <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, marginBottom: 6 }}>Could not load Performance</div>
-          <div style={{ fontSize: 12, color: "var(--text3)", fontFamily: "var(--font-mono)" }}>{err}</div>
-        </div>
-      )}
-
-      {!loading && !err && data && (
-        <>
-          {/* Counts strip */}
-          <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(5, 1fr)", marginBottom: 16 }}>
-            <KpiTile label="Items" value={data.counts.items} />
-            <KpiTile label="Recipes" value={data.counts.recipes} />
-            <KpiTile label="Purchases" value={data.counts.purchases} />
-            <KpiTile label="Orders" value={data.counts.orders} />
-            <KpiTile label="Production Orders" value={data.counts.prod_orders} />
-          </div>
-
-          {/* COGS strip — only when the Kitchen paired inventory counts around
-              the window (usage_method snapshots*). Same math the Kitchen
-              Performance screen showed: opening + purchases − closing. */}
-          {data.cogs && (
-            <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(5, 1fr)", marginBottom: 16 }}>
-              <KpiTile label={`Opening (${data.cogs.opening_snapshot?.date || "—"})`} value={fmt(data.cogs.opening_value)} />
-              <KpiTile label="Purchases" value={fmt(data.cogs.purchases_value)} />
-              <KpiTile label={`Closing (${data.cogs.closing_snapshot === "live_stock" ? "live stock" : data.cogs.closing_snapshot?.date || "—"})`} value={fmt(data.cogs.closing_value)} />
-              <KpiTile label="COGS" value={fmt(data.cogs.cogs)} />
-              <KpiTile label="Food Cost %" value={pctOfSales(data.cogs.cogs) != null ? pctOfSales(data.cogs.cogs).toFixed(1) + "%" : "—"} />
-            </div>
-          )}
-
-          {tab === "usage" && (data.cogs ? (
-            <PerformanceTable
-              title="Usage Report — counted usage by category"
-              note={`Used = opening count + purchases − closing count, valued per stock unit. Counts paired by Favo Kitchen (${data.cogs.opening_snapshot?.date} → ${data.cogs.closing_snapshot === "live_stock" ? "live stock" : data.cogs.closing_snapshot?.date}). Cost% compares used value to net sales.`}
-              total={data.usage_report.totals.used_value}
-              totalLabel="Total used"
-              pct={pctOfSales(data.usage_report.totals.used_value)}
-              pctTone={pctTone(pctOfSales(data.usage_report.totals.used_value), 35)}
-              rows={data.usage_report.by_category}
-              columns={[
-                { key: "cat_name",        label: "Category" },
-                { key: "start_value",     label: "Opening",    align: "right", format: "money" },
-                { key: "purchased_value", label: "Purchased",  align: "right", format: "money" },
-                { key: "end_value",       label: "Closing",    align: "right", format: "money" },
-                { key: "used_value",      label: "Used",       align: "right", format: "money" },
-                { key: "pct",             label: "% of sales", align: "right", format: "pct",
-                  derive: (r) => pctOfSales(r.used_value || 0) },
-              ]}
-            />
-          ) : (
-            <PerformanceTable
-              title="Usage Report — purchased value by category"
-              note="Sum of vendor invoices in the window grouped by inventory category. Used as a proxy for 'consumed' — take opening/closing inventory counts in Favo Kitchen to unlock exact usage here. Cost% compares to net sales."
-              total={data.usage_report.totals.purchased_value}
-              totalLabel="Total purchased"
-              pct={pctOfSales(data.usage_report.totals.purchased_value)}
-              pctTone={pctTone(pctOfSales(data.usage_report.totals.purchased_value), 35)}
-              rows={data.usage_report.by_category}
-              columns={[
-                { key: "cat_name",        label: "Category" },
-                { key: "item_count",      label: "Items",      align: "right" },
-                { key: "purchased_value", label: "Purchased",  align: "right", format: "money" },
-                { key: "pct",             label: "% of sales", align: "right", format: "pct",
-                  derive: (r) => pctOfSales(r.purchased_value) },
-              ]}
-            />
-          ))}
-
-          {tab === "theoretical" && (
-            <PerformanceTable
-              title="Theoretical Usage — what recipes × sales SHOULD have used"
-              note={data.cogs
-                ? "Computed from active recipes × times sold (Square line items). 'Actual' is COUNTED usage (opening + purchases − closing). Positive diff = inventory dropped more than recipes predicted — over-portioning, waste or unlogged use."
-                : "Computed from active recipes × times sold (Square line items). Compare against actual purchased value to spot over-portioning or waste. Positive diff = inventory dropped more than recipes predicted."}
-              total={data.theoretical_usage.totals.theoretical_value}
-              totalLabel="Total theoretical"
-              pct={pctOfSales(data.theoretical_usage.totals.theoretical_value)}
-              pctTone={pctTone(pctOfSales(data.theoretical_usage.totals.theoretical_value), 32)}
-              rows={data.theoretical_usage.by_category}
-              columns={[
-                { key: "cat_name",          label: "Category" },
-                { key: "actual_value",      label: "Actual",       align: "right", format: "money" },
-                { key: "theoretical_value", label: "Theoretical",  align: "right", format: "money" },
-                { key: "diff_value",        label: "Diff",         align: "right", format: "moneyDiff" },
-              ]}
-            />
-          )}
-
-          {tab === "production" && (
-            <PerformanceTable
-              title={`Production Use — what ${data.production_use.totals.po_count} POs pulled from inventory`}
-              note="Value of items consumed by completed production orders in the window. Tracks the back-of-house: batches, preps, dough/sauce production, etc."
-              total={data.production_use.totals.value}
-              totalLabel="Total consumed"
-              pct={null}
-              rows={data.production_use.by_category}
-              columns={[
-                { key: "cat_name", label: "Category" },
-                { key: "qty",      label: "Qty (recipe units)", align: "right", format: "qty" },
-                { key: "value",    label: "Value",              align: "right", format: "money" },
-              ]}
-            />
-          )}
-
-          {/* Channel P&L — Kitchen's block when it carries the economics (it
-              prices each line item against the recipe, which the CFO ledger
-              can't do), the ledger's own per-channel revenue otherwise. Both
-              classify channels identically, so the two agree on the split and
-              differ only in how much detail they can show. */}
-          {tab === "channels" && data.sales_channels?.by_channel?.some(c => c.contribution != null) ? (
-            <PerformanceTable
-              title="Sales Channels — what each channel actually pays"
-              note={`Marketplace menus are marked up, so food cost % alone flatters delivery — only contribution (revenue − food cost − commission) compares channels fairly. Cost % is over the revenue that has a recipe. Commission rates are assumptions set in ${data.sales_channels.commission_source}, not measured: ${Object.entries(data.sales_channels.commission_rates || {}).map(([k, v]) => `${k} ${(v * 100).toFixed(1)}%`).join(" · ")}.`}
-              total={data.sales_channels.totals.contribution}
-              totalLabel="Total contribution"
-              pct={null}
-              extraTotals={[
-                { label: "Revenue", value: data.sales_channels.totals.revenue, format: "money" },
-                { label: "Food cost", value: data.sales_channels.totals.food_cost, format: "money" },
-                { label: "Commission", value: data.sales_channels.totals.commission, format: "money" },
-              ]}
-              rows={data.sales_channels.by_channel}
-              columns={[
-                { key: "channel",       label: "Channel" },
-                { key: "orders",        label: "Orders",       align: "right", format: "qty" },
-                { key: "revenue",       label: "Revenue",      align: "right", format: "money" },
-                { key: "food_cost",     label: "Food cost",    align: "right", format: "money" },
-                { key: "food_cost_pct", label: "Food cost %",  align: "right", format: "pct" },
-                { key: "commission",    label: "Commission",   align: "right", format: "money" },
-                { key: "contribution",  label: "Contribution", align: "right", format: "money" },
-                { key: "contribution_pct", label: "Contrib. %", align: "right", format: "pctHigh" },
-              ]}
-            />
-          ) : (channelRows.length > 0 ? (
-            <PerformanceTable
-              title="Sales Channels — where the revenue comes from"
-              note="Net sales per channel from Sync Sales (Square Orders API), grouped by revenue category. Gross of platform commission and net of tax — marketplace commissions land as expenses when the platform statement is imported."
-              total={channelTotal}
-              totalLabel="Total revenue"
-              pct={null}
-              rows={channelRows}
-              columns={[
-                { key: "channel", label: "Channel" },
-                { key: "days",    label: "Days with sales", align: "right", format: "qty" },
-                { key: "revenue", label: "Revenue",         align: "right", format: "money" },
-                { key: "pct",     label: "% of revenue",    align: "right", format: "pct",
-                  derive: (r) => channelTotal > 0 ? (r.revenue / channelTotal * 100) : null },
-              ]}
-            />
-          ) : (
-            <div className="card" style={{ padding: 20, color: "var(--text3)", fontSize: 13 }}>
-              No Square sales in this window. Run <strong>Sync Sales</strong> for the period to populate channels.
-            </div>
-          ))}
-
-          {tab === "menu" && (
-            <PerformanceTable
-              title={`Menu Analysis — top items by revenue (${data.menu_analysis.totals.recipes_with_sales} items)`}
-              note="Sales-by-item with ingredient cost from recipes. Margin = revenue − cost. Cost% over 35% (food benchmark) is highlighted. Top 100 shown."
-              total={data.menu_analysis.totals.revenue}
-              totalLabel="Total revenue"
-              pct={data.menu_analysis.totals.cost_pct}
-              pctTone={pctTone(data.menu_analysis.totals.cost_pct, 32)}
-              extraTotals={[
-                { label: "Cost", value: data.menu_analysis.totals.cost, format: "money" },
-                { label: "Margin", value: data.menu_analysis.totals.margin, format: "money" },
-                { label: "Units sold", value: data.menu_analysis.totals.sold, format: "qty" },
-              ]}
-              rows={data.menu_analysis.by_recipe}
-              columns={[
-                { key: "recipe_name", label: "Recipe" },
-                { key: "category",    label: "Category" },
-                { key: "sold",        label: "Sold",     align: "right", format: "qty" },
-                { key: "revenue",     label: "Revenue",  align: "right", format: "money" },
-                { key: "cost",        label: "Cost",     align: "right", format: "money" },
-                { key: "margin",      label: "Margin",   align: "right", format: "money" },
-                { key: "cost_pct",    label: "Cost %",   align: "right", format: "pct" },
-              ]}
-            />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function KpiTile({ label, value }) {
-  return (
-    <div className="kpi-card">
-      <div className="kpi-label">{label}</div>
-      <div className="kpi-value" style={{ fontSize: 22 }}>{value}</div>
-    </div>
-  );
-}
-
-function PerformanceTable({ title, note, total, totalLabel, pct, pctTone, rows = [], columns = [], extraTotals = [] }) {
-  const formatCell = (val, format) => {
-    if (val == null || val === "") return "—";
-    if (format === "money") return fmt(parseFloat(val));
-    if (format === "moneyDiff") {
-      const n = parseFloat(val);
-      const color = n > 0.01 ? "var(--red)" : n < -0.01 ? "var(--accent)" : "var(--text3)";
-      return <span style={{ color }}>{n >= 0 ? "+" : ""}{fmt(n)}</span>;
-    }
-    if (format === "qty") return ctryNumber(val);
-    if (format === "pct") {
-      const n = parseFloat(val);
-      const color = n > 35 ? "var(--red)" : n > 28 ? "var(--yellow)" : "var(--accent)";
-      return <span style={{ color }}>{n.toFixed(1)}%</span>;
-    }
-    // Same shape, opposite polarity: for a contribution margin more is better,
-    // so the cost thresholds above would paint the best channel red.
-    if (format === "pctHigh") {
-      const n = parseFloat(val);
-      const color = n >= 70 ? "var(--accent)" : n >= 55 ? "var(--yellow)" : "var(--red)";
-      return <span style={{ color }}>{n.toFixed(1)}%</span>;
-    }
-    return val;
-  };
-
-  return (
-    <div className="card" style={{ padding: 0 }}>
-      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)" }}>
-        <div style={{ fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{title}</div>
-        <div style={{ fontSize: 11, color: "var(--text3)", lineHeight: 1.5 }}>{note}</div>
-      </div>
-      <div style={{ display: "flex", gap: 24, padding: "12px 18px", background: "var(--surface2)", flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>{totalLabel}</div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, color: "var(--accent)" }}>{fmt(total)}</div>
-        </div>
-        {pct != null && (
-          <div>
-            <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>% of sales</div>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 18, color: pctTone || "var(--text)" }}>{pct.toFixed(1)}%</div>
-          </div>
-        )}
-        {extraTotals.map((e, i) => (
-          <div key={i}>
-            <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>{e.label}</div>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 18 }}>
-              {e.format === "qty" ? ctryNumber(e.value) : fmt(parseFloat(e.value))}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="table-wrap">
-        {rows.length === 0 ? (
-          <div className="empty" style={{ padding: 30 }}>
-            <div className="empty-icon">📭</div>
-            <div className="empty-title">No data for this window</div>
-            <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>Try a wider date range or sync Kitchen data first</div>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                {columns.map(c => (
-                  <th key={c.key} style={{ textAlign: c.align || "left" }}>{c.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, i) => (
-                <tr key={i}>
-                  {columns.map(c => {
-                    const raw = c.derive ? c.derive(row) : row[c.key];
-                    return (
-                      <td key={c.key} className={c.format === "money" || c.format === "qty" || c.format === "pct" || c.format === "moneyDiff" ? "mono" : ""} style={{ textAlign: c.align || "left" }}>
-                        {formatCell(raw, c.format)}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ─── BILLS & PAYMENTS (Accounts Payable) ─────────────────────────────────────
 function Bills({ transactions, setTransactions, bills, setBills, saveBill, deleteB, categories, dateRange, showToast, saveTransactions }) {
   // bills/setBills come from parent App state
@@ -5395,29 +5158,6 @@ function Bills({ transactions, setTransactions, bills, setBills, saveBill, delet
   // Payment rails are country-specific: ACH/Check/Zelle in the US, Pix/Boleto
   // in Brazil.
   const METHODS = country().paymentMethods;
-
-  // Sync new Kitchen purchases into bills
-  useEffect(() => {
-    const kitchenTxns = transactions.filter(t => t.source === "kitchen_purchase");
-    const existingTxnIds = new Set(bills.map(b => b.txnId));
-    const newBills = kitchenTxns
-      .filter(t => !existingTxnIds.has(t.id))
-      .map(t => ({
-        id: "bill_" + t.id,
-        txnId: t.id,
-        vendor: t.description,
-        amount: Math.abs(t.amount),
-        dueDate: t.date,
-        issueDate: t.date,
-        status: "due",
-        category: t.category,
-        paidDate: null,
-        paidMethod: null,
-        notes: t.notes || "",
-        source: "kitchen",
-      }));
-    if (newBills.length > 0) setBills(prev => [...prev, ...newBills]);
-  }, [transactions]);
 
   // ─── Auto-reconcile bills against real bank activity ───────────────────────
   // When the real bank debit shows up (Plaid sync, or an imported BoA statement)
@@ -9972,6 +9712,42 @@ export default function App() {
     await upsertBill(bill, TENANT_ID);
   };
 
+  // Kitchen purchases → bills (Accounts Payable).
+  //
+  // This used to live inside the Bills screen, which meant the AP list only
+  // materialised once the operator opened that tab — and the Transactions
+  // invoice matcher had nothing to match against on a cold load. It belongs to
+  // the App: one owner, every screen sees the same list.
+  //
+  // Derived, not persisted: a bill only reaches r7_ledger_bills when something
+  // happens to it (paid, matched, edited). Writing every Kitchen purchase here
+  // would duplicate Kitchen's data and leave orphans when a purchase is
+  // deleted there.
+  useEffect(() => {
+    const kitchenTxns = transactions.filter(t => t.source === "kitchen_purchase");
+    if (kitchenTxns.length === 0) return;
+    setBills(prev => {
+      const existingTxnIds = new Set(prev.map(b => b.txnId));
+      const newBills = kitchenTxns
+        .filter(t => !existingTxnIds.has(t.id))
+        .map(t => ({
+          id: "bill_" + t.id,
+          txnId: t.id,
+          vendor: t.description,
+          amount: Math.abs(t.amount),
+          dueDate: t.date,
+          issueDate: t.date,
+          status: "due",
+          category: t.category,
+          paidDate: null,
+          paidMethod: null,
+          notes: t.notes || "",
+          source: "kitchen",
+        }));
+      return newBills.length > 0 ? [...prev, ...newBills] : prev;
+    });
+  }, [transactions]);
+
   const saveProject = async (project) => {
     if (TENANT_ID === "demo") return;
     await upsertProject(project, TENANT_ID);
@@ -10052,7 +9828,6 @@ export default function App() {
     { id: "transactions", label: "Transactions", icon: "transactions", badge: uncat > 0 ? uncat : null },
     { id: "categories", label: "Chart of Accounts", icon: "categories" },
     { id: "pl", label: "Profit & Loss", icon: "pl" },
-    { id: "performance", label: "Performance", icon: "insights" },
     { id: "trends", label: "Trends", icon: "trends" },
     { id: "cashflow", label: "Cash Flow", icon: "cashflow" },
     { id: "budget", label: "Budget", icon: "budget" },
@@ -10074,10 +9849,9 @@ export default function App() {
       case "payroll":      return <Payroll runs={payrollRuns} shifts={laborShifts} tipsDaily={tipsDaily} transactions={transactions} categories={categories} setTransactions={setTransactions} saveTransactions={saveTransactions} tenantId={TENANT_ID} onChange={() => loadAll(false)} showToast={showToast} />;
       case "projects":     return <Projects transactions={filteredByDate} projects={projects} setProjects={setProjects} saveProject={saveProject} deleteProjectDB={async(id)=>{setProjects(p=>p.filter(x=>x.id!==id));if(TENANT_ID!=="demo")await deleteProject(id);}} categories={categories} dateRange={dateRange} />;
       case "dashboard":    return <Dashboard transactions={filteredByAccrual} allTransactions={transactions} categories={categories} budgets={budgets} bankAccounts={bankAccounts} dateRange={dateRange} />;
-      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} payrollRuns={payrollRuns} />;
+      case "transactions": return <Transactions transactions={filteredByDate} allTransactions={transactions} setTransactions={setTransactions} saveTransactions={saveTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} categories={categories} recurring={recurring} bankAccounts={bankAccounts} bills={bills} setBills={setBills} saveBill={saveBill} tenantId={TENANT_ID} dateRange={dateRange} setDateRange={setDateRange} showToast={showToast} payrollRuns={payrollRuns} />;
       case "categories":   return <Categories categories={categories} setCategories={setCategories} saveCategory={saveCategory} deleteCategory={async(id)=>{setCategories(p=>p.filter(c=>c.id!==id));if(TENANT_ID!=="demo")await deleteCategory(id);}} transactions={filteredByDate} showToast={showToast} />;
       case "pl":           return <PLReport transactions={filteredByAccrual} allTransactions={transactions} categories={categories} dateRange={dateRange} setTransactions={setTransactions} deleteTxn={async(id)=>{if(TENANT_ID!=="demo")await deleteTransaction(id);}} payrollRuns={payrollRuns} tenantId={TENANT_ID} showToast={showToast} />;
-      case "performance":  return <Performance tenantId={TENANT_ID} transactions={filteredByDate} categories={categories} dateRange={dateRange} showToast={showToast} />;
       case "trends":       return <Trends tenantId={TENANT_ID} categories={categories} allTransactions={transactions} />;
       case "cashflow":     return <CashFlow transactions={filteredByDate} categories={categories} recurring={recurring} dateRange={dateRange} />;
       case "budget":       return <Budget transactions={filteredByDate} categories={categories} budgets={budgets} setBudgets={setBudgets} saveBudget={saveBudget} showToast={showToast} />;
