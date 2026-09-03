@@ -2186,19 +2186,32 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     return m;
   }, [bills]);
 
-  const scoreBill = (txn, bill) => {
+  // Amount and vendor are evidence. The date is not: the invoice is dated when
+  // it was issued, the bank line when it cleared, and between the two sit
+  // net-30 terms, a check left in a drawer and a weekend. So an approximate
+  // date keeps earning points out to a quarter instead of falling off a cliff
+  // at five days — but on its own it can never carry a match.
+  const gradeBill = (txn, bill) => {
     const amt = Math.abs(parseFloat(txn.amount) || 0);
     const diff = Math.abs(amt - (Math.abs(parseFloat(bill.amount)) || 0));
-    let score = 0;
-    if (diff <= Math.max(1, amt * 0.01)) score += 50;
-    else if (diff <= Math.max(5, amt * 0.05)) score += 25;
-    const days = Math.abs(new Date(txn.date).getTime() - new Date(bill.dueDate).getTime()) / 86400000;
-    if (days <= 5) score += 30;
-    else if (days <= 30) score += 15;
+    const amountHit = diff <= Math.max(1, amt * 0.01) ? "exact"
+      : diff <= Math.max(5, amt * 0.05) ? "near" : null;
+
     const desc = String(txn.description || "").toUpperCase();
     const tokens = String(bill.vendor || "").toUpperCase().split(/\s+/).filter(w => w.length >= 4);
-    if (tokens.some(w => desc.includes(w))) score += 20;
-    return score;
+    const vendorHit = tokens.length > 0 && tokens.some(w => desc.includes(w));
+
+    const days = Math.abs(new Date(txn.date).getTime() - new Date(bill.dueDate).getTime()) / 86400000;
+
+    let score = 0;
+    if (amountHit === "exact") score += 50;
+    else if (amountHit === "near") score += 30;
+    if (vendorHit) score += 30;
+    if (days <= 7) score += 20;
+    else if (days <= 30) score += 15;
+    else if (days <= 90) score += 8;
+
+    return { score, amountHit, vendorHit, days };
   };
 
   const openBills = useMemo(() => (bills || []).filter(b => b.status !== "paid"), [bills]);
@@ -2208,7 +2221,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     const q = invoiceSearch.trim().toUpperCase();
     return openBills
       .filter(b => !q || String(b.vendor || "").toUpperCase().includes(q))
-      .map(b => ({ bill: b, score: scoreBill(txn, b) }))
+      .map(b => ({ bill: b, ...gradeBill(txn, b) }))
       .sort((a, b) => b.score - a.score
         || Math.abs(Math.abs(txn.amount) - a.bill.amount) - Math.abs(Math.abs(txn.amount) - b.bill.amount));
   };
@@ -2218,12 +2231,18 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
   // description — that is the one operators actually see.
   const canMatch = (t) => t.amount < 0 && t.source !== "kitchen_purchase" && !billByTxnId.has(t.id);
 
+  // The suggested match needs an anchor — the amount on the nose, or the vendor
+  // named with the amount in the neighbourhood. Points scraped together from a
+  // loose amount and a nearby date are not a match, they are a coincidence, and
+  // an expense with no invoice behind it should simply stay unmatched. The
+  // modal still lists every open invoice for a deliberate manual match.
   const bestBillFor = (t) => {
     if (!canMatch(t) || openBills.length === 0) return null;
     let best = null;
     for (const b of openBills) {
-      const score = scoreBill(t, b);
-      if (score >= 50 && (!best || score > best.score)) best = { bill: b, score };
+      const g = gradeBill(t, b);
+      const anchored = g.amountHit === "exact" || (g.vendorHit && g.amountHit === "near");
+      if (anchored && (!best || g.score > best.score)) best = { bill: b, ...g };
     }
     return best;
   };
@@ -2618,10 +2637,13 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                   </div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
-                    {cands.map(({ bill, score }) => {
+                    {cands.map(({ bill, score, amountHit, vendorHit, days }) => {
                       const delta = txnAmt - Math.abs(parseFloat(bill.amount) || 0);
-                      const tone = score >= 80 ? "var(--accent)" : score >= 50 ? "var(--yellow)" : "var(--text3)";
-                      const label = score >= 80 ? "likely" : score >= 50 ? "possible" : "no signal";
+                      const anchored = amountHit === "exact" || (vendorHit && amountHit === "near");
+                      const tone = anchored && score >= 90 ? "var(--accent)"
+                        : anchored ? "var(--yellow)" : "var(--text3)";
+                      const label = anchored && score >= 90 ? "likely"
+                        : anchored ? "possible" : "no signal";
                       return (
                         <div key={bill.id} className="card card-sm"
                           style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, borderColor: score >= 80 ? "var(--accentBorder)" : "var(--border)" }}>
@@ -2633,6 +2655,9 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                               {fmt(bill.amount)} · due {bill.dueDate}
                               {Math.abs(delta) >= 0.01 && (
                                 <span style={{ color: "var(--yellow)" }}> · off by {fmt(delta)}</span>
+                              )}
+                              {isFinite(days) && days > 7 && (
+                                <span> · {Math.round(days)}d apart</span>
                               )}
                             </div>
                           </div>
