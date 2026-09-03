@@ -2231,18 +2231,26 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
   // description — that is the one operators actually see.
   const canMatch = (t) => t.amount < 0 && t.source !== "kitchen_purchase" && !billByTxnId.has(t.id);
 
-  // The suggested match needs an anchor — the amount on the nose, or the vendor
-  // named with the amount in the neighbourhood. Points scraped together from a
-  // loose amount and a nearby date are not a match, they are a coincidence, and
-  // an expense with no invoice behind it should simply stay unmatched. The
-  // modal still lists every open invoice for a deliberate manual match.
+  // A suggestion needs an anchor AND a date that is at least in the same season.
+  //
+  // The anchor is the amount on the nose, or the vendor named with the amount
+  // in the neighbourhood; points scraped from a loose amount plus a nearby date
+  // are a coincidence, not an invoice. The horizon is what keeps the anchor
+  // honest: a statement line like "CHECK 951" carries no vendor at all, so a
+  // round $1,200.00 is the only signal there will ever be — and a round amount
+  // matches an invoice from last year just as happily as this month's. Past the
+  // window where the date still earns points, we say nothing.
+  const MATCH_HORIZON_DAYS = 90;
+  const isSuggestable = (g) =>
+    (g.amountHit === "exact" || (g.vendorHit && g.amountHit === "near"))
+    && isFinite(g.days) && g.days <= MATCH_HORIZON_DAYS;
+
   const bestBillFor = (t) => {
     if (!canMatch(t) || openBills.length === 0) return null;
     let best = null;
     for (const b of openBills) {
       const g = gradeBill(t, b);
-      const anchored = g.amountHit === "exact" || (g.vendorHit && g.amountHit === "near");
-      if (anchored && (!best || g.score > best.score)) best = { bill: b, ...g };
+      if (isSuggestable(g) && (!best || g.score > best.score)) best = { bill: b, ...g };
     }
     return best;
   };
@@ -2639,11 +2647,11 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                   <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
                     {cands.map(({ bill, score, amountHit, vendorHit, days }) => {
                       const delta = txnAmt - Math.abs(parseFloat(bill.amount) || 0);
-                      const anchored = amountHit === "exact" || (vendorHit && amountHit === "near");
-                      const tone = anchored && score >= 90 ? "var(--accent)"
-                        : anchored ? "var(--yellow)" : "var(--text3)";
-                      const label = anchored && score >= 90 ? "likely"
-                        : anchored ? "possible" : "no signal";
+                      const ok = isSuggestable({ amountHit, vendorHit, days });
+                      const tone = ok && score >= 90 ? "var(--accent)"
+                        : ok ? "var(--yellow)" : "var(--text3)";
+                      const label = ok && score >= 90 ? "likely"
+                        : ok ? "possible" : "no signal";
                       return (
                         <div key={bill.id} className="card card-sm"
                           style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, borderColor: score >= 80 ? "var(--accentBorder)" : "var(--border)" }}>
