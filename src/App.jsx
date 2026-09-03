@@ -2201,15 +2201,31 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
     return score;
   };
 
+  const openBills = useMemo(() => (bills || []).filter(b => b.status !== "paid"), [bills]);
+
   const matchCandidates = (txn) => {
     if (!txn) return [];
     const q = invoiceSearch.trim().toUpperCase();
-    return (bills || [])
-      .filter(b => b.status !== "paid")
+    return openBills
       .filter(b => !q || String(b.vendor || "").toUpperCase().includes(q))
       .map(b => ({ bill: b, score: scoreBill(txn, b) }))
       .sort((a, b) => b.score - a.score
         || Math.abs(Math.abs(txn.amount) - a.bill.amount) - Math.abs(Math.abs(txn.amount) - b.bill.amount));
+  };
+
+  // Whether a row can be matched at all. The icon in the actions column is easy
+  // to miss, so a row with a plausible invoice advertises it under the
+  // description — that is the one operators actually see.
+  const canMatch = (t) => t.amount < 0 && t.source !== "kitchen_purchase" && !billByTxnId.has(t.id);
+
+  const bestBillFor = (t) => {
+    if (!canMatch(t) || openBills.length === 0) return null;
+    let best = null;
+    for (const b of openBills) {
+      const score = scoreBill(t, b);
+      if (score >= 50 && (!best || score > best.score)) best = { bill: b, score };
+    }
+    return best;
   };
 
   const payBillWithTxn = (txn, bill) => {
@@ -2412,7 +2428,27 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                         </div>
                       );
                     })()}
-                    {t.category === UNCATEGORIZED && (() => {
+                    {(() => {
+                      const best = bestBillFor(t);
+                      if (!best) return null;
+                      return (
+                        <button
+                          onClick={() => { setInvoiceSearch(""); setMatchingTxn(t); }}
+                          title={`Open invoice matching — ${best.bill.vendor} · ${fmt(best.bill.amount)} due ${best.bill.dueDate}`}
+                          style={{
+                            marginTop: 4, padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)",
+                            background: "var(--accentBg)", color: "var(--accent)",
+                            border: "1px solid var(--accentBorder)", borderRadius: 4, cursor: "pointer",
+                          }}
+                        >
+                          🧾 Match invoice → {best.bill.vendor} · {fmt(best.bill.amount)}
+                        </button>
+                      );
+                    })()}
+                    {/* Older suggestion: categorize against a raw Kitchen purchase. Only
+                        when no open bill fits, otherwise the row grows two near-identical
+                        buttons and the weaker one wins the click. */}
+                    {t.category === UNCATEGORIZED && !bestBillFor(t) && (() => {
                       const inv = findInvoiceFor(t);
                       if (!inv) return null;
                       return (
@@ -2425,7 +2461,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                             border: "1px solid var(--accentBorder)", borderRadius: 4, cursor: "pointer",
                           }}
                         >
-                          🧾 Match → {inv.vendor} · {fmt(inv.amount)}
+                          🧾 Categorize → {inv.vendor} · {fmt(inv.amount)}
                         </button>
                       );
                     })()}
@@ -2502,7 +2538,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                     </div>
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    {t.amount < 0 && t.source !== "kitchen_purchase" && !billByTxnId.has(t.id) && (
+                    {canMatch(t) && (
                       <button
                         className="btn btn-ghost"
                         style={{ padding: "4px 6px", color: "var(--text3)", marginRight: 2 }}
@@ -2585,7 +2621,7 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                     {cands.map(({ bill, score }) => {
                       const delta = txnAmt - Math.abs(parseFloat(bill.amount) || 0);
                       const tone = score >= 80 ? "var(--accent)" : score >= 50 ? "var(--yellow)" : "var(--text3)";
-                      const label = score >= 80 ? "provável" : score >= 50 ? "possível" : "sem sinal";
+                      const label = score >= 80 ? "likely" : score >= 50 ? "possible" : "no signal";
                       return (
                         <div key={bill.id} className="card card-sm"
                           style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, borderColor: score >= 80 ? "var(--accentBorder)" : "var(--border)" }}>
@@ -2594,15 +2630,15 @@ function Transactions({ transactions, allTransactions, setTransactions, saveTran
                               {bill.vendor}
                             </div>
                             <div style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", color: "var(--text3)", marginTop: 3 }}>
-                              {fmt(bill.amount)} · vence {bill.dueDate}
+                              {fmt(bill.amount)} · due {bill.dueDate}
                               {Math.abs(delta) >= 0.01 && (
-                                <span style={{ color: "var(--yellow)" }}> · difere {fmt(delta)}</span>
+                                <span style={{ color: "var(--yellow)" }}> · off by {fmt(delta)}</span>
                               )}
                             </div>
                           </div>
                           <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: tone, whiteSpace: "nowrap" }}>{label}</span>
                           <button className="btn btn-primary btn-sm" onClick={() => payBillWithTxn(matchingTxn, bill)}>
-                            Marcar paga
+                            Mark paid
                           </button>
                         </div>
                       );
