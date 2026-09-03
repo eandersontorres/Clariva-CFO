@@ -219,7 +219,7 @@ export default async function handler(req, res) {
     const nameToId = {};
     for (const a of accounts || []) nameToId[String(a.name).toLowerCase()] = a.id;
 
-    let totalAdded = 0, totalModified = 0, totalRemoved = 0;
+    let totalAdded = 0, totalModified = 0, totalRemoved = 0, totalPendingCleared = 0;
     const institutions = [];
 
     for (const item of items) {
@@ -318,6 +318,76 @@ export default async function handler(req, res) {
           .in("id", removedIds);
       }
 
+      // ── Pending rows whose posted twin already arrived ──────────────────────
+      //
+      // In theory /transactions/sync puts a pending transaction in `removed`
+      // the moment it posts, and the block above is enough. In practice it is
+      // not: Bank of America exposes each cardholder card as its own account
+      // and posts the settled charge to the consolidated CORP account, so the
+      // pending row sits on an account Plaid simply stops reporting. Nothing
+      // ever removes it, and the ledger carries the same expense twice — once
+      // pending, once posted. TorresBee had 18 of those, ~$2.2k of August
+      // expenses counted double.
+      //
+      // Two nets, cheapest first.
+      //
+      // 1. pending_transaction_id — Plaid's own link from a posted transaction
+      //    back to the pending one it replaces. Authoritative when present.
+      const supersededIds = [...added, ...modified]
+        .map((t) => t.pending_transaction_id)
+        .filter(Boolean)
+        .map((id) => "plaid_" + id);
+      if (supersededIds.length > 0) {
+        await supabase.from("r7_ledger_transactions")
+          .delete()
+          .eq("tenant_id", tenant_id)
+          .in("id", supersededIds);
+      }
+
+      // 2. The cross-account case, where no link exists because Plaid considers
+      //    them different transactions on different accounts. Only a pending
+      //    row that is already stale (the bank has had days to settle it) AND
+      //    has an exact-amount posted twin in the days after it qualifies. The
+      //    amount is exact on purpose: a tip added after the hold changes the
+      //    total, and a fuzzy match there would delete a real expense.
+      const STALE_PENDING_DAYS = 4;
+      const staleBefore = new Date(Date.now() - STALE_PENDING_DAYS * 86400000)
+        .toISOString().slice(0, 10);
+      const { data: stalePending } = await supabase
+        .from("r7_ledger_transactions")
+        .select("id, date, amount")
+        .eq("tenant_id", tenant_id)
+        .like("id", "plaid_%")
+        .ilike("notes", "Pending%")
+        .lte("date", staleBefore);
+
+      const orphanIds = [];
+      for (const p of stalePending || []) {
+        const after = new Date(p.date);
+        after.setDate(after.getDate() + 7);
+        const { data: twin } = await supabase
+          .from("r7_ledger_transactions")
+          .select("id, notes")
+          .eq("tenant_id", tenant_id)
+          .eq("amount", p.amount)
+          .neq("id", p.id)
+          .like("id", "plaid_%")
+          .gte("date", p.date)
+          .lte("date", after.toISOString().slice(0, 10))
+          .limit(20);
+        const posted = (twin || []).some((t) => !/^pending/i.test(t.notes || ""));
+        if (posted) orphanIds.push(p.id);
+      }
+      if (orphanIds.length > 0) {
+        for (const ch of chunk(orphanIds, 200)) {
+          await supabase.from("r7_ledger_transactions")
+            .delete()
+            .eq("tenant_id", tenant_id)
+            .in("id", ch);
+        }
+      }
+      totalPendingCleared += supersededIds.length + orphanIds.length;
+
       await supabase.from("r7_ledger_plaid_items")
         .update({ cursor, status: "active", last_error: null, last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", item.id);
@@ -371,6 +441,7 @@ export default async function handler(req, res) {
       added: totalAdded,
       modified: totalModified,
       removed: totalRemoved,
+      pending_cleared: totalPendingCleared,
       institutions,
     });
   } catch (err) {

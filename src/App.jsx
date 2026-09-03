@@ -1349,7 +1349,15 @@ function BankSyncButton({ tenantId, onSync, showToast }) {
       if (errored.length > 0) {
         showToast("Bank sync issue: " + errored.map(i => i.name + " — " + i.error).join("; "), "error");
       } else {
-        showToast(`Bank sync · ${result.added} new · ${result.modified} updated${result.removed ? " · " + result.removed + " removed" : ""}`, "success");
+        // pending_cleared is called out separately: those are ledger rows the
+        // sync DELETED, and a bookkeeping tool that removes lines without
+        // saying so is worse than one that leaves the duplicate.
+        showToast(
+          `Bank sync · ${result.added} new · ${result.modified} updated`
+          + (result.removed ? ` · ${result.removed} removed` : "")
+          + (result.pending_cleared ? ` · ${result.pending_cleared} pending duplicate${result.pending_cleared === 1 ? "" : "s"} cleared` : ""),
+          "success"
+        );
       }
       if (onSync) onSync();
     } catch (err) {

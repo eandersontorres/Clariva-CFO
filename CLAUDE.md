@@ -473,6 +473,7 @@ Nothing un-pays a bill yet, on any of the three paths.
 - **Migrations are manual** — no migration runner. Merging a PR deploys code but does not touch the DB. Ship the SQL and the code that depends on it in an order where either half is safe alone.
 - **Sample data fallback** — when `VITE_TENANT_ID === "demo"`, app uses `SAMPLE_TRANSACTIONS`. Useful for testing without DB but make sure it doesn't leak to production.
 - **Real-time requires Replication enabled in Supabase** — Settings → Database → Replication → enable for all `r7_ledger_*` tables.
+- **Plaid pending rows can orphan.** `/transactions/sync` is supposed to put a pending transaction in `removed` when it posts, and usually does. Bank of America doesn't cooperate: each cardholder card is its own Plaid account, the settled charge posts to the consolidated CORP account, and when BoA stops reporting the card account its pending row is orphaned — same expense counted twice. `api/plaid-sync.js` therefore also deletes by `pending_transaction_id` and sweeps stale pending rows (4+ days) that have an exact-amount posted twin within a week. The sync response returns `pending_cleared` and the Sync Bank toast says so, because a bookkeeping tool that deletes ledger lines silently is worse than one that leaves the duplicate. Historical cleanup: `supabase_cleanup_pending_dupes.sql`.
 - **Anthropic body size limit** — large PDFs may hit Vercel's 4.5MB body limit. The proxy passes through; if issues arise, may need to chunk or compress.
 
 ---
